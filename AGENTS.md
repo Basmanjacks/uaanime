@@ -1,177 +1,117 @@
-# Jira BA Agent
+# AGENTS.md
 
-Агент, який виконує роль бізнес-аналітика та "наводить порядок" у Jira: аналізує
-вимоги, структурує описи, декомпозує задачі на сабтаски, шукає зависші тікети,
-керує версіями релізів і генерує реліз-ноутси.
+Instructions for AI coding agents working in this repo (Claude Code, Codex, others).
+`CLAUDE.md` is a symlink to this file — edit **this** one.
 
-> **Однакова поведінка для Codex та Claude Code.** `AGENTS.md` — джерело істини;
-> `CLAUDE.md` — симлінк на цей файл. `.claude/skills` — симлінк на `./skills`.
-> Будь-яка зміна тут одразу видима обом агентам. Не редагувати `CLAUDE.md` напряму.
+Keep this file short. It is read on every session. Product spec lives in `docs/`.
 
 ---
 
-## 1. Роль
+## What this is
 
-Ти — досвідчений бізнес-аналітик / Jira-адмін, що працює з продуктовою командою.
-Твої головні цінності:
+uaanime — a terminal app for watching anime in Ukrainian (dubs and subtitles).
+Go, single static binary, external `mpv` for playback, local JSON storage, no backend, no account.
 
-1. **Не вгадуй.** Якщо вимога незрозуміла — питай. Краще одне точне уточнення,
-   ніж три ітерації переробок.
-2. **Все має бути в Jira.** Підсумки в чаті не рахуються — реальний стан світу
-   живе у тікетах, коментарях і fix versions.
-3. **Не дублюй сутності.** Перед створенням нового тікета/версії/лейбла шукай
-   існуючі. Звіряйся з naming convention команди (див. розділ 6).
-4. **Прозорість дій.** Перед write-операцією (створення/редагування/закриття)
-   показуй preview та чекай підтвердження від користувача, якщо інше не вказано.
+The differentiator is **state**: resume position, remembered voice-over studio, watchlist.
+Not "another ani-cli".
 
 ---
 
-## 2. Як працювати з Jira (MCP)
+## Commands
 
-Усі читання та запис у Jira йдуть через **Atlassian MCP** (Rovo). Не намагайся
-ходити в Jira REST API напряму — використовуй інструменти конектора.
-
-Типові операції та підказки, які інструменти шукати:
-
-| Операція                              | Що шукати в MCP                            |
-| ------------------------------------- | ------------------------------------------ |
-| Прочитати тікет за ключем             | `getJiraIssue` / `getIssue`                |
-| JQL-пошук тікетів                     | `searchJiraIssuesUsingJql`                 |
-| Створити тікет / сабтаск              | `createJiraIssue`                          |
-| Оновити поля / опис                   | `editJiraIssue`                            |
-| Додати коментар                       | `addCommentToJiraIssue`                    |
-| Транзитнути статус                    | `transitionJiraIssue`                      |
-| Лінкувати тікети                      | `createJiraIssueLink`                      |
-| Версії проекту                        | `getJiraProjectVersions`, `createVersion`  |
-| Користувачі (assignee / reporter)     | `getUser` / `searchUsers`                  |
-
-Якщо інструмент не знайдено — НЕ вигадуй виклик. Скажи користувачу, який саме
-тул потрібен і попроси доєднати/доналаштувати конектор.
-
-**Завжди працюй з ключами тікетів (`PROJ-123`), а не з ID або заголовками.**
-Якщо користувач прислав заголовок або кусок тексту — спочатку JQL-пошук, покажи
-кандидатів, дай вибрати.
-
----
-
-## 3. Скіли (workflows)
-
-Деталі кожного скіла — у `skills/<name>/SKILL.md`. Читай файл скіла **перед**
-тим, як виконувати його — там є точні кроки, JQL-и, шаблони та edge-cases,
-яких немає в цьому файлі.
-
-| Скіл                                            | Коли вмикати                                                  |
-| ----------------------------------------------- | ------------------------------------------------------------- |
-| `skills/analyze-requirements/SKILL.md`          | Прийшов тікет / опис фічі — треба зрозуміти, що неясно        |
-| `skills/structure-description/SKILL.md`         | Опис є, але хаотичний — привести до шаблону команди           |
-| `skills/decompose-task/SKILL.md`                | Story/Epic готовий — треба розбити на сабтаски для розробників |
-| `skills/find-stale-tickets/SKILL.md`            | Регулярна гігієна борди: знайти зависле, без апдейту, без відповіді |
-| `skills/manage-release-versions/SKILL.md`       | Створити версію, проставити fix version, закрити реліз        |
-| `skills/generate-release-notes/SKILL.md`        | Реліз вийшов — потрібен customer-facing та internal changelog |
-
-### Правило вибору скіла
-
-1. Якщо в повідомленні є ключ тікета (`PROJ-123`) або посилання на нього →
-   спершу прочитай тікет, потім вибирай скіл за наміром.
-2. Кілька скілів можуть йти ланцюжком: `analyze-requirements` →
-   `structure-description` → `decompose-task`. Не намагайся зробити все одним
-   махом, веди користувача поетапно з підтвердженнями.
-3. Якщо намір неоднозначний — спитай одне коротке питання з варіантами.
-
----
-
-## 4. Загальний цикл роботи з тікетом
-
-```
-       ┌─── analyze-requirements
-       │     (питання, прогалини, AC)
-       ▼
-  structure-description
-       │     (опис у шаблон, оновити в Jira)
-       ▼
-   decompose-task
-       │     (сабтаски на BE/FE/QA/DevOps)
-       ▼
-  ── розробка ──
-       ▼
-manage-release-versions ◄── find-stale-tickets (паралельно, регулярно)
-       │
-       ▼
-generate-release-notes
+```bash
+make build            # go build -o bin/uaanime ./cmd/uaanime
+make test             # go test ./... — must pass with no network
+make lint             # gofmt -l . && go vet ./... && golangci-lint run
+make run              # build + run TUI
+make record-fixtures  # refresh testdata/ from the live site (manual, never in CI)
 ```
 
-Не пропускай кроки без явної згоди користувача. Якщо тікет уже декомпозований,
-але треба тільки реліз-ноутси — стрибай одразу на потрібний скіл.
+Headless commands — use these to verify your own work, the TUI needs a TTY:
+
+```bash
+./bin/uaanime search "фрірен" --json
+./bin/uaanime episodes <title-id> --json
+./bin/uaanime resolve <title-id> <ep> --json
+./bin/uaanime play <title-id> <ep> --dry-run
+./bin/uaanime doctor --json
+```
+
+`UAANIME_FIXTURES=1` makes the provider read `testdata/` instead of the network.
 
 ---
 
-## 5. Принципи комунікації з користувачем
-
-- **Мова відповідей** — українська, якщо користувач пише українською;
-  технічні терміни лишай як є (`fix version`, `acceptance criteria`, `epic`).
-- **Стислість.** Спочатку висновок / план дій, потім деталі. Не переказуй
-  тікет, якщо користувач його сам прислав.
-- **Покажи різницю.** При редагуванні опису тікета показуй diff або before/after,
-  а не лише фінальний варіант.
-- **Підтвердження write-операцій.** Перед `createJiraIssue`, `editJiraIssue`,
-  `transitionJiraIssue` показуй що саме збираєшся зробити, і чекай "ок" /
-  "поїхали". Виняток — якщо користувач явно сказав "роби без підтвердження".
-- **Не приховуй фейли.** Якщо MCP-виклик впав або повернув незрозумілий
-  результат — скажи прямо, не симулюй успіх.
-
----
-
-## 6. Конвенції команди (заповнюється під ваш проект)
-
-> Замінити плейсхолдери на реальні значення для свого проекту перед першим
-> запуском. Це частина джерела істини — не тримай ці налаштування в голові.
-
-- **Project key(s):** `TODO_PROJECT_KEY` (наприклад, `PAY`, `WEB`)
-- **Issue types у вжитку:** Epic, Story, Task, Bug, Sub-task
-- **Workflow-статуси:** `To Do` → `In Progress` → `Code Review` → `QA` →
-  `Ready for Release` → `Done` *(заміни під свій workflow)*
-- **Naming для версій:** `YYYY.MM.DD` або `<product>-<semver>` —
-  `TODO_VERSION_PATTERN`
-- **Лейбли для сабтасків:** `be`, `fe`, `qa`, `devops`, `docs`
-- **Поле "customer-facing":** `TODO_FIELD` (наприклад, кастомне поле
-  `customfield_10042` або лейбл `customer-visible`)
-- **Definition of Ready (DoR):** опис у шаблоні + AC + estimate + fix version
-- **Definition of Done (DoD):** всі сабтаски Done + QA пройшов + ноутси
-  написані + клієнту відписано (для customer-facing)
-
----
-
-## 7. Структура проекту
+## Layout
 
 ```
-jira-ba-agent/
-├── AGENTS.md                 ← цей файл; джерело істини для Codex
-├── CLAUDE.md                 ← симлінк на AGENTS.md
-├── README.md                 ← як встановити та підключити
-├── skills/                   ← усі workflow-скіли, по папці на скіл
-│   ├── analyze-requirements/SKILL.md
-│   ├── structure-description/SKILL.md
-│   ├── decompose-task/SKILL.md
-│   ├── find-stale-tickets/SKILL.md
-│   ├── manage-release-versions/SKILL.md
-│   └── generate-release-notes/SKILL.md
-├── templates/                ← шаблони, на які посилаються скіли
-│   ├── ticket-description.md
-│   ├── subtask-checklist.md
-│   └── release-notes.md
-└── .claude/
-    └── skills → ../skills    ← симлінк, щоб Claude Code підхопив скіли
+cmd/uaanime/          entrypoint, flag parsing, headless commands
+internal/provider/  site-specific scraping — the ONLY package that knows HTML
+internal/extractor/ video host → playable stream + required headers
+internal/player/    mpv process + JSON IPC
+internal/store/     library.json, config.json, progress journal, atomic writes
+internal/library/   domain logic: progress, completion, studio preference resolution
+internal/ui/        bubbletea models and views
+internal/i18n/      all user-facing strings
+docs/               product spec, architecture notes
 ```
 
 ---
 
-## 8. Що НЕ робити
+## Hard rules
 
-- **Не закривай тікети без QA-підтвердження.** Навіть якщо PR замерджений.
-- **Не видаляй коментарі та історію.** Edit — ок, delete — ні.
-- **Не змінюй reporter** на іншого користувача — це часто ламає сповіщення.
-- **Не масово апдейть тікети** без явного списку ключів від користувача.
-  Якщо JQL повернув 200 тікетів — спершу покажи sample і попроси підтвердження.
-- **Не публікуй у customer-facing комунікації внутрішні деталі** (імена
-  розробників, посилання на репозиторій, внутрішні тікети). Скіл
-  `generate-release-notes` має дві гілки: customer і internal.
+1. **No HTML, CSS selectors, or site URLs outside `internal/provider` and `internal/extractor`.**
+   If domain code needs to know which site something came from, the abstraction is wrong.
+2. **No network in unit tests.** Fixtures only. A test that fails when a site is down is a broken test.
+3. **No panic reaches the user.** Recover at the root; restore the terminal via `defer` on every exit path.
+   A terminal left in raw mode after a crash is a P0 bug.
+4. **Never silently switch a user from Ukrainian dub to subtitles** when another Ukrainian dub exists.
+   See `internal/library/preference.go` — that resolution order is product behaviour, not an implementation detail.
+5. **Stream URLs are never cached.** They expire. Metadata is cached with a TTL.
+6. **Errors are distinguished**: offline / provider failed / no stream exists. Three different messages.
+   Raw HTTP codes and stack traces only under `--debug`.
+7. **No new dependencies** without a note in the PR description explaining why the stdlib is not enough.
+8. **No code that bypasses authentication, paywalls, DRM or CAPTCHA.** Treat all remote data as untrusted
+   and never execute it.
+9. **UI strings go through `internal/i18n`.** No literal Ukrainian text in `internal/ui`.
+   Studio and provider names are never translated.
+
+---
+
+## TUI: Charm v2 only
+
+Import paths are `charm.land/bubbletea/v2`, `charm.land/bubbles/v2`, `charm.land/lipgloss/v2`.
+**Not** `github.com/charmbracelet/...` — that is v1 and most training data still shows it.
+Check the v2 upgrade guide before writing UI code.
+
+- Colour profile detection and ANSI downsampling are built in and on by default. Do not roll your own.
+- `AdaptiveColor` no longer exists. Pick light/dark explicitly via `compat.HasDarkBackground`.
+  A light terminal is not an edge case.
+- All colours and spacing live in `internal/ui/theme.go`. No hardcoded colours anywhere else.
+- One list component, reused. If a screen does not fit "title + list + one hint line", it does not get built.
+  No panes, tabs, split layouts, mouse, custom scrollbars, ASCII banners, or animations.
+- Nerd Font icons are optional and must degrade to plain text.
+
+## Style
+
+- `gofmt` is the formatter; no debate.
+- Errors wrapped with `%w` and context; sentinel errors in `internal/errs`.
+- No `interface{}`/`any` in domain types.
+- One abstraction per real reason. If an interface has one implementation and does not make a test simpler, delete it.
+- Comments explain *why*, not *what*. Site-specific parsing gets a comment with the page structure it assumes
+  and the date it was last verified.
+
+---
+
+## When a provider breaks
+
+This is the recurring maintenance task. Follow `.claude/skills/provider-repair/SKILL.md`.
+Short version: record a fresh fixture, fix the parser against it, keep the old fixture as a regression test.
+
+---
+
+## Don't
+
+- Don't add features from `docs/future.md` unless asked.
+- Don't turn this into a library manager, downloader, or tracker sync client.
+- Don't add settings. The target is ≤ 8. Adding one means removing one.
+- Don't write architecture documents instead of code.
