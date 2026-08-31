@@ -17,11 +17,16 @@ uaanime → Продовжити → Enter → грає
 
 ## Встановлення
 
-**macOS — одна команда** (mpv підтягнеться сам як залежність):
+**macOS** (mpv підтягнеться сам як залежність):
 
 ```bash
+brew tap Basmanjacks/uaanime
 brew install --cask Basmanjacks/uaanime/uaanime
 ```
+
+Homebrew 6 не додає сторонні tap автоматично, тому перший рядок обов'язковий.
+Хочеш коротке ім'я надалі — виконай `brew trust basmanjacks/uaanime`, і далі
+працюватиме просто `brew install --cask uaanime`.
 
 **Linux та решта:** постав [mpv](https://mpv.io) з пакетного менеджера, далі
 
