@@ -22,14 +22,28 @@ changelog:
 
 # Homebrew tap: потребує репозиторію Basmanjacks/homebrew-uaanime
 # і токен HOMEBREW_TAP_GITHUB_TOKEN у секретах релізного workflow.
-brews:
+#
+# Каст, а не формула: `brews` застарів у GoReleaser v2.10 — для готових бінарників
+# Homebrew тепер очікує cask. Ставиться звичайним `brew install`, але лише на macOS;
+# Linux-користувачам лишаються tar.gz із Releases і `go install`.
+homebrew_casks:
   - repository:
       owner: Basmanjacks
       name: homebrew-uaanime
+      branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Basmanjacks/uaanime
     description: "Дивись аніме українською з термінала"
-    license: MIT
+    binaries:
+      - uaanime
     dependencies:
-      - name: mpv
+      - formula: mpv
+    # Бінарник не підписаний і не нотаризований, тож macOS вішає на нього карантин
+    # і відмовляється запускати. Знімаємо атрибут одразу після встановлення.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/uaanime"]
+          end
     skip_upload: auto

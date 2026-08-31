@@ -17,18 +17,20 @@ uaanime → Продовжити → Enter → грає
 
 ## Встановлення
 
-Потрібен [mpv](https://mpv.io):
+**macOS — одна команда** (mpv підтягнеться сам як залежність):
 
 ```bash
-brew install mpv                          # macOS
+brew install --cask Basmanjacks/uaanime/uaanime
 ```
 
-uaanime:
+**Linux та решта:** постав [mpv](https://mpv.io) з пакетного менеджера, далі
 
 ```bash
 go install github.com/Basmanjacks/uaanime/cmd/uaanime@latest
-# або бінарник із GitHub Releases
+# або візьми готовий бінарник із GitHub Releases
 ```
+
+`uaanime doctor` перевірить, чи все на місці.
 
 ## Використання
 
