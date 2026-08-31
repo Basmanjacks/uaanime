@@ -49,13 +49,17 @@ Headless commands — use these to verify your own work, the TUI needs a TTY:
 
 ```
 cmd/uaanime/          entrypoint, flag parsing, headless commands
-internal/provider/  site-specific scraping — the ONLY package that knows HTML
-internal/extractor/ video host → playable stream + required headers
-internal/player/    mpv process + JSON IPC
-internal/store/     library.json, config.json, progress journal, atomic writes
-internal/library/   domain logic: progress, completion, studio preference resolution
-internal/ui/        bubbletea models and views
-internal/i18n/      all user-facing strings
+internal/provider/    site-specific scraping — the ONLY package that knows HTML
+internal/extractor/   video host → playable stream + required headers
+internal/providertest/ shared contract tests every provider must pass
+internal/playback/    orchestration: preference pick → extract → mpv session → journal
+internal/player/      mpv process + JSON IPC
+internal/store/       library.json, config.json, progress journal, metadata cache, atomic writes
+internal/library/     domain logic: progress, completion, studio preference resolution
+internal/ui/          bubbletea models and views
+internal/i18n/        all user-facing strings
+internal/httpx/       shared HTTP client identity + fixture transport plumbing
+tools/record/         manual fixture recorder (never in CI)
 docs/               product spec, architecture notes
 ```
 
