@@ -1,0 +1,9 @@
+bin/
+dist/
+
+.DS_Store
+.idea/
+.vscode/
+
+# локальні перевизначення дозволів агента — не для спільного репозиторію
+.claude/settings.local.json
