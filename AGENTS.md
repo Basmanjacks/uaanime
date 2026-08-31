@@ -5,9 +5,9 @@ Instructions for AI coding agents working in this repo (Claude Code, Codex, othe
 
 Keep this file short. It is read on every session. Product spec lives in `docs/`.
 
-> **Status:** everything below describes the *starting* stack. It is confirmed or replaced in
-> Phase 0 (`docs/adr-001-stack.md`). If the ADR changes the stack, rewrite this file to match
-> before writing code — a stale AGENTS.md is worse than none.
+> **Status:** the stack is decided and closed — see `docs/adr-001-stack.md` (2026-08-31).
+> Go **1.25+** (dictated by Charm v2 go directives), layout `internal/` only, no `pkg/anisrc`.
+> Do not reopen stack questions.
 
 ---
 

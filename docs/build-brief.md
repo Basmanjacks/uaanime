@@ -18,15 +18,15 @@ uaanime → Продовжити → Enter → грає
 
 ---
 
-## 2. Стек — стартова пропозиція
+## 2. Стек — підтверджено ADR-001
 
-Це обґрунтований вибір, а не догма. Ти переглядаєш його у **Phase 0** і фіксуєш рішення в
-`docs/adr-001-stack.md` — після цього стек закритий і до питання не повертаємось.
-Що саме можна міняти, а що ні — див. Phase 0.
+Ревізію Phase 0 виконано 2026-08-31, рішення зафіксовані в `docs/adr-001-stack.md`
+(зміни відносно стартової пропозиції: Go 1.25+ замість 1.23+, layout лише `internal/`,
+`Kind` 4-значний, ID без ULID-спеки). Стек закритий, до питання не повертаємось.
 
 | Що | Рішення |
 |---|---|
-| Мова | Go 1.23+ |
+| Мова | Go 1.25+ (мінімум продиктований go-директивами Charm v2 — див. ADR-001) |
 | TUI | Charm **v2**: `charm.land/bubbletea/v2`, `charm.land/bubbles/v2`, `charm.land/lipgloss/v2` |
 | HTTP/парсинг | `net/http` + `goquery` |
 | Плеєр | зовнішній **mpv** через JSON IPC |
@@ -79,7 +79,7 @@ fzf не використовуємо — `bubbles/list` дає фільтрац
 ```go
 Title    { ID, Slug, TitleUA, TitleOrig, Year, Type, Episodes, Status, Provider }
 Episode  { Number, Title, Releases []Release }
-Release  { Studio string, Kind Kind }      // Kind: dub | sub | multi
+Release  { Studio string, Kind Kind }      // Kind: dub | voiceover | sub | multi
 Stream   { Host, Quality, URL, Headers map[string]string, TTL }
 
 Progress { TitleID, Episode, PositionSec, DurationSec, Completed bool, WatchedAt }
