@@ -19,8 +19,11 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
+      # Мажор GoReleaser закріплений: конфіг написаний під v2 (homebrew_casks),
+      # і стрибок на v3 зламав би реліз мовчки. Перевірено локально на v2.18.0.
+      - uses: goreleaser/goreleaser-action@v7
         with:
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
