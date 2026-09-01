@@ -116,7 +116,8 @@ func (s *Store) SaveLibrary(lib *library.Library) error {
 type Config struct {
 	FavoriteStudio string   `json:"favorite_studio,omitempty"`
 	PreferKind     string   `json:"prefer_kind,omitempty"` // dub | voiceover | sub
-	Autoplay       string   `json:"autoplay,omitempty"`    // ask | always | never
+	Player         string   `json:"player,omitempty"`      // vlc | mpv
+	Autoplay       string   `json:"autoplay,omitempty"`    // always | never
 	Providers      []string `json:"providers,omitempty"`
 }
 
@@ -128,8 +129,14 @@ func (s *Store) LoadConfig() (*Config, error) {
 	if cfg.PreferKind == "" {
 		cfg.PreferKind = "dub"
 	}
-	if cfg.Autoplay == "" {
-		cfg.Autoplay = "ask"
+	// Невалідне значення тихо нормалізуємо, як і Autoplay.
+	if cfg.Player != "vlc" && cfg.Player != "mpv" {
+		cfg.Player = "vlc"
+	}
+	// «ask» ніколи не персистився кодом і більше не підтримується;
+	// лишаються always | never.
+	if cfg.Autoplay != "always" && cfg.Autoplay != "never" {
+		cfg.Autoplay = "always"
 	}
 	return cfg, nil
 }

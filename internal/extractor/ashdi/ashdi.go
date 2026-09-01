@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 )
@@ -41,25 +42,31 @@ var reFile = regexp.MustCompile(`file:\s*'(https?://[^']+\.m3u8[^']*)'`)
 func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extractor.Stream, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, embed, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ashdi: створення запиту: %w: %w", errs.ErrProvider, err)
 	}
 	req.Header.Set("User-Agent", httpx.UserAgent)
 	req.Header.Set("Referer", referer)
 	res, err := e.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("ashdi: %w", err)
+		if errs.Offline(err) {
+			return nil, fmt.Errorf("ashdi: %w: %w", errs.ErrOffline, err)
+		}
+		return nil, fmt.Errorf("ashdi: %w: %w", errs.ErrProvider, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ashdi: HTTP %d", res.StatusCode)
+		return nil, fmt.Errorf("ashdi: HTTP %d: %w", res.StatusCode, errs.ErrProvider)
 	}
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		return nil, fmt.Errorf("ashdi: %w", err)
+		if errs.Offline(err) {
+			return nil, fmt.Errorf("ashdi: читання відповіді: %w: %w", errs.ErrOffline, err)
+		}
+		return nil, fmt.Errorf("ashdi: читання відповіді: %w: %w", errs.ErrProvider, err)
 	}
 	m := reFile.FindSubmatch(body)
 	if m == nil {
-		return nil, fmt.Errorf("ashdi: у embed %s не знайдено file:'…m3u8' (хост змінив плеєр?)", embed)
+		return nil, fmt.Errorf("ashdi: у embed %s не знайдено file:'…m3u8' (хост змінив плеєр?): %w", embed, errs.ErrNoStream)
 	}
 	return []extractor.Stream{{
 		URL:     string(m[1]),

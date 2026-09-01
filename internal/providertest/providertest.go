@@ -11,13 +11,24 @@ import (
 )
 
 // Cases — канонічні входи провайдера, вже підключеного до фікстур.
+// PagedQuery і Catalogs необов'язкові: порожнє значення вимикає відповідні
+// підтести, тому провайдер без таких фікстур усе одно проходить контракт.
 type Cases struct {
 	SearchQuery   string
-	MultiStudio   provider.TitleRef // сторінка з >1 студією
-	SingleRelease provider.TitleRef // одна студія
-	Ongoing       provider.TitleRef // онгоїнг з частковими релізами
-	Episode       int               // серія, що існує в усіх трьох тайтлах
+	PagedQuery    string                 // запит із щонайменше двома сторінками результатів
+	Catalogs      []provider.CatalogKind // добірки, для яких є фікстури
+	MultiStudio   provider.TitleRef      // сторінка з >1 студією
+	SingleRelease provider.TitleRef      // одна студія
+	Ongoing       provider.TitleRef      // онгоїнг з частковими релізами
+	Episode       int                    // серія, що існує в усіх трьох тайтлах
 }
+
+const (
+	// pageSize — скільки результатів має вміщати повна сторінка пошуку.
+	pageSize = 10
+	// catalogMax — стеля добірки: каталог показує топ, а не весь сайт.
+	catalogMax = 20
+)
 
 var validKinds = map[provider.Kind]bool{
 	provider.KindDub:       true,
@@ -31,20 +42,103 @@ func Run(t *testing.T, p provider.Provider, c Cases) {
 	ctx := context.Background()
 
 	t.Run("search", func(t *testing.T) {
-		refs, err := p.Search(ctx, c.SearchQuery)
+		page, err := p.Search(ctx, c.SearchQuery, 1)
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
-		if len(refs) == 0 {
+		if len(page.Titles) == 0 {
 			t.Fatal("Search: порожній результат на канонічний запит")
 		}
-		for _, r := range refs {
-			if r.Slug == "" || r.Name == "" || r.URL == "" {
-				t.Errorf("Search: неповний TitleRef: %+v", r)
+		mustRefs(t, p, "Search", page.Titles)
+	})
+
+	// Метадані картки — те, чим сторінка пошуку відрізняється від голого списку
+	// посилань. Половина як поріг: окремі тайтли справді бувають без року чи оцінки.
+	t.Run("card-metadata", func(t *testing.T) {
+		if !p.Caps().Search {
+			t.Skip("провайдер не вміє шукати")
+		}
+		page, err := p.Search(ctx, c.SearchQuery, 1)
+		if err != nil {
+			t.Fatalf("Search: %v", err)
+		}
+		if len(page.Titles) == 0 {
+			t.Fatal("Search: порожній результат на канонічний запит")
+		}
+		withMeta := 0
+		for _, card := range page.Titles {
+			if card.Year > 0 && card.Rating > 0 {
+				withMeta++
 			}
-			if r.Provider != p.ID() {
-				t.Errorf("Search: Provider=%q, очікував %q", r.Provider, p.ID())
+		}
+		if withMeta*2 < len(page.Titles) {
+			t.Errorf("card-metadata: рік+рейтинг лише в %d з %d карток, очікував щонайменше половину",
+				withMeta, len(page.Titles))
+		}
+	})
+
+	t.Run("search-page", func(t *testing.T) {
+		if c.PagedQuery == "" {
+			t.Skip("немає фікстури другої сторінки")
+		}
+		if !p.Caps().Search {
+			t.Skip("провайдер не вміє шукати")
+		}
+		first, err := p.Search(ctx, c.PagedQuery, 1)
+		if err != nil {
+			t.Fatalf("Search(page 1): %v", err)
+		}
+		if len(first.Titles) < pageSize {
+			t.Fatalf("Search(page 1): %d результатів, очікував щонайменше %d", len(first.Titles), pageSize)
+		}
+		if !first.HasMore {
+			t.Error("Search(page 1): HasMore=false на повній сторінці")
+		}
+		mustRefs(t, p, "Search(page 1)", first.Titles)
+
+		second, err := p.Search(ctx, c.PagedQuery, 2)
+		if err != nil {
+			t.Fatalf("Search(page 2): %v", err)
+		}
+		if len(second.Titles) == 0 {
+			t.Fatal("Search(page 2): порожньо")
+		}
+		mustRefs(t, p, "Search(page 2)", second.Titles)
+
+		// Сторінки не перетинаються — інакше пагінація насправді не працює
+		// і користувач гортає той самий список.
+		seen := map[string]bool{}
+		for _, card := range first.Titles {
+			seen[card.Slug] = true
+		}
+		for _, card := range second.Titles {
+			if seen[card.Slug] {
+				t.Errorf("Search: слаг %q є і на першій, і на другій сторінці", card.Slug)
 			}
+		}
+	})
+
+	t.Run("catalog", func(t *testing.T) {
+		if len(c.Catalogs) == 0 {
+			t.Skip("немає фікстур каталогу")
+		}
+		if !p.Caps().Catalog {
+			t.Skip("провайдер не має каталогу")
+		}
+		for _, kind := range c.Catalogs {
+			t.Run(string(kind), func(t *testing.T) {
+				cards, err := p.Catalog(ctx, kind)
+				if err != nil {
+					t.Fatalf("Catalog(%s): %v", kind, err)
+				}
+				if len(cards) == 0 {
+					t.Fatalf("Catalog(%s): порожньо", kind)
+				}
+				if len(cards) > catalogMax {
+					t.Errorf("Catalog(%s): %d карток, ліміт %d", kind, len(cards), catalogMax)
+				}
+				mustRefs(t, p, "Catalog("+string(kind)+")", cards)
+			})
 		}
 	})
 
@@ -85,6 +179,20 @@ func Run(t *testing.T, p provider.Provider, c Cases) {
 			}
 		}
 	})
+}
+
+// mustRefs перевіряє інваріанти ідентичності будь-якого списку карток:
+// без них тайтл неможливо ні відкрити, ні зберегти.
+func mustRefs(t *testing.T, p provider.Provider, where string, cards []provider.TitleCard) {
+	t.Helper()
+	for _, card := range cards {
+		if card.Slug == "" || card.Name == "" || card.URL == "" {
+			t.Errorf("%s: неповний TitleRef: %+v", where, card.TitleRef)
+		}
+		if card.Provider != p.ID() {
+			t.Errorf("%s: Provider=%q, очікував %q", where, card.Provider, p.ID())
+		}
+	}
 }
 
 // mustSources перевіряє спільні інваріанти будь-якого списку джерел.

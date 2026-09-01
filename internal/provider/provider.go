@@ -27,6 +27,34 @@ type TitleRef struct {
 	URL      string `json:"url"`
 }
 
+// TitleCard — картка тайтлу зі сторінки пошуку/каталогу. Вбудовує TitleRef
+// (ідентичність), решта полів — метадані для відображення; вони НЕ персистяться.
+type TitleCard struct {
+	TitleRef
+	Year     int      `json:"year,omitempty"`
+	Episodes string   `json:"episodes,omitempty"`
+	EpAired  int      `json:"episodes_aired,omitempty"`
+	EpTotal  int      `json:"episodes_total,omitempty"`
+	Rating   float64  `json:"rating,omitempty"`
+	Votes    int      `json:"votes,omitempty"`
+	Genres   []string `json:"genres,omitempty"`
+	Studios  []string `json:"studios,omitempty"`
+	HasDub   bool     `json:"has_dub,omitempty"`
+	HasSub   bool     `json:"has_sub,omitempty"`
+}
+
+type Page struct {
+	Titles  []TitleCard `json:"titles"`
+	HasMore bool        `json:"has_more"`
+}
+
+type CatalogKind string
+
+const (
+	CatalogTopSeason CatalogKind = "top-season"
+	CatalogFresh     CatalogKind = "fresh"
+)
+
 // Release — пара (студія, тип). Головна фіча продукту: одна серія має кілька
 // варіантів озвучення від різних студій плюс субтитри.
 type Release struct {
@@ -50,7 +78,7 @@ type Source struct {
 
 // Caps дозволяє інтерфейсу деградувати без перевірок на ID провайдера.
 type Caps struct {
-	Search, Updates, Ongoing, Descriptions, Subtitles bool
+	Search, Catalog, Updates, Ongoing, Descriptions, Subtitles bool
 }
 
 type Provider interface {
@@ -58,7 +86,8 @@ type Provider interface {
 	Name() string // показуємо як є, не перекладаємо
 	Caps() Caps
 
-	Search(ctx context.Context, q string) ([]TitleRef, error)
+	Search(ctx context.Context, q string, page int) (Page, error)
+	Catalog(ctx context.Context, kind CatalogKind) ([]TitleCard, error)
 	Episodes(ctx context.Context, ref TitleRef) ([]Episode, error)
 	Sources(ctx context.Context, ref TitleRef, episode int) ([]Source, error)
 }

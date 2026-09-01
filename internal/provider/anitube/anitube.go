@@ -3,6 +3,10 @@
 // Структура сайту, перевірена 2026-08-31:
 //   - пошук: POST /index.php?do=search (form: do, subaction, story…), результати —
 //     <article class="story"> з <h2 itemprop="name"><a href="/<newsID>-<slug>.html">;
+//   - пагінація пошуку (перевірено 2026-08-31): перша сторінка передає
+//     search_start=0/result_from=1, наступні — номер сторінки та зміщення по 10;
+//   - каталог: окремих URL немає — обидві добірки лежать на головній GET /
+//     (сезонний топ у div.box з h2 «Найкраще», новинки — у div.news_2);
 //   - сторінка тайтлу містить JS-змінну dle_login_hash; id новини — це числовий
 //     префікс слага (JS-змінна news_id є не всюди, data-news_id — fallback);
 //   - плейлисти: GET /engine/ajax/playlists.php?news_id=N&xfield=playlist&user_hash=H →
@@ -17,6 +21,7 @@
 package anitube
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -30,14 +35,17 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 const (
-	providerID   = "anitube"
-	providerName = "AniTube"
-	baseURL      = "https://anitube.in.ua"
+	providerID    = "anitube"
+	providerName  = "AniTube"
+	baseURL       = "https://anitube.in.ua"
+	searchPerPage = 10
+	catalogLimit  = 20
 )
 
 type Client struct {
@@ -51,7 +59,7 @@ func New(httpClient *http.Client) *Client {
 func (c *Client) ID() string   { return providerID }
 func (c *Client) Name() string { return providerName }
 func (c *Client) Caps() provider.Caps {
-	return provider.Caps{Search: true, Subtitles: true}
+	return provider.Caps{Search: true, Catalog: true, Subtitles: true}
 }
 
 // RefFromSlug відновлює TitleRef з самого слага (для headless-команд,
@@ -66,51 +74,234 @@ func RefFromSlug(slug string) provider.TitleRef {
 
 var reSlug = regexp.MustCompile(`/(\d+-[^/]+)\.html`)
 
-func (c *Client) Search(ctx context.Context, q string) ([]provider.TitleRef, error) {
+func (c *Client) Search(ctx context.Context, q string, page int) (provider.Page, error) {
+	searchStart := 0
+	resultFrom := 1
+	if page >= 2 {
+		searchStart = page
+		resultFrom = (page-1)*searchPerPage + 1
+	}
 	form := url.Values{
 		"do":           {"search"},
 		"subaction":    {"search"},
-		"search_start": {"0"},
+		"search_start": {strconv.Itoa(searchStart)},
 		"full_search":  {"0"},
-		"result_from":  {"1"},
+		"result_from":  {strconv.Itoa(resultFrom)},
 		"story":        {q},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		baseURL+"/index.php?do=search", strings.NewReader(form.Encode()))
 	if err != nil {
-		return nil, err
+		return provider.Page{}, fmt.Errorf("пошук: створення запиту: %w: %w", errs.ErrProvider, err)
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	setCommonHeaders(req, baseURL+"/")
 	body, err := c.do(req)
 	if err != nil {
-		return nil, fmt.Errorf("пошук: %w", err)
+		return provider.Page{}, fmt.Errorf("пошук: %w", err)
 	}
-	return parseSearch(body)
+	cards, err := parseCards(body)
+	if err != nil {
+		return provider.Page{}, err
+	}
+	return provider.Page{Titles: cards, HasMore: len(cards) == searchPerPage}, nil
 }
 
-// Розмітка результату: <article class="story"> → <h2 itemprop="name"><a>.
-func parseSearch(body []byte) ([]provider.TitleRef, error) {
+// Catalog: обидві добірки живуть на одній сторінці — головній. Окремих URL для
+// них сайт не має, тому вгадані фільтри (/f/year=…) прибрано: один GET "/" і два
+// різні парсери блоків.
+func (c *Client) Catalog(ctx context.Context, kind provider.CatalogKind) ([]provider.TitleCard, error) {
+	var parse func([]byte) ([]provider.TitleCard, error)
+	switch kind {
+	case provider.CatalogTopSeason:
+		parse = parseTopSeason
+	case provider.CatalogFresh:
+		parse = parseFresh
+	default:
+		return nil, fmt.Errorf("невідомий каталог %q: %w", kind, errs.ErrProvider)
+	}
+
+	body, err := c.get(ctx, baseURL+"/", baseURL+"/")
+	if err != nil {
+		return nil, fmt.Errorf("каталог %q: %w", kind, err)
+	}
+	cards, err := parse(body)
+	if err != nil {
+		return nil, fmt.Errorf("каталог %q: %w", kind, err)
+	}
+	if len(cards) > catalogLimit {
+		cards = cards[:catalogLimit]
+	}
+	return cards, nil
+}
+
+// Блоки головної не несуть ні року, ні рейтингу — лише назву й посилання.
+// Решта полів TitleCard свідомо лишається нульовою: вигадувати метадані нема з чого.
+func cardFromAnchor(link *goquery.Selection) (provider.TitleCard, bool) {
+	href, _ := link.Attr("href")
+	m := reSlug.FindStringSubmatch(href)
+	name := strings.TrimSpace(link.Text())
+	if m == nil || name == "" {
+		return provider.TitleCard{}, false
+	}
+	return provider.TitleCard{TitleRef: provider.TitleRef{
+		Provider: providerID, Slug: m[1], Name: name, URL: href,
+	}}, true
+}
+
+// Розмітку головної перевірено 2026-08-31. Сезонний топ:
+//
+//	<div class="box hidden"><h2>Найкраще<span> аніме літнього сезону</span>…</h2>
+//	  <div class="example horizontal"><div class="carousel">…
+//	    <ul class="portfolio_items"><li>…<div class="text_content"><a href="…">Назва</a>
+//
+// Заголовок сезону змінюється разом із сезоном, тому прив'язка — до слова
+// «Найкраще», а не до повного тексту h2.
+func parseTopSeason(body []byte) ([]provider.TitleCard, error) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("топ сезону: розбір HTML: %w: %w", errs.ErrProvider, err)
+	}
+	var cards []provider.TitleCard
+	doc.Find("div.box").EachWithBreak(func(_ int, box *goquery.Selection) bool {
+		if !strings.Contains(box.Find("h2").First().Text(), "Найкраще") {
+			return true
+		}
+		box.Find("ul.portfolio_items li div.text_content a[href]").Each(func(_ int, link *goquery.Selection) {
+			if card, ok := cardFromAnchor(link); ok {
+				cards = append(cards, card)
+			}
+		})
+		return false
+	})
+	return cards, nil
+}
+
+// Новинки (перевірено 2026-08-31): після <h2>Новинки…</h2> ідуть повторювані
+//
+//	<div class="news_2"><div class="title2" title="…"><a href="…">Назва</a></div>…
+//
+// Той самий тайтл трапляється і в карусельному топі, і в новинках, а всередині
+// блоку — двічі (заголовок і постер), тому дедуплікуємо за слагом зі збереженням порядку.
+func parseFresh(body []byte) ([]provider.TitleCard, error) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("новинки: розбір HTML: %w: %w", errs.ErrProvider, err)
+	}
+	seen := make(map[string]bool)
+	var cards []provider.TitleCard
+	doc.Find("div.news_2 div.title2 a[href]").Each(func(_ int, link *goquery.Selection) {
+		card, ok := cardFromAnchor(link)
+		if !ok || seen[card.Slug] {
+			return
+		}
+		seen[card.Slug] = true
+		cards = append(cards, card)
+	})
+	return cards, nil
+}
+
+var (
+	reEpisodes = regexp.MustCompile(`(\d+)(?:\s*з\s*(\d+))?`)
+	reRating   = regexp.MustCompile(`(\d+[.,]?\d*)\s*/\s*10\D*?(\d+)`)
+	reStudio   = regexp.MustCompile(`\(([^)]+)\)`)
+)
+
+// Структуру сторінки пошуку перевірено 2026-08-31: кожна картка — окремий
+// article.story з обов'язковим h2[itemprop="name"] a[href]; метадані лежать у
+// сусідніх story_infa, story_c_rate, dubsub і story_link усередині тієї ж картки.
+func parseCards(body []byte) ([]provider.TitleCard, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("пошук: розбір HTML: %w", err)
+		return nil, fmt.Errorf("пошук: розбір HTML: %w: %w", errs.ErrProvider, err)
 	}
-	var refs []provider.TitleRef
-	doc.Find(`article.story h2[itemprop="name"] a[href]`).Each(func(_ int, s *goquery.Selection) {
-		href, _ := s.Attr("href")
+	var cards []provider.TitleCard
+	doc.Find(`article.story`).Each(func(_ int, article *goquery.Selection) {
+		link := article.Find(`h2[itemprop="name"] a[href]`).First()
+		href, _ := link.Attr("href")
 		m := reSlug.FindStringSubmatch(href)
-		name := strings.TrimSpace(s.Text())
+		name := strings.TrimSpace(link.Text())
 		if m == nil || name == "" {
 			return
 		}
-		refs = append(refs, provider.TitleRef{
-			Provider: providerID,
-			Slug:     m[1],
-			Name:     name,
-			URL:      href,
-		})
+
+		card := provider.TitleCard{TitleRef: provider.TitleRef{
+			Provider: providerID, Slug: m[1], Name: name, URL: href,
+		}}
+		info := article.Find(`div.story_infa`).First()
+		card.Year, _ = strconv.Atoi(fieldAfterLabel(info, "Рік виходу аніме:"))
+		card.Episodes, card.EpAired, card.EpTotal = parseEpisodes(fieldAfterLabel(info, "Серій:"))
+		card.Genres = splitTrimmed(fieldAfterLabel(info, "Категорія:"))
+
+		rateText := strings.ReplaceAll(article.Find(`div.story_c_rate`).First().Text(), "\u00a0", " ")
+		if rating := reRating.FindStringSubmatch(rateText); rating != nil {
+			card.Rating, _ = strconv.ParseFloat(strings.ReplaceAll(rating[1], ",", "."), 64)
+			card.Votes, _ = strconv.Atoi(rating[2])
+		}
+		dubsub := article.Find(`div.dubsub`).First().Text()
+		card.HasDub = strings.Contains(dubsub, "D")
+		card.HasSub = strings.Contains(dubsub, "S")
+		card.Studios = parseStudios(article.Find(`span.story_link`).First().Text())
+		cards = append(cards, card)
 	})
-	return refs, nil
+	return cards, nil
+}
+
+// У story_infa, перевіреному 2026-08-31, значення є сусідніми вузлами після
+// dt і закінчуються перед hr; обхід вузлів зберігає також текст поза тегами.
+func fieldAfterLabel(info *goquery.Selection, label string) string {
+	var value string
+	info.Find("dt").EachWithBreak(func(_ int, dt *goquery.Selection) bool {
+		if strings.TrimSpace(dt.Text()) != label || len(dt.Nodes) == 0 {
+			return true
+		}
+		var parts []string
+		for node := dt.Nodes[0].NextSibling; node != nil && node.Data != "hr" && node.Data != "dt"; node = node.NextSibling {
+			text := strings.TrimSpace(goquery.NewDocumentFromNode(node).Text())
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		value = strings.Join(parts, " ")
+		return false
+	})
+	return value
+}
+
+func parseEpisodes(text string) (string, int, int) {
+	match := reEpisodes.FindStringSubmatch(text)
+	if match == nil {
+		return "", 0, 0
+	}
+	aired, _ := strconv.Atoi(match[1])
+	if match[2] == "" {
+		return match[1], aired, aired
+	}
+	total, _ := strconv.Atoi(match[2])
+	return match[1] + " з " + match[2], aired, total
+}
+
+func splitTrimmed(text string) []string {
+	var values []string
+	for _, value := range strings.Split(text, ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func parseStudios(text string) []string {
+	seen := make(map[string]bool)
+	var studios []string
+	for _, match := range reStudio.FindAllStringSubmatch(text, -1) {
+		studio := strings.TrimSpace(match[1])
+		if studio != "" && !seen[studio] {
+			seen[studio] = true
+			studios = append(studios, studio)
+		}
+	}
+	return studios
 }
 
 func (c *Client) Episodes(ctx context.Context, ref provider.TitleRef) ([]provider.Episode, error) {
@@ -156,7 +347,7 @@ func (c *Client) Sources(ctx context.Context, ref provider.TitleRef, episode int
 		}
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("серія %d: не знайдено жодного джерела", episode)
+		return nil, fmt.Errorf("серія %d: не знайдено жодного джерела: %w", episode, errs.ErrNoStream)
 	}
 	return out, nil
 }
@@ -188,7 +379,7 @@ func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provi
 	hashMatch := reLoginHash.FindSubmatch(page)
 	id, okID := newsID(ref.Slug, page)
 	if hashMatch == nil || !okID {
-		return nil, fmt.Errorf("сторінка тайтлу %s: не знайдено dle_login_hash/news_id (сайт змінив розмітку?)", ref.URL)
+		return nil, fmt.Errorf("сторінка тайтлу %s: не знайдено dle_login_hash/news_id (сайт змінив розмітку?): %w", ref.URL, errs.ErrProvider)
 	}
 
 	ajaxURL := fmt.Sprintf("%s/engine/ajax/playlists.php?news_id=%s&xfield=playlist&user_hash=%s",
@@ -203,10 +394,10 @@ func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provi
 		Response string `json:"response"`
 	}
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("плейлисти: не JSON: %w", err)
+		return nil, fmt.Errorf("плейлисти: не JSON: %w: %w", errs.ErrProvider, err)
 	}
 	if !resp.Success {
-		return nil, fmt.Errorf("плейлисти: сайт відповів success=false")
+		return nil, fmt.Errorf("плейлисти: сайт відповів success=false: %w", errs.ErrProvider)
 	}
 	return parsePlaylists(resp.Response, ref.URL)
 }
@@ -214,7 +405,7 @@ func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provi
 func parsePlaylists(playlistHTML, titleURL string) ([]provider.Source, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(playlistHTML))
 	if err != nil {
-		return nil, fmt.Errorf("плейлисти: розбір HTML: %w", err)
+		return nil, fmt.Errorf("плейлисти: розбір HTML: %w: %w", errs.ErrProvider, err)
 	}
 
 	labels := map[string]string{}
@@ -256,7 +447,7 @@ func parsePlaylists(playlistHTML, titleURL string) ([]provider.Source, error) {
 		})
 	})
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("плейлисти: не знайдено жодної серії")
+		return nil, fmt.Errorf("плейлисти: не знайдено жодної серії: %w", errs.ErrProvider)
 	}
 	return sources, nil
 }
@@ -318,7 +509,7 @@ func setCommonHeaders(req *http.Request, referer string) {
 func (c *Client) get(ctx context.Context, rawURL, referer string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("створення запиту %s: %w: %w", rawURL, errs.ErrProvider, err)
 	}
 	setCommonHeaders(req, referer)
 	return c.do(req)
@@ -327,11 +518,21 @@ func (c *Client) get(ctx context.Context, rawURL, referer string) ([]byte, error
 func (c *Client) do(req *http.Request) ([]byte, error) {
 	res, err := c.http.Do(req)
 	if err != nil {
-		return nil, err
+		if errs.Offline(err) {
+			return nil, fmt.Errorf("%s: %w: %w", req.URL, errs.ErrOffline, err)
+		}
+		return nil, fmt.Errorf("%s: %w: %w", req.URL, errs.ErrProvider, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d", req.URL, res.StatusCode)
+		return nil, fmt.Errorf("%s: HTTP %d: %w", req.URL, res.StatusCode, errs.ErrProvider)
 	}
-	return io.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		if errs.Offline(err) {
+			return nil, fmt.Errorf("%s: читання відповіді: %w: %w", req.URL, errs.ErrOffline, err)
+		}
+		return nil, fmt.Errorf("%s: читання відповіді: %w: %w", req.URL, errs.ErrProvider, err)
+	}
+	return body, nil
 }

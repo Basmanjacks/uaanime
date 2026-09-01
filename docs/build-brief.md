@@ -29,7 +29,7 @@ uaanime → Продовжити → Enter → грає
 | Мова | Go 1.25+ (мінімум продиктований go-директивами Charm v2 — див. ADR-001) |
 | TUI | Charm **v2**: `charm.land/bubbletea/v2`, `charm.land/bubbles/v2`, `charm.land/lipgloss/v2` |
 | HTTP/парсинг | `net/http` + `goquery` |
-| Плеєр | зовнішній **mpv** через JSON IPC |
+| Плеєр | зовнішній **VLC** (за замовчуванням) або **mpv** |
 | Сховище | JSON-файли, атомарний запис (tmp + rename) |
 | Пакування | GoReleaser → GitHub Releases + Homebrew tap + `go install` |
 | CI | GitHub Actions: build, test, `gofmt -l`, `go vet`, `golangci-lint` |
@@ -59,7 +59,8 @@ upgrade guide.
 
 **Правило:** якщо екран не вкладається у формат «заголовок + список + один рядок підказки» —
 він не будується. Заборонено: панелі, сайдбари, вкладки, розділений екран, миша,
-кастомні скролбари, прогрес-бари на весь екран, ASCII-банери.
+кастомні скролбари, прогрес-бари на весь екран, ASCII-банери. Єдиний виняток —
+домашній бренд-банер у `internal/ui/brand.go` з обов'язковим однорядковим fallback для малих терміналів.
 
 fzf не використовуємо — `bubbles/list` дає фільтрацію з коробки, зовнішня залежність зіпсує
 історію встановлення. Esc = крок назад, не вихід з усього.
@@ -111,14 +112,15 @@ Entry    { TitleID, State (watching|planned|completed), StudioPin, KindPin, Last
 
 ## 5. Плеєр
 
-Тільки mpv у v1. Абстракція `Player` існує, реалізація одна.
+Плеєр конфігурований: VLC за замовчуванням або mpv. Абстракція `Player` існує,
+реалізацій дві: VLC керується через RC/TCP, mpv — через JSON IPC.
 
 ```
 mpv --input-ipc-server=<sock> --start=<sec> --force-media-title="Фрірен · 17"
     --no-terminal --http-header-fields="Referer: <origin>,User-Agent: <ua>" <url>
 ```
 
-Через IPC-сокет: `get_property time-pos`, `duration`; підписка на подію `end-file`
+Для mpv через IPC-сокет: `get_property time-pos`, `duration`; підписка на подію `end-file`
 (розрізняй `eof`, `quit`, `error` — це різні сценарії для UI).
 
 Багато українських відеохостів віддають потік лише з правильним `Referer`. Це не обхід
@@ -152,7 +154,7 @@ Windows (named pipes) — поза v1, але не закладай POSIX-шля
 uaanime search "фрірен" --json
 uaanime episodes <title-id> --json
 uaanime resolve <title-id> <ep> --json     # список кандидатів-потоків, без відтворення
-uaanime play <title-id> <ep> --dry-run     # друкує підсумкову команду mpv
+uaanime play <title-id> <ep> --dry-run     # друкує підсумкову команду плеєра
 uaanime doctor --json
 uaanime export > backup.json
 uaanime import backup.json
@@ -193,7 +195,7 @@ uaanime import backup.json
 `go build`/`go test`). **Часовий бюджет: одна ітерація.**
 Після запису ADR стек зафіксовано, до питання не повертаємось.
 
-**Phase 0.5 — грає.** Хардкод одного тайтлу. `uaanime play <slug> 1` відкриває mpv з українською доріжкою.
+**Phase 0.5 — грає.** Хардкод одного тайтлу. `uaanime play <slug> 1` відкриває зовнішній плеєр з українською доріжкою.
 *Критерій: відео реально грає.*
 
 **Phase 1 — провайдер.** Пошук, список серій, список релізів, резолв потоку. Фікстури + офлайн-тести.
@@ -243,7 +245,7 @@ uaanime import backup.json
 AniList/MAL, постери в терміналі, окремі «Обране», пропуск опенінгів, теми, синхронізація,
 рекомендації, завантаження серій, метадані з зовнішніх API.
 
-«Режим запою» — це не окрема фіча, а значення налаштування `autoplay: ask|always|never`.
+«Режим запою» — це не окрема фіча, а значення налаштування `autoplay: always|never` (дефолт `always`).
 Не створюй два поняття для одного.
 
 Налаштувань має бути ≤ 8. Якщо додаєш дев'яте — прибери інше.
@@ -255,7 +257,7 @@ AniList/MAL, постери в терміналі, окремі «Обране»
 - [ ] `brew install …` → `uaanime` → перегляд без жодного конфіга
 - [ ] холодний старт < 100 мс, перший екран без мережі
 - [ ] пошук → відео на екрані ≤ 3 дії
-- [ ] `Enter` на «Продовжити» → mpv < 3 с
+- [ ] `Enter` на «Продовжити» → налаштований плеєр < 3 с
 - [ ] точність resume ±5 с
 - [ ] `kill -9` під час гри → втрачено ≤ 10 с
 - [ ] `go test ./...` зелений без мережі

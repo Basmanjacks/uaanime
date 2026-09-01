@@ -14,7 +14,7 @@ Keep this file short. It is read on every session. Product spec lives in `docs/`
 ## What this is
 
 uaanime — a terminal app for watching anime in Ukrainian (dubs and subtitles).
-Go, single static binary, external `mpv` for playback, local JSON storage, no backend, no account.
+Go, single static binary, зовнішній плеєр (VLC за замовчуванням або mpv), local JSON storage, no backend, no account.
 
 The differentiator is **state**: resume position, remembered voice-over studio, watchlist.
 Not "another ani-cli".
@@ -52,8 +52,8 @@ cmd/uaanime/          entrypoint, flag parsing, headless commands
 internal/provider/    site-specific scraping — the ONLY package that knows HTML
 internal/extractor/   video host → playable stream + required headers
 internal/providertest/ shared contract tests every provider must pass
-internal/playback/    orchestration: preference pick → extract → mpv session → journal
-internal/player/      mpv process + JSON IPC
+internal/playback/    orchestration: preference pick → extract → player session → journal
+internal/player/      зовнішні плеєри: VLC (RC/TCP) і mpv (JSON IPC)
 internal/store/       library.json, config.json, progress journal, metadata cache, atomic writes
 internal/library/     domain logic: progress, completion, studio preference resolution
 internal/ui/          bubbletea models and views
@@ -96,8 +96,13 @@ Check the v2 upgrade guide before writing UI code.
   A light terminal is not an edge case.
 - All colours and spacing live in `internal/ui/theme.go`. No hardcoded colours anywhere else.
 - One list component, reused. If a screen does not fit "title + list + one hint line", it does not get built.
-  No panes, tabs, split layouts, mouse, custom scrollbars, ASCII banners, or animations.
+  No panes, tabs, split layouts, mouse, custom scrollbars, or animations. The only sanctioned ASCII art is
+  the home-screen brand banner in `internal/ui/brand.go`, with a mandatory one-line fallback on small terminals.
 - Nerd Font icons are optional and must degrade to plain text.
+- The list delegate is custom (`internal/ui/delegate.go`): fixed row height, fixed-width icon column.
+  Do not switch back to `list.NewDefaultDelegate()` — it is hardcoded dark and pink.
+- Always call `DisableQuitKeybindings()` on a new list: bubbles v2.2.1 binds list Quit to the key `v`
+  (upstream bug), which would quit the app from any screen that forwards keys to the list.
 
 ## Style
 
