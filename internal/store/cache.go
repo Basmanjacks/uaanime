@@ -39,3 +39,43 @@ func (s *Store) LoadEpisodes(ref provider.TitleRef) (eps []provider.Episode, fre
 	}
 	return c.Episodes, time.Since(c.FetchedAt) < episodesTTL, true
 }
+
+// Кеш блоків каталогу (топ сезону, свіжі). Оновлюється рідше за серії:
+// добірка на головній міняється раз на день, не раз на годину.
+const catalogTTL = 12 * time.Hour
+
+type catalogCache struct {
+	FetchedAt time.Time            `json:"fetched_at"`
+	Year      int                  `json:"year"`
+	Cards     []provider.TitleCard `json:"cards"`
+}
+
+func (s *Store) catalogCachePath(providerID string, kind provider.CatalogKind) string {
+	return filepath.Join(s.dir, "cache", fmt.Sprintf("catalog-%s-%s.json", providerID, kind))
+}
+
+func (s *Store) SaveCatalog(providerID string, kind provider.CatalogKind, cards []provider.TitleCard) error {
+	return writeAtomic(s.catalogCachePath(providerID, kind), &catalogCache{
+		FetchedAt: time.Now(),
+		Year:      time.Now().Year(),
+		Cards:     cards,
+	})
+}
+
+// LoadCatalog повертає кешований блок каталогу; fresh=false — TTL сплив,
+// дані годяться лише як офлайн-fallback.
+func (s *Store) LoadCatalog(providerID string, kind provider.CatalogKind) (cards []provider.TitleCard, fresh bool, found bool) {
+	var c catalogCache
+	ok, err := readJSON(s.catalogCachePath(providerID, kind), &c)
+	if err != nil || !ok {
+		return nil, false, false
+	}
+	// «Топ сезону» минулого року — не застарілі дані, а неправильні: після
+	// Нового року вони показали б торішній топ як поточний. TTL тут не рятує
+	// (офлайн-fallback віддає кеш будь-якої давності), тому такий запис
+	// вважаємо відсутнім, а не просто несвіжим.
+	if kind == provider.CatalogTopSeason && c.Year != time.Now().Year() {
+		return nil, false, false
+	}
+	return c.Cards, time.Since(c.FetchedAt) < catalogTTL, true
+}

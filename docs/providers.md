@@ -40,11 +40,15 @@ type Provider interface {
     Name() string        // "AniTube" — показуємо як є, не перекладаємо
     Caps() Caps
 
-    Search(ctx context.Context, q string) ([]TitleRef, error)
-    Title(ctx context.Context, ref TitleRef) (*Title, error)
+    Search(ctx context.Context, q string, page int) (Page, error)
+    Catalog(ctx context.Context, kind CatalogKind) ([]TitleCard, error) // лише якщо Caps.Catalog
     Episodes(ctx context.Context, ref TitleRef) ([]Episode, error)
-    Sources(ctx context.Context, ref TitleRef, ep EpisodeKey) ([]Source, error)
-    Updates(ctx context.Context, refs []TitleRef) ([]Update, error) // лише якщо Caps.Updates
+    Sources(ctx context.Context, ref TitleRef, episode int) ([]Source, error)
+}
+
+type Page struct {                    // сторінка результатів пошуку
+    Titles  []TitleCard
+    HasMore bool                      // сторінка повна — є сенс просити наступну
 }
 
 type Source struct {                  // те, що дав сайт
@@ -61,7 +65,7 @@ type Extractor interface {
     Extract(ctx context.Context, src Source) ([]Stream, error)
 }
 
-type Stream struct {                  // те, що можна віддати mpv
+type Stream struct {                  // дані для зовнішнього плеєра
     URL     string
     Quality int                       // 1080, 720, 0 = невідомо
     Kind    StreamKind                // hls | progressive
@@ -73,11 +77,25 @@ type Stream struct {                  // те, що можна віддати mp
 
 ```go
 type Caps struct {
-    Search, Updates, Ongoing, Descriptions, Subtitles bool
+    Search, Catalog, Updates, Ongoing, Descriptions, Subtitles bool
 }
 ```
 
 Перевірка на код провайдера будь-де поза `internal/provider` — архітектурний баг.
+
+### Картка тайтлу і добірки
+
+`TitleCard` вбудовує `TitleRef` — це вся його ідентичність. Решта полів (рік, рейтинг,
+кількість серій, жанри, студії, наявність дубляжу й сабів) — **метадані виключно для
+відображення**: вони живуть рівно стільки, скільки відкритий список, і ніколи не
+потрапляють у `library.json`. Причина та сама, що й з ідентичністю тайтлу: сайт міняє
+рейтинг щодня, а прогрес користувача не має від цього залежати. У сховищі — локальний ID
+і `TitleRef`; усе інше перечитується з провайдера.
+
+`CatalogKind` має два значення — `top-season` і `fresh`. Окремих URL для них сайт не
+зобов'язаний мати: в AniTube обидві добірки розбираються з головної сторінки, різними
+парсерами блоків. Каталог — це вітрина, тому він обмежений (≤ 20 карток) і не пагінується;
+гортання списків — робота пошуку.
 
 ---
 
@@ -173,20 +191,28 @@ uaanime unlink <title-id> <provider>          # відчепити помилк�
 Один набір тестів, обов'язковий для кожного провайдера:
 
 ```go
-func TestAnitube(t *testing.T) {
-    providertest.Run(t, anitube.New(), providertest.Fixtures{
-        Search:        "testdata/search.html",
-        MultiStudio:   "testdata/title-multi-studio.html",
-        SingleRelease: "testdata/title-single.html",
-        Ongoing:       "testdata/title-ongoing.html",
+func TestContract(t *testing.T) {
+    providertest.Run(t, fixtureClient(), providertest.Cases{
+        SearchQuery:   "фрірен",
+        PagedQuery:    "аніме",                                                  // ≥2 сторінки
+        Catalogs:      []provider.CatalogKind{provider.CatalogTopSeason, provider.CatalogFresh},
+        MultiStudio:   CanonicalRef("title-multi-studio"),
+        SingleRelease: CanonicalRef("title-single-release"),
+        Ongoing:       CanonicalRef("title-ongoing"),
+        Episode:       1,
     })
 }
 ```
 
 `providertest.Run` перевіряє однакові інваріанти для всіх: пошук повертає непорожній результат зі
-слагом; сторінка з кількома студіями дає >1 `Source` з різними `Studio`; жоден `Source` не має
+слагом; картка несе рік і рейтинг (щонайменше половина результатів); друга сторінка непорожня і не
+перетинається з першою за слагом; кожна добірка каталогу непорожня, у межах ліміту і з повними
+`TitleRef`; сторінка з кількома студіями дає >1 `Source` з різними `Studio`; жоден `Source` не має
 порожнього `Embed`; `Kind` ніколи не вгадується як `sub` за відсутності доказів; помилковий HTML не
 викликає паніку.
+
+`PagedQuery` і `Catalogs` необов'язкові — порожнє значення вимикає відповідний підтест, тому
+провайдер без таких фікстур усе одно проходить контракт.
 
 Саме це робить додавання провайдера дешевим. Без спільного контракту кожен новий сайт — це новий
 набір саморобних тестів різної якості.

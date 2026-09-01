@@ -1,26 +1,33 @@
 package player
 
 import (
-	"strings"
+	"reflect"
 	"testing"
 )
 
-func TestMPVCommandDeterministic(t *testing.T) {
-	h := map[string]string{"User-Agent": "ua", "Referer": "https://x/"}
-	a := MPVCommand("https://x/i.m3u8", "Тайтл · 1", h, 0)
-	b := MPVCommand("https://x/i.m3u8", "Тайтл · 1", h, 0)
-	if strings.Join(a.Args, " ") != strings.Join(b.Args, " ") {
-		t.Error("команда недетермінована")
+func TestMPVBuildsCommandWithoutStart(t *testing.T) {
+	cmd := (MPV{}).Command(
+		"https://x/i.m3u8",
+		"Тайтл · 1",
+		map[string]string{"User-Agent": "ua", "Referer": "https://x/"},
+		0,
+	)
+	want := []string{
+		"mpv",
+		"--no-terminal",
+		"--force-media-title=Тайтл · 1",
+		"--http-header-fields=Referer: https://x/,User-Agent: ua",
+		"https://x/i.m3u8",
 	}
-	joined := strings.Join(a.Args, " ")
-	if !strings.Contains(joined, "Referer: https://x/,User-Agent: ua") {
-		t.Errorf("заголовки не відсортовані або втрачені: %s", joined)
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("Command.Args = %#v, очікував %#v", cmd.Args, want)
 	}
-	if strings.Contains(joined, "--start=") {
-		t.Errorf("start=0 не має додавати --start: %s", joined)
-	}
-	c := MPVCommand("u", "t", nil, 93.5)
-	if !strings.Contains(strings.Join(c.Args, " "), "--start=93.5") {
-		t.Errorf("--start відсутній: %v", c.Args)
+}
+
+func TestMPVBuildsCommandWithStart(t *testing.T) {
+	cmd := (MPV{}).Command("u", "t", nil, 93.5)
+	want := []string{"mpv", "--no-terminal", "--force-media-title=t", "--start=93.5", "u"}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("Command.Args = %#v, очікував %#v", cmd.Args, want)
 	}
 }

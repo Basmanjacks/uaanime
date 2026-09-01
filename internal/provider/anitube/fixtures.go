@@ -8,10 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
@@ -28,7 +31,10 @@ var canonicalTitles = []struct {
 	{"title-dub-layout", "4304-sudzume-zachinyaye-dver"},                         // фільм, студія→тип→плеєр, ДУБЛЯЖ
 }
 
-const searchFixtureQuery = "фрірен"
+const (
+	searchFixtureQuery = "фрірен"
+	searchPagedQuery   = "аніме"
+)
 
 // CanonicalRef повертає TitleRef канонічної фікстури за її ім'ям файлу.
 func CanonicalRef(file string) provider.TitleRef {
@@ -54,7 +60,26 @@ func (t fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	switch {
 	case req.URL.Query().Get("do") == "search":
-		return t.serve("search.html")
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("читання запиту пошуку: %w", err)
+		}
+		req.Body = io.NopCloser(bytes.NewReader(body))
+		form, err := url.ParseQuery(string(body))
+		if err != nil {
+			return nil, fmt.Errorf("розбір запиту пошуку: %w", err)
+		}
+		switch form.Get("story") {
+		case searchFixtureQuery:
+			return t.serve("search.html")
+		case searchPagedQuery:
+			switch form.Get("search_start") {
+			case "0", "1":
+				return t.serve("search-paged.html")
+			case "2":
+				return t.serve("search-paged-2.html")
+			}
+		}
 	case strings.HasSuffix(req.URL.Path, "playlists.php"):
 		newsID := req.URL.Query().Get("news_id")
 		for _, ct := range canonicalTitles {
@@ -62,6 +87,9 @@ func (t fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 				return t.serve(ct.File + "-playlists.json")
 			}
 		}
+	case req.URL.Path == "/":
+		// Головна — джерело обох добірок каталогу (топ сезону і новинки).
+		return t.serve("catalog-fresh.html")
 	default:
 		for _, ct := range canonicalTitles {
 			if strings.Contains(req.URL.Path, ct.Slug) {
@@ -89,19 +117,7 @@ func (t fixtureTransport) serve(name string) (*http.Response, error) {
 func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) error {
 	c := New(httpClient)
 
-	form := "do=search&subaction=search&search_start=0&full_search=0&result_from=1&story=" + searchFixtureQuery
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		baseURL+"/index.php?do=search", strings.NewReader(form))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	setCommonHeaders(req, baseURL+"/")
-	body, err := c.do(req)
-	if err != nil {
-		return fmt.Errorf("запис search.html: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "search.html"), body, 0o644); err != nil {
+	if err := recordSearchFixture(ctx, c, dir, "search.html", searchFixtureQuery, 0, 1); err != nil {
 		return err
 	}
 
@@ -128,6 +144,76 @@ func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) er
 		if err := os.WriteFile(filepath.Join(dir, ct.File+"-playlists.json"), pl, 0o644); err != nil {
 			return err
 		}
+	}
+	return recordNewFixtures(ctx, c, dir)
+}
+
+// RecordNewFixtures записує лише фікстури пагінації пошуку та каталогів.
+func RecordNewFixtures(ctx context.Context, httpClient *http.Client, dir string) error {
+	return recordNewFixtures(ctx, New(httpClient), dir)
+}
+
+func recordNewFixtures(ctx context.Context, c *Client, dir string) error {
+	if err := recordSearchFixture(ctx, c, dir, "search-paged.html", searchPagedQuery, 0, 1); err != nil {
+		return err
+	}
+	if err := recordSearchFixture(ctx, c, dir, "search-paged-2.html", searchPagedQuery, 2, 11); err != nil {
+		return err
+	}
+	return recordCatalogFixture(ctx, c, dir, "catalog-fresh.html", baseURL+"/")
+}
+
+func recordSearchFixture(
+	ctx context.Context,
+	c *Client,
+	dir, file, story string,
+	searchStart, resultFrom int,
+) error {
+	form := url.Values{
+		"do":           {"search"},
+		"subaction":    {"search"},
+		"search_start": {strconv.Itoa(searchStart)},
+		"full_search":  {"0"},
+		"result_from":  {strconv.Itoa(resultFrom)},
+		"story":        {story},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		baseURL+"/index.php?do=search", strings.NewReader(form.Encode()))
+	if err != nil {
+		return fmt.Errorf("запис %s: %w", file, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setCommonHeaders(req, baseURL+"/")
+	body, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("запис %s: %w", file, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), body, 0o644); err != nil {
+		return fmt.Errorf("запис %s: %w", file, err)
+	}
+	return nil
+}
+
+func recordCatalogFixture(ctx context.Context, c *Client, dir, file, catalogURL string) error {
+	body, err := c.get(ctx, catalogURL, baseURL+"/")
+	if err != nil {
+		return fmt.Errorf("запис %s з %s: %w", file, catalogURL, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file), body, 0o644); err != nil {
+		return fmt.Errorf("запис %s з %s: %w", file, catalogURL, err)
+	}
+	// Головна має нести обидва блоки; порожній — сигнал, що розмітка змінилася.
+	top, err := parseTopSeason(body)
+	if err != nil {
+		return fmt.Errorf("перевірка %s з %s: %w", file, catalogURL, err)
+	}
+	fresh, err := parseFresh(body)
+	if err != nil {
+		return fmt.Errorf("перевірка %s з %s: %w", file, catalogURL, err)
+	}
+	if len(top) == 0 || len(fresh) == 0 {
+		return fmt.Errorf("перевірка %s з %s: топ сезону %d, новинки %d — сайт змінив розмітку головної: %w",
+			file, catalogURL, len(top), len(fresh), errs.ErrProvider)
 	}
 	return nil
 }

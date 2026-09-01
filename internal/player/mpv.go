@@ -8,10 +8,15 @@ import (
 	"strings"
 )
 
-// MPVCommand збирає команду mpv для потоку з обов'язковими заголовками.
+// MPV — бекенд зовнішнього плеєра mpv.
+type MPV struct{}
+
+func (MPV) ID() string { return "mpv" }
+
+// Command збирає команду mpv для потоку з обов'язковими заголовками.
 // startSec > 0 додає --start (resume, Phase 2). Заголовки сортуються,
 // щоб команда була детермінованою (важливо для --dry-run і тестів).
-func MPVCommand(streamURL, mediaTitle string, headers map[string]string, startSec float64) *exec.Cmd {
+func (MPV) Command(streamURL, mediaTitle string, headers map[string]string, startSec float64) *exec.Cmd {
 	args := []string{
 		"--no-terminal",
 		"--force-media-title=" + mediaTitle,
@@ -33,4 +38,8 @@ func MPVCommand(streamURL, mediaTitle string, headers map[string]string, startSe
 	}
 	args = append(args, streamURL)
 	return exec.Command("mpv", args...)
+}
+
+func (p MPV) Start(streamURL, mediaTitle string, headers map[string]string, startSec float64) (Session, error) {
+	return startMPV(streamURL, mediaTitle, headers, startSec)
 }

@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -15,9 +16,25 @@ import (
 )
 
 func main() {
+	onlyNew := flag.Bool("new", false, "записати лише нові фікстури AniTube")
+	flag.Parse()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	client := &http.Client{Timeout: 20 * time.Second}
+	if *onlyNew {
+		dir := "internal/provider/anitube/testdata"
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if err := anitube.RecordNewFixtures(ctx, client, dir); err != nil {
+			fmt.Fprintf(os.Stderr, "anitube: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("anitube: нові фікстури оновлено в %s\n", dir)
+		return
+	}
 
 	steps := []struct {
 		name string

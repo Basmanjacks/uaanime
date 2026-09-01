@@ -5,9 +5,11 @@ package playback
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/player"
@@ -16,11 +18,14 @@ import (
 )
 
 type Engine struct {
-	Provider   provider.Provider
-	Extractors []extractor.Extractor
-	Store      *store.Store
-	Lib        *library.Library
-	Prefs      library.Prefs
+	Provider       provider.Provider
+	Extractors     []extractor.Extractor
+	Store          *store.Store
+	Lib            *library.Library
+	Prefs          library.Prefs
+	Player         player.Player
+	PlayerFallback bool
+	Autoplay       bool
 }
 
 // Event — немовні сигнали для інтерфейсу (текст додає той, хто показує).
@@ -52,36 +57,52 @@ func (e *Engine) Resolve(ctx context.Context, ref provider.TitleRef, ep int, onE
 	if err != nil {
 		return nil, err
 	}
-	title := e.Lib.EnsureTitle(ref, store.NewID)
-	entry := e.Lib.EntryFor(title.ID)
-
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("серія %d: провайдер не повернув джерел: %w", ep, errs.ErrNoStream)
+	}
+	var entry *library.Entry
 	var startSec float64
-	if p := e.Lib.ProgressFor(title.ID, ep); p != nil && !p.Completed && p.PositionSec > 0 {
-		startSec = p.PositionSec
+	name := ref.Name
+	if title := e.Lib.TitleByRef(ref); title != nil {
+		entry = e.Lib.EntryLookup(title.ID)
+		if p := e.Lib.ProgressFor(title.ID, ep); p != nil && !p.Completed && p.PositionSec > 0 {
+			startSec = p.PositionSec
+		}
+		if title.Name != "" {
+			name = title.Name
+		}
 	}
 
 	remaining := sources
+	var failures []error
 	for len(remaining) > 0 {
 		chosen, candidates := library.Pick(remaining, entry, e.Prefs)
 		if chosen == nil {
+			failures = append(failures, fmt.Errorf("неможливо обрати реліз: %w", errs.ErrProvider))
 			break
 		}
 		ex, ok := extractor.Find(e.Extractors, chosen.Embed)
 		if !ok {
+			failures = append(failures, fmt.Errorf("embed %s: немає підтримуваного екстрактора: %w", chosen.Embed, errs.ErrNoStream))
 			remaining = without(remaining, *chosen)
 			continue
 		}
 		streams, err := ex.Extract(ctx, chosen.Embed, chosen.Referer)
-		if err != nil || len(streams) == 0 {
+		if err != nil {
+			failures = append(failures, err)
 			if onEvent != nil {
 				onEvent(EventTryingNext)
 			}
 			remaining = without(remaining, *chosen)
 			continue
 		}
-		name := title.Name
-		if name == "" {
-			name = ref.Name
+		if len(streams) == 0 {
+			failures = append(failures, fmt.Errorf("екстрактор %s не повернув потоку: %w", ex.ID(), errs.ErrNoStream))
+			if onEvent != nil {
+				onEvent(EventTryingNext)
+			}
+			remaining = without(remaining, *chosen)
+			continue
 		}
 		if name == "" {
 			name = ref.Slug
@@ -97,7 +118,26 @@ func (e *Engine) Resolve(ctx context.Context, ref provider.TitleRef, ep int, onE
 			Candidates: candidates,
 		}, nil
 	}
-	return nil, fmt.Errorf("серія %d: жодне джерело не дало потоку", ep)
+	return nil, aggregateResolveFailures(ep, failures)
+}
+
+func aggregateResolveFailures(ep int, failures []error) error {
+	offline, noStream := 0, 0
+	for _, err := range failures {
+		switch {
+		case errors.Is(err, errs.ErrOffline) || errs.Offline(err):
+			offline++
+		case errors.Is(err, errs.ErrNoStream):
+			noStream++
+		}
+	}
+	class := errs.ErrProvider
+	if len(failures) > 0 && offline == len(failures) {
+		class = errs.ErrOffline
+	} else if len(failures) > 0 && noStream == len(failures) {
+		class = errs.ErrNoStream
+	}
+	return fmt.Errorf("серія %d: жодне джерело не дало потоку: %w: %w", ep, class, errors.Join(failures...))
 }
 
 // EpisodesCached — серії з кешем метаданих: свіжий кеш (< TTL) віддається без
@@ -109,8 +149,10 @@ func (e *Engine) EpisodesCached(ctx context.Context, ref provider.TitleRef) (eps
 	}
 	eps, err = e.Provider.Episodes(ctx, ref)
 	if err != nil {
-		if cached, _, found := e.Store.LoadEpisodes(ref); found {
-			return cached, true, nil
+		if errors.Is(err, errs.ErrOffline) || errs.Offline(err) {
+			if cached, _, found := e.Store.LoadEpisodes(ref); found {
+				return cached, true, nil
+			}
 		}
 		return nil, false, err
 	}
@@ -118,10 +160,80 @@ func (e *Engine) EpisodesCached(ctx context.Context, ref provider.TitleRef) (eps
 	return eps, false, nil
 }
 
+// EpisodesFresh завжди питає провайдера й оновлює кеш; потрібен там, де
+// локальна оцінка має бути звірена з актуальним списком серій.
+func (e *Engine) EpisodesFresh(ctx context.Context, ref provider.TitleRef) ([]provider.Episode, error) {
+	eps, err := e.Provider.Episodes(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	_ = e.Store.SaveEpisodes(ref, eps)
+	return eps, nil
+}
+
+// NextEpisodeNumber знаходить найближчу наявну серію після поточної, навіть
+// коли нумерація має пропуски або список не відсортований.
+func NextEpisodeNumber(eps []provider.Episode, after int) (int, bool) {
+	next := 0
+	for _, ep := range eps {
+		if ep.Number > after && (next == 0 || ep.Number < next) {
+			next = ep.Number
+		}
+	}
+	return next, next != 0
+}
+
+// CatalogCached — блок каталогу з кешем метаданих: свіжий кеш (< TTL)
+// віддається без мережі; при відмові мережі кеш будь-якої давності —
+// офлайн-fallback. offline=true лише коли мережа впала і показано застарілий кеш.
+func (e *Engine) CatalogCached(ctx context.Context, kind provider.CatalogKind) (cards []provider.TitleCard, offline bool, err error) {
+	id := e.Provider.ID()
+	if cached, fresh, found := e.Store.LoadCatalog(id, kind); found && fresh {
+		return cached, false, nil
+	}
+	cards, err = e.Provider.Catalog(ctx, kind)
+	if err != nil {
+		if errors.Is(err, errs.ErrOffline) || errs.Offline(err) {
+			if cached, _, found := e.Store.LoadCatalog(id, kind); found {
+				return cached, true, nil
+			}
+		}
+		return nil, false, err
+	}
+	_ = e.Store.SaveCatalog(id, kind, cards)
+	return cards, false, nil
+}
+
 // PinStudio закріплює студію за тайтлом (відповідь на одноразове питання).
 func (e *Engine) PinStudio(ref provider.TitleRef, studio string) error {
 	title := e.Lib.EnsureTitle(ref, store.NewID)
 	e.Lib.EntryFor(title.ID).StudioPin = studio
+	return e.Store.SaveLibrary(e.Lib)
+}
+
+// Bookmark перемикає тайтл у списку запланованого.
+func (e *Engine) Bookmark(ref provider.TitleRef, epCount int) (library.BookmarkResult, error) {
+	title := e.Lib.EnsureTitle(ref, store.NewID)
+	result := e.Lib.ToggleBookmark(title.ID, epCount)
+	return result, e.Store.SaveLibrary(e.Lib)
+}
+
+// MarkSeen оновлює базову лінію лише для вже відомого локального тайтлу.
+func (e *Engine) MarkSeen(ref provider.TitleRef, maxEp int) error {
+	title := e.Lib.TitleByRef(ref)
+	if title == nil {
+		return nil
+	}
+	e.Lib.MarkSeen(title.ID, maxEp)
+	return e.Store.SaveLibrary(e.Lib)
+}
+
+// ReconcileKnown зберігає уточнення, лише коли очікувана базова лінія не змінилась.
+func (e *Engine) ReconcileKnown(ref provider.TitleRef, provisional, actual int) error {
+	title := e.Lib.TitleByRef(ref)
+	if title == nil || !e.Lib.ReconcileKnown(title.ID, provisional, actual) {
+		return nil
+	}
 	return e.Store.SaveLibrary(e.Lib)
 }
 
@@ -136,6 +248,9 @@ type Result struct {
 // Play веде сесію mpv: журнал кожні 5 с, злиття в бібліотеку наприкінці.
 // Скасування ctx закриває плеєр і теж зливає журнал.
 func (e *Engine) Play(ctx context.Context, res *Resolved) (*Result, error) {
+	if e.Player == nil {
+		return nil, errs.ErrNoPlayer
+	}
 	title := e.Lib.EnsureTitle(res.Ref, store.NewID)
 	entry := e.Lib.EntryFor(title.ID)
 
@@ -151,7 +266,7 @@ func (e *Engine) Play(ctx context.Context, res *Resolved) (*Result, error) {
 		return nil, err
 	}
 
-	sess, err := player.Start(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
+	sess, err := e.Player.Start(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
 	if err != nil {
 		return nil, err
 	}

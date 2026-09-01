@@ -7,16 +7,18 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/extractor/ashdi"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
@@ -179,9 +181,15 @@ func runTUI() (code int) {
 
 // doctorReport — стан системи для людини і для --json.
 type doctorReport struct {
-	MPV       bool                 `json:"mpv"`
+	Players   []doctorPlayer       `json:"players"`
 	DataDir   string               `json:"data_dir"`
 	Providers []doctorProviderInfo `json:"providers"`
+}
+
+type doctorPlayer struct {
+	ID      string `json:"id"`
+	Found   bool   `json:"found"`
+	Default bool   `json:"default"`
 }
 
 type doctorProviderInfo struct {
@@ -194,15 +202,20 @@ type doctorProviderInfo struct {
 
 func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 	rep := doctorReport{}
-	_, mpvErr := exec.LookPath("mpv")
-	rep.MPV = mpvErr == nil
+	for _, id := range []string{"vlc", "mpv"} {
+		rep.Players = append(rep.Players, doctorPlayer{
+			ID:      id,
+			Found:   player.Found(id),
+			Default: id == a.cfg.Player,
+		})
+	}
 	rep.DataDir, _ = store.DataDir()
 
 	health := a.store.LoadHealth()
 	info := doctorProviderInfo{ID: a.provider.ID(), Name: a.provider.Name()}
 	checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
-	if _, err := a.provider.Search(checkCtx, "аніме"); err != nil {
+	if _, err := a.provider.Search(checkCtx, "аніме", 1); err != nil {
 		info.Message = err.Error()
 	} else {
 		info.Alive = true
@@ -219,10 +232,17 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 	if jsonOut {
 		return printJSON(rep)
 	}
-	if rep.MPV {
-		fmt.Println(i18n.MsgDoctorMPVOK)
-	} else {
-		fmt.Println(i18n.MsgDoctorMPVMissing)
+	foundPlayer := false
+	for _, p := range rep.Players {
+		if p.Found {
+			foundPlayer = true
+			fmt.Printf(i18n.MsgDoctorPlayerOK+"\n", p.ID)
+		} else {
+			fmt.Printf(i18n.MsgDoctorPlayerMissing+"\n", p.ID)
+		}
+	}
+	if !foundPlayer {
+		fmt.Println(playerInstallHint())
 	}
 	fmt.Printf(i18n.MsgDoctorDataDir+"\n", rep.DataDir)
 	for _, p := range rep.Providers {
@@ -272,28 +292,44 @@ func (a *app) refFromID(id string) provider.TitleRef {
 func titleID(r provider.TitleRef) string { return r.Provider + ":" + r.Slug }
 
 func (a *app) cmdSearch(ctx context.Context, q string, jsonOut bool) int {
-	refs, err := a.provider.Search(ctx, q)
+	page, err := a.provider.Search(ctx, q, 1)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
+		printCommandError(err)
 		return 1
 	}
 	if jsonOut {
-		return printJSON(refs)
+		return printJSON(page.Titles)
 	}
-	if len(refs) == 0 {
+	if len(page.Titles) == 0 {
 		fmt.Println(i18n.MsgNothingFound)
 		return 0
 	}
-	for _, r := range refs {
-		fmt.Printf("%s\t%s\n", titleID(r), r.Name)
+	for _, r := range page.Titles {
+		fmt.Printf("%s\t%s\t%s\t%s\n", titleID(r.TitleRef), r.Name, cardYear(r), cardRating(r))
 	}
 	return 0
+}
+
+// Метадані картки — необов'язкові: відсутнє значення лишає колонку порожньою,
+// щоб рядок залишався розбірним по табуляціях.
+func cardYear(card provider.TitleCard) string {
+	if card.Year <= 0 {
+		return ""
+	}
+	return strconv.Itoa(card.Year)
+}
+
+func cardRating(card provider.TitleCard) string {
+	if card.Rating <= 0 {
+		return ""
+	}
+	return "★" + strconv.FormatFloat(card.Rating, 'f', -1, 64)
 }
 
 func (a *app) cmdEpisodes(ctx context.Context, id string, jsonOut bool) int {
 	eps, offline, err := a.engine().EpisodesCached(ctx, a.refFromID(id))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
+		printCommandError(err)
 		return 1
 	}
 	if offline && !jsonOut {
@@ -325,36 +361,66 @@ func (a *app) candidates(ctx context.Context, ref provider.TitleRef, ep int) ([]
 	if err != nil {
 		return nil, err
 	}
+	if len(sources) == 0 {
+		return nil, fmt.Errorf("серія %d: провайдер не повернув джерел: %w", ep, errs.ErrNoStream)
+	}
 	var out []candidate
+	var failures []error
 	for _, src := range sources {
 		ex, ok := extractor.Find(a.extractors, src.Embed)
 		if !ok {
+			failures = append(failures, fmt.Errorf("embed %s: немає підтримуваного екстрактора: %w", src.Embed, errs.ErrNoStream))
 			continue
 		}
 		streams, err := ex.Extract(ctx, src.Embed, src.Referer)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
+			failures = append(failures, err)
 			continue // одне мертве джерело не має ховати решту
+		}
+		if len(streams) == 0 {
+			failures = append(failures, fmt.Errorf("екстрактор %s не повернув потоку: %w", ex.ID(), errs.ErrNoStream))
+			continue
 		}
 		for _, st := range streams {
 			out = append(out, candidate{Studio: src.Studio, Kind: src.Kind, Host: ex.ID(), Stream: st})
 		}
 	}
+	if len(out) == 0 {
+		return nil, aggregateCandidateFailures(ep, failures)
+	}
 	return out, nil
+}
+
+func aggregateCandidateFailures(ep int, failures []error) error {
+	offline, noStream := 0, 0
+	for _, err := range failures {
+		switch {
+		case errors.Is(err, errs.ErrOffline) || errs.Offline(err):
+			offline++
+		case errors.Is(err, errs.ErrNoStream):
+			noStream++
+		}
+	}
+	class := errs.ErrProvider
+	if len(failures) > 0 && offline == len(failures) {
+		class = errs.ErrOffline
+	} else if len(failures) > 0 && noStream == len(failures) {
+		class = errs.ErrNoStream
+	}
+	return fmt.Errorf("серія %d: жодне джерело не дало потоку: %w: %w", ep, class, errors.Join(failures...))
 }
 
 func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) int {
 	cands, err := a.candidates(ctx, a.refFromID(id), ep)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
+	if err != nil || len(cands) == 0 {
+		if err == nil {
+			err = fmt.Errorf("серія %d: порожній список потоків: %w", ep, errs.ErrNoStream)
+		}
+		printCommandError(err)
 		return 1
 	}
 	if jsonOut {
 		return printJSON(cands)
-	}
-	if len(cands) == 0 {
-		fmt.Println(i18n.MsgNoPlayableHost)
-		return 1
 	}
 	for _, c := range cands {
 		fmt.Printf("%s\t%s\t%s\t%s\n", c.Studio, c.Kind, c.Host, c.Stream.URL)
@@ -362,7 +428,29 @@ func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) i
 	return 0
 }
 
+func commandErrText(err error) string {
+	switch {
+	case errors.Is(err, errs.ErrOffline):
+		return i18n.MsgOffline
+	case errors.Is(err, errs.ErrNoStream):
+		return i18n.MsgNoPlayableHost
+	default:
+		return fmt.Sprintf(i18n.MsgProviderFailed, err)
+	}
+}
+
+func printCommandError(err error) { fmt.Fprintln(os.Stderr, commandErrText(err)) }
+
 func (a *app) engine() *playback.Engine {
+	eng := a.engineWithoutPlayer()
+	eng.Player, eng.PlayerFallback, _ = player.Detect(a.cfg.Player)
+	eng.Autoplay = a.cfg.Autoplay == "always"
+	return eng
+}
+
+// engineWithoutPlayer потрібен для --dry-run: команда має будуватися без
+// пошуку встановлених програм і працювати навіть на системі без плеєрів.
+func (a *app) engineWithoutPlayer() *playback.Engine {
 	return &playback.Engine{
 		Provider:   a.provider,
 		Extractors: a.extractors,
@@ -375,48 +463,92 @@ func (a *app) engine() *playback.Engine {
 	}
 }
 
-func (a *app) cmdPlay(ctx context.Context, id string, ep int, dryRun bool) int {
-	ref := a.refFromID(id)
-	fmt.Printf(i18n.MsgResolving+"\n", ep)
-	eng := a.engine()
-
-	res, err := eng.Resolve(ctx, ref, ep, func(playback.Event) { fmt.Println(i18n.MsgTryingNext) })
-	if err != nil {
-		fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
-		return 1
-	}
-	if res.StartSec > 0 {
-		fmt.Printf(i18n.MsgResume+"\n", int(res.StartSec)/60, int(res.StartSec)%60)
-	}
-	fmt.Printf(i18n.MsgPickedSource+"\n", res.Source.Studio, res.Source.Kind, res.HostID)
-
-	if dryRun {
-		cmd := player.MPVCommand(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
-		fmt.Println(strings.Join(cmd.Args, " "))
-		return 0
-	}
-
-	fmt.Println(i18n.MsgLaunchingPlayer)
+func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	result, err := eng.Play(sigCtx, res)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, i18n.MsgPlayerFailed+"\n", err)
-		return 1
+
+	ref := a.refFromID(id)
+	var eng *playback.Engine
+	if dryRun {
+		eng = a.engineWithoutPlayer()
+	} else {
+		eng = a.engine()
 	}
-	if result.PinnedStudio != "" {
-		fmt.Printf(i18n.MsgStudioPinned+"\n", result.PinnedStudio)
-	}
-	if result.Completed {
-		fmt.Printf(i18n.MsgEpisodeDone+"\n", ep)
-	} else if result.PositionSec > 0 {
-		fmt.Printf(i18n.MsgProgressSaved+"\n", int(result.PositionSec)/60, int(result.PositionSec)%60)
-	}
-	if result.Reason == player.EndError {
-		fmt.Fprintf(os.Stderr, i18n.MsgPlayerFailed+"\n", result.Reason)
-		return 1
+
+	for {
+		fmt.Printf(i18n.MsgResolving+"\n", ep)
+		resolveCtx, cancel := context.WithTimeout(sigCtx, 60*time.Second)
+		res, err := eng.Resolve(resolveCtx, ref, ep, func(playback.Event) { fmt.Println(i18n.MsgTryingNext) })
+		cancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
+			return 1
+		}
+		if res.StartSec > 0 {
+			fmt.Printf(i18n.MsgResume+"\n", int(res.StartSec)/60, int(res.StartSec)%60)
+		}
+		fmt.Printf(i18n.MsgPickedSource+"\n", res.Source.Studio, res.Source.Kind, res.HostID)
+
+		if dryRun {
+			var backend player.Player = player.VLC{}
+			if a.cfg.Player == "mpv" {
+				backend = player.MPV{}
+			}
+			cmd := backend.Command(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
+			fmt.Println(strings.Join(cmd.Args, " "))
+			return 0
+		}
+
+		if eng.PlayerFallback {
+			fmt.Printf(i18n.MsgPlayerFallback+"\n", eng.Player.ID())
+		}
+		fmt.Println(i18n.MsgLaunchingPlayer)
+		result, err := eng.Play(sigCtx, res)
+		if errors.Is(err, errs.ErrNoPlayer) {
+			fmt.Fprintln(os.Stderr, i18n.MsgNoPlayer)
+			fmt.Fprintln(os.Stderr, playerInstallHint())
+			return 1
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, i18n.MsgPlayerFailed+"\n", err)
+			return 1
+		}
+		if result.PinnedStudio != "" {
+			fmt.Printf(i18n.MsgStudioPinned+"\n", result.PinnedStudio)
+		}
+		if result.Completed {
+			fmt.Printf(i18n.MsgEpisodeDone+"\n", ep)
+		} else if result.PositionSec > 0 {
+			fmt.Printf(i18n.MsgProgressSaved+"\n", int(result.PositionSec)/60, int(result.PositionSec)%60)
+		}
+		if result.Reason == player.EndError {
+			fmt.Fprintf(os.Stderr, i18n.MsgPlayerFailed+"\n", result.Reason)
+			return 1
+		}
+		if result.Reason != player.EndEOF || !eng.Autoplay {
+			return 0
+		}
+
+		episodesCtx, cancel := context.WithTimeout(sigCtx, 60*time.Second)
+		episodes, _, err := eng.EpisodesCached(episodesCtx, ref)
+		cancel()
+		if err != nil {
+			break
+		}
+		next, ok := playback.NextEpisodeNumber(episodes, ep)
+		if !ok {
+			break
+		}
+		ep = next
 	}
 	return 0
+}
+
+func playerInstallHint() string {
+	if runtime.GOOS == "darwin" {
+		return i18n.MsgInstallHintMac
+	}
+	return i18n.MsgInstallHintLinux
 }
 
 func printJSON(v any) int {

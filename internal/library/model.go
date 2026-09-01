@@ -26,12 +26,21 @@ const (
 
 // Entry — запис списку перегляду.
 type Entry struct {
-	TitleID     string        `json:"title_id"`
-	State       State         `json:"state"`
-	StudioPin   string        `json:"studio_pin,omitempty"`
-	KindPin     provider.Kind `json:"kind_pin,omitempty"`
-	LastEpisode int           `json:"last_episode,omitempty"`
+	TitleID       string        `json:"title_id"`
+	State         State         `json:"state"`
+	StudioPin     string        `json:"studio_pin,omitempty"`
+	KindPin       provider.Kind `json:"kind_pin,omitempty"`
+	LastEpisode   int           `json:"last_episode,omitempty"`
+	KnownEpisodes int           `json:"known_episodes,omitempty"`
+	Hidden        bool          `json:"hidden,omitempty"`
 }
+
+type BookmarkResult int
+
+const (
+	BookmarkAdded BookmarkResult = iota
+	BookmarkRemoved
+)
 
 type Progress struct {
 	TitleID     string    `json:"title_id"`
@@ -77,14 +86,69 @@ func (l *Library) EnsureTitle(ref provider.TitleRef, newID func() string) *Local
 
 // EntryFor повертає запис списку перегляду тайтлу, створюючи його за потреби.
 func (l *Library) EntryFor(titleID string) *Entry {
+	if e := l.EntryLookup(titleID); e != nil {
+		e.Hidden = false
+		return e
+	}
+	e := &Entry{TitleID: titleID, State: StateWatching}
+	l.Entries = append(l.Entries, e)
+	return e
+}
+
+// EntryLookup повертає запис списку перегляду тайтлу, не змінюючи бібліотеку.
+func (l *Library) EntryLookup(titleID string) *Entry {
 	for _, e := range l.Entries {
 		if e.TitleID == titleID {
 			return e
 		}
 	}
-	e := &Entry{TitleID: titleID, State: StateWatching}
-	l.Entries = append(l.Entries, e)
-	return e
+	return nil
+}
+
+// ToggleBookmark змінює видиме членство тайтлу в бібліотеці. Прогрес живе
+// окремо в Library.Progress, а піни — на Entry, тому розпочатий тайтл ховаємо,
+// а не видаляємо разом із налаштуваннями користувача.
+func (l *Library) ToggleBookmark(titleID string, knownEpisodes int) BookmarkResult {
+	for i, entry := range l.Entries {
+		if entry.TitleID != titleID {
+			continue
+		}
+		if entry.State == StatePlanned {
+			l.Entries = append(l.Entries[:i], l.Entries[i+1:]...)
+			return BookmarkRemoved
+		}
+		if entry.Hidden {
+			entry.Hidden = false
+			return BookmarkAdded
+		}
+		entry.Hidden = true
+		return BookmarkRemoved
+	}
+	l.Entries = append(l.Entries, &Entry{
+		TitleID:       titleID,
+		State:         StatePlanned,
+		KnownEpisodes: knownEpisodes,
+	})
+	return BookmarkAdded
+}
+
+// MarkSeen рухає базову лінію відомих серій лише вперед.
+func (l *Library) MarkSeen(titleID string, maxEp int) {
+	entry := l.EntryLookup(titleID)
+	if entry != nil && maxEp > entry.KnownEpisodes {
+		entry.KnownEpisodes = maxEp
+	}
+}
+
+// ReconcileKnown замінює лише незмінену попередню оцінку кількості серій.
+func (l *Library) ReconcileKnown(titleID string, provisional, actual int) bool {
+	entry := l.EntryLookup(titleID)
+	if entry == nil || entry.State != StatePlanned || entry.KnownEpisodes != provisional || actual == provisional {
+		return false
+	}
+	// EpAired на картці буває завищеним, тому підтверджене число може бути меншим.
+	entry.KnownEpisodes = actual
+	return true
 }
 
 // ProgressFor повертає прогрес серії, якщо він є.

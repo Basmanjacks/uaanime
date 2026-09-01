@@ -1,11 +1,22 @@
 package ashdi
 
 import (
+	"errors"
+	"io"
+	"net"
+	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestHandles(t *testing.T) {
 	e := New(nil)
@@ -32,5 +43,31 @@ func TestExtractFixture(t *testing.T) {
 	}
 	if s.Headers["Referer"] == "" || s.Headers["User-Agent"] == "" {
 		t.Errorf("потік без обов'язкових заголовків: %+v", s.Headers)
+	}
+}
+
+func TestExtractClassifiesDNSFailureAsOffline(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, &net.DNSError{Err: "no such host", Name: "ashdi.vip", IsNotFound: true}
+	})}
+
+	_, err := New(client).Extract(t.Context(), "https://ashdi.vip/vod/1", "https://anitube.in.ua/x")
+	if !errors.Is(err, errs.ErrOffline) {
+		t.Fatalf("Extract error = %v, очікував ErrOffline", err)
+	}
+}
+
+func TestExtractClassifiesMissingURLAsNoStream(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("<html>без плеєра</html>")),
+			Header:     http.Header{},
+		}, nil
+	})}
+
+	_, err := New(client).Extract(t.Context(), "https://ashdi.vip/vod/1", "https://anitube.in.ua/x")
+	if !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("Extract error = %v, очікував ErrNoStream", err)
 	}
 }

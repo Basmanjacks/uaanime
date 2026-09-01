@@ -1,4 +1,4 @@
-.PHONY: build test lint run record-fixtures
+.PHONY: build test lint run record-fixtures record-fixtures-new
 
 build:
 	go build -o bin/uaanime ./cmd/uaanime
@@ -16,3 +16,6 @@ run: build
 
 record-fixtures:
 	go run ./tools/record
+
+record-fixtures-new:
+	go run ./tools/record -new
