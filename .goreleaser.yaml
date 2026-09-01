@@ -35,10 +35,15 @@ brews:
     directory: Formula
     homepage: https://github.com/Basmanjacks/uaanime
     description: "Дивись аніме українською з термінала"
+    caveats: |
+      Для відтворення потрібен VLC або mpv.
+      Встанови один із них пакетним менеджером системи.
+      Перевірка: uaanime doctor
     install: bin.install "uaanime"
     skip_upload: auto
 
-# macOS-cask автоматично ставить VLC — тепер це дефолтний плеєр.
+# Cask ставить лише uaanime. VLC/mpv лишаються зовнішніми плеєрами: hard dependency
+# конфліктує з VLC.app, установленим вручну й тому невідомим Homebrew.
 homebrew_casks:
   - repository:
       owner: Basmanjacks
@@ -47,10 +52,13 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: https://github.com/Basmanjacks/uaanime
     description: "Дивись аніме українською з термінала"
+    caveats: |
+      Для відтворення потрібен VLC або mpv.
+      Встановлення VLC: brew install --cask vlc
+      Встановлення mpv: brew install mpv
+      Перевірка: uaanime doctor
     binaries:
       - uaanime
-    dependencies:
-      - cask: vlc
     # Бінарник не підписаний і не нотаризований, тож macOS вішає на нього карантин
     # і відмовляється запускати. Знімаємо атрибут одразу після встановлення.
     hooks:

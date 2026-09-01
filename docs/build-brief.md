@@ -113,7 +113,9 @@ Entry    { TitleID, State (watching|planned|completed), StudioPin, KindPin, Last
 ## 5. Плеєр
 
 Плеєр конфігурований: VLC за замовчуванням або mpv. Абстракція `Player` існує,
-реалізацій дві: VLC керується через RC/TCP, mpv — через JSON IPC.
+реалізацій дві: VLC керується через RC/TCP, mpv — через JSON IPC. Пакет uaanime не
+встановлює й не перевстановлює плеєр: використовує наявний VLC.app/бінарник у PATH,
+а за відсутності обох `uaanime doctor` показує інструкцію.
 
 ```
 mpv --input-ipc-server=<sock> --start=<sec> --force-media-title="Фрірен · 17"
@@ -254,7 +256,8 @@ AniList/MAL, постери в терміналі, окремі «Обране»
 
 ## 12. Definition of done
 
-- [ ] `brew install …` → `uaanime` → перегляд без жодного конфіга
+- [ ] `brew install …` не змінює наявний VLC/mpv; з одним установленим плеєром → перегляд без конфіга
+- [ ] без VLC/mpv `uaanime doctor` показує точну команду встановлення
 - [ ] холодний старт < 100 мс, перший екран без мережі
 - [ ] пошук → відео на екрані ≤ 3 дії
 - [ ] `Enter` на «Продовжити» → налаштований плеєр < 3 с
