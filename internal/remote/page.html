@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="uk">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0b0b0f">
+<title>{{.Title}}</title>
+<style>
+:root { --accent: #d97757; --bg: #0b0b0f; --fg: #e8e8ea; --dim: #8b8b94; --panel: #1a1a21 }
+* { box-sizing: border-box }
+html { height: 100% }
+body {
+  margin: 0; min-height: 100%; background: var(--bg); color: var(--fg);
+  font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: calc(env(safe-area-inset-top) + 16px) calc(env(safe-area-inset-right) + 16px)
+           calc(env(safe-area-inset-bottom) + 16px) calc(env(safe-area-inset-left) + 16px);
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent;
+  user-select: none; -webkit-user-select: none;
+}
+h1 { margin: 0; font-size: 20px; font-weight: 600; overflow-wrap: anywhere }
+#ep { color: var(--dim); font-size: 14px; min-height: 20px; overflow-wrap: anywhere }
+#time { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums }
+#bar { height: 6px; border-radius: 3px; background: var(--panel); overflow: hidden }
+#fill { height: 100%; width: 0; background: var(--accent) }
+button {
+  font: inherit; font-size: 17px; font-weight: 600; color: var(--fg);
+  background: var(--panel); border: 0; border-radius: 14px; padding: 18px; width: 100%;
+}
+button:disabled { opacity: .35 }
+button:active:enabled { filter: brightness(1.35) }
+#pause { height: 35vh; font-size: 26px; background: var(--accent); color: #0b0b0f }
+.row { display: flex; gap: 10px }
+#stop { background: none; color: var(--dim); font-weight: 400; font-size: 15px; padding: 12px }
+#labels { display: none }
+</style>
+<h1 id="title">{{.Idle}}</h1>
+<div id="ep"></div>
+<div id="time">00:00 / 00:00</div>
+<div id="bar"><div id="fill"></div></div>
+<button id="pause" disabled>{{.Pause}}</button>
+<div class="row">
+  <button id="back" disabled>{{.Back}}</button>
+  <button id="forward" disabled>{{.Forward}}</button>
+</div>
+<button id="next" disabled>{{.Next}}</button>
+<button id="stop" disabled>{{.Stop}}</button>
+<div id="labels"><span id="l-idle">{{.Idle}}</span><span id="l-episode">{{.Episode}}</span><span id="l-play">{{.Play}}</span><span id="l-pause">{{.Pause}}</span><span id="l-offline">{{.Offline}}</span></div>
+<script>
+const BASE = {{.Base}};
+const CMDS = ["pause", "back", "forward", "next", "stop"];
+const $ = (id) => document.getElementById(id);
+const L = (k) => $("l-" + k).textContent;
+// Команда й опитування не блокують одна одну: статус на боці VLC може
+// думати секунди, а тап по «Пауза» у цей час губитися не має. Дві команди
+// поспіль — інша річ: друга чекає, поки кнопки знову ввімкнуться.
+let busy = false;
+let live = false;
+let timer = 0;
+
+function mmss(v) {
+  const s = Math.max(0, Math.round(Number(v) || 0));
+  const m = Math.floor(s / 60);
+  return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+function enable(on) {
+  for (const id of CMDS) { $(id).disabled = !on; }
+}
+function idle() {
+  live = false;
+  $("title").textContent = L("idle");
+  $("ep").textContent = "";
+  $("time").textContent = "00:00 / 00:00";
+  $("fill").style.width = "0%";
+  $("pause").textContent = L("play");
+  enable(false);
+}
+function render(st) {
+  if (!st || !st.playing) { idle(); return; }
+  live = true;
+  const p = Number(st.position_sec) || 0;
+  const d = Number(st.duration_sec) || 0;
+  $("title").textContent = st.title || L("idle");
+  $("ep").textContent = st.episode > 0 ? L("episode").replace("%d", st.episode) : "";
+  $("time").textContent = mmss(p) + " / " + mmss(d);
+  $("fill").style.width = (d > 0 ? Math.min(100, (p * 100) / d) : 0) + "%";
+  $("pause").textContent = st.paused ? L("play") : L("pause");
+  enable(true);
+}
+async function call(path, method) {
+  const command = method === "POST";
+  if (command) {
+    if (busy) { return; }
+    busy = true;
+    enable(false);
+  }
+  try {
+    const r = await fetch(BASE + path, { method: method });
+    if (r.status === 409) { idle(); return; }
+    const st = await r.json();
+    if (!r.ok) { $("ep").textContent = st.error || ""; enable(live); return; }
+    render(st);
+  } catch (e) {
+    $("title").textContent = L("offline");
+    enable(live);
+  } finally {
+    if (command) { busy = false; }
+  }
+}
+async function poll() {
+  clearTimeout(timer);
+  if (document.hidden) { return; }
+  await call("status", "GET");
+  if (!document.hidden) { timer = setTimeout(poll, 2000); }
+}
+for (const id of CMDS) {
+  $(id).addEventListener("click", () => call(id, "POST"));
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); } });
+idle();
+poll();
+</script>

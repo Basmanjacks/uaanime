@@ -73,7 +73,7 @@ func newTestModel(t *testing.T) Model {
 		t.Fatalf("open store: %v", err)
 	}
 	eng := &playback.Engine{Store: st, Lib: &library.Library{}, Player: fakePlayer{}}
-	return New(eng)
+	return New(eng, Options{})
 }
 
 func updateTestModel(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {

@@ -2,7 +2,9 @@ package store
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -205,6 +207,176 @@ func TestLoadConfigNormalizesPreferKind(t *testing.T) {
 	}
 }
 
+func TestLoadConfigNormalizesRemote(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"empty", "", "on"},
+		{"uppercase", "ON", "on"},
+		{"garbage", "garbage", "on"},
+		{"off", "off", "off"},
+		{"open", "open", "open"},
+		{"open uppercase", "OPEN", "on"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openTemp(t)
+			if err := writeAtomic(s.configPath(), &Config{Remote: tt.in}); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := s.LoadConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Remote != tt.want {
+				t.Errorf("Remote = %q, очікував %q", cfg.Remote, tt.want)
+			}
+		})
+	}
+}
+
+func TestSaveConfigRoundTrip(t *testing.T) {
+	s := openTemp(t)
+	if err := s.SaveConfig(&Config{Player: "mpv", Autoplay: "garbage", Remote: "open", FavoriteStudio: " AniUA "}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := s.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Player != "mpv" || cfg.Autoplay != "always" || cfg.Remote != "open" || cfg.FavoriteStudio != "AniUA" {
+		t.Fatalf("після SaveConfig: %+v", cfg)
+	}
+	if _, err := os.Stat(filepath.Join(s.dir, "config.json.tmp")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("тимчасовий файл лишився: %v", err)
+	}
+	def := DefaultConfig()
+	if def.Player != "vlc" || def.Autoplay != "always" || def.Remote != "on" || def.PreferKind != "dub" {
+		t.Fatalf("DefaultConfig = %+v", def)
+	}
+}
+
+// Студія з чужого config.json потрапляє в термінал: керуючі послідовності не
+// мають пережити завантаження.
+func TestLoadConfigCleansFavoriteStudio(t *testing.T) {
+	s := openTemp(t)
+	raw := `{"favorite_studio":"Ani\u001b]8;;http://evil.invalid\u0007UA\u001b[31m\u202e"}`
+	if err := os.WriteFile(s.configPath(), []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := s.LoadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(cfg.FavoriteStudio, "\x1b\x07\u202e") || strings.Contains(cfg.FavoriteStudio, "evil") {
+		t.Fatalf("FavoriteStudio = %q, керуючі послідовності вціліли", cfg.FavoriteStudio)
+	}
+}
+
+func TestLoadRemoteIdentityMissing(t *testing.T) {
+	s := openTemp(t)
+	id, err := s.LoadRemoteIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Port != 0 {
+		t.Errorf("Port = %d, очікував 0", id.Port)
+	}
+	if !isRemoteToken(id.Token) {
+		t.Errorf("Token = %q, очікував 32 символи lowercase hex", id.Token)
+	}
+	// Порт ще має обрати мережевий шар, тому саме читання не закріплює identity.
+	if _, err := os.Stat(s.remotePath()); !os.IsNotExist(err) {
+		t.Fatalf("LoadRemoteIdentity створив файл: %v", err)
+	}
+}
+
+func TestSaveRemoteIdentityRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("права POSIX")
+	}
+	s := openTemp(t)
+	want := RemoteIdentity{Port: 43210, Token: "0123456789abcdef0123456789abcdef"}
+	if err := s.SaveRemoteIdentity(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadRemoteIdentity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Errorf("LoadRemoteIdentity = %+v, очікував %+v", got, want)
+	}
+	info, err := os.Stat(s.remotePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("remote.json mode = %04o, очікував 0600", mode)
+	}
+}
+
+func TestLoadRemoteIdentityNormalizesInvalidFields(t *testing.T) {
+	const validToken = "0123456789abcdef0123456789abcdef"
+	tests := []struct {
+		name      string
+		stored    RemoteIdentity
+		wantPort  int
+		keepToken bool
+	}{
+		{"short token", RemoteIdentity{Port: 43210, Token: "abc"}, 43210, false},
+		{"privileged port", RemoteIdentity{Port: 80, Token: validToken}, 0, true},
+		{"uppercase token", RemoteIdentity{Port: 43210, Token: "0123456789ABCDEF0123456789ABCDEF"}, 43210, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := openTemp(t)
+			data, err := json.Marshal(tt.stored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(s.remotePath(), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			got, err := s.LoadRemoteIdentity()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Port != tt.wantPort {
+				t.Errorf("Port = %d, очікував %d", got.Port, tt.wantPort)
+			}
+			if !isRemoteToken(got.Token) {
+				t.Errorf("Token = %q, очікував 32 символи lowercase hex", got.Token)
+			}
+			if (got.Token == tt.stored.Token) != tt.keepToken {
+				t.Errorf("Token = %q, keepToken = %v", got.Token, tt.keepToken)
+			}
+		})
+	}
+}
+
+func TestLoadRemoteIdentityToleratesBrokenJSON(t *testing.T) {
+	s := openTemp(t)
+	if err := os.WriteFile(s.remotePath(), []byte(`{"port":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id, err := s.LoadRemoteIdentity()
+	if err != nil {
+		t.Fatalf("LoadRemoteIdentity: %v", err)
+	}
+	if id.Port != 0 || !isRemoteToken(id.Token) {
+		t.Errorf("LoadRemoteIdentity = %+v, очікував свіжу identity", id)
+	}
+}
+
+func isRemoteToken(token string) bool {
+	if len(token) != 32 || strings.ToLower(token) != token {
+		return false
+	}
+	_, err := hex.DecodeString(token)
+	return err == nil
+}
+
 func TestImportRejectsOversized(t *testing.T) {
 	s := openTemp(t)
 	// валідний JSON, лише завеликий: помилка має бути про розмір, не про розбір
@@ -252,7 +424,7 @@ func TestImportAcceptsValidBackup(t *testing.T) {
 	s := openTemp(t)
 	body := `{"library":{"titles":[{"id":"t1","name":"Фрірен","sources":[{"provider":"anitube","slug":"4465-frren"}]}],
 	           "entries":[{"title_id":"t1","state":"watching"}]},
-	          "config":{"prefer_kind":"garbage","player":"nonsense","autoplay":"ask"}}`
+	          "config":{"prefer_kind":"garbage","player":"nonsense","autoplay":"ask","remote":"ON"}}`
 
 	if err := s.Import(strings.NewReader(body)); err != nil {
 		t.Fatalf("Import: %v", err)
@@ -269,7 +441,7 @@ func TestImportAcceptsValidBackup(t *testing.T) {
 	if _, err := readJSON(s.configPath(), &onDisk); err != nil {
 		t.Fatal(err)
 	}
-	if onDisk.PreferKind != "dub" || onDisk.Player != "vlc" || onDisk.Autoplay != "always" {
+	if onDisk.PreferKind != "dub" || onDisk.Player != "vlc" || onDisk.Autoplay != "always" || onDisk.Remote != "on" {
 		t.Fatalf("конфіг записано без нормалізації: %+v", onDisk)
 	}
 }

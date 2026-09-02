@@ -3,6 +3,7 @@ package player
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -13,6 +14,80 @@ import (
 	"testing"
 	"time"
 )
+
+func TestMPVSessionPlaybackControls(t *testing.T) {
+	tests := []struct {
+		name        string
+		call        func(*mpvSession) error
+		wantCommand string
+	}{
+		{
+			name:        "перемикає паузу",
+			call:        func(sess *mpvSession) error { return sess.TogglePause() },
+			wantCommand: `["cycle","pause"]`,
+		},
+		{
+			name:        "зсуває позицію",
+			call:        func(sess *mpvSession) error { return sess.Seek(10) },
+			wantCommand: `["seek",10,"relative"]`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			commands := make(chan string, 1)
+			sess, serverDone := startFakeIPC(t, func(conn net.Conn) {
+				var request struct {
+					Command   json.RawMessage `json:"command"`
+					RequestID int             `json:"request_id"`
+				}
+				if err := json.NewDecoder(conn).Decode(&request); err != nil {
+					return
+				}
+				commands <- string(request.Command)
+				_, _ = fmt.Fprintf(conn, `{"data":null,"request_id":%d,"error":"success"}`+"\n", request.RequestID)
+			})
+			defer func() {
+				sess.Close()
+				<-serverDone
+			}()
+
+			if err := tt.call(sess); err != nil {
+				t.Fatalf("керування mpv: %v", err)
+			}
+			if got := <-commands; got != tt.wantCommand {
+				t.Fatalf("command = %s, очікував %s", got, tt.wantCommand)
+			}
+		})
+	}
+}
+
+func TestMPVSessionPaused(t *testing.T) {
+	commands := make(chan string, 1)
+	sess, serverDone := startFakeIPC(t, func(conn net.Conn) {
+		var request struct {
+			Command   json.RawMessage `json:"command"`
+			RequestID int             `json:"request_id"`
+		}
+		if err := json.NewDecoder(conn).Decode(&request); err != nil {
+			return
+		}
+		commands <- string(request.Command)
+		_, _ = fmt.Fprintf(conn, `{"data":true,"request_id":%d,"error":"success"}`+"\n", request.RequestID)
+	})
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	paused, err := sess.Paused()
+	if err != nil || !paused {
+		t.Fatalf("Paused = (%v, %v), очікував (true, nil)", paused, err)
+	}
+	if got := <-commands; got != `["get_property","pause"]` {
+		t.Fatalf("command = %s, очікував get_property pause", got)
+	}
+}
 
 func TestMPVSessionReadsEOFEventImmediately(t *testing.T) {
 	sess, serverDone := startFakeIPC(t, func(conn net.Conn) {

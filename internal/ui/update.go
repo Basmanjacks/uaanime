@@ -176,7 +176,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			err = msg.err
 		}
-		if !m.quitting && err == nil && result.Reason == player.EndEOF && m.eng.Autoplay {
+		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
+		// без автоплею, «стоп» уриває ланцюжок навіть з ним
+		chain := false
+		switch {
+		case m.quitting || err != nil || result.Intent == playback.IntentStop:
+		case result.Intent == playback.IntentNext:
+			chain = true
+		case result.Reason == player.EndEOF && m.eng.Autoplay:
+			chain = true
+		}
+		if chain {
 			if next, ok := playback.NextEpisodeNumber(m.episodes, m.pendingEp); ok {
 				req := m.nextReq()
 				m.pendingEp = next

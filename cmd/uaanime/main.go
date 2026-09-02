@@ -61,9 +61,10 @@ type app struct {
 	store      *store.Store
 	lib        *library.Library
 	cfg        *store.Config
+	dataDir    string
 }
 
-func newApp() (*app, error) { return newAppWith(newTransport()) }
+func newApp(readOnly bool) (*app, error) { return newAppWith(newTransport(), readOnly) }
 
 // newTransport — шов для тестів: наскрізні сценарії підставляють фікстури
 // з інжекцією збоїв мережі. У продакшні — мережа або фікстури за env.
@@ -97,7 +98,11 @@ var (
 )
 
 // newAppWith збирає застосунок поверх заданого транспорту (nil — мережа).
-func newAppWith(rt http.RoundTripper) (*app, error) {
+// readOnly пропускає злиття журналу: команда, запущена ПІД ЧАС відтворення
+// (doctor — щоб побачити адресу пульта), інакше з'їла б журнал активної
+// сесії, а TUI зі старою бібліотекою в пам'яті перезаписав би відновлений
+// прогрес на Finish.
+func newAppWith(rt http.RoundTripper, readOnly bool) (*app, error) {
 	client := httpx.NewClient(rt)
 
 	dir, err := store.DataDir()
@@ -117,8 +122,10 @@ func newAppWith(rt http.RoundTripper) (*app, error) {
 		return nil, err
 	}
 	// вцілілий після збою журнал зливається на старті
-	if _, err := st.RecoverJournal(lib); err != nil {
-		return nil, err
+	if !readOnly {
+		if _, err := st.RecoverJournal(lib); err != nil {
+			return nil, err
+		}
 	}
 	return &app{
 		provider:   anitube.New(client),
@@ -126,6 +133,7 @@ func newAppWith(rt http.RoundTripper) (*app, error) {
 		store:      st,
 		lib:        lib,
 		cfg:        cfg,
+		dataDir:    dir,
 	}, nil
 }
 
@@ -142,12 +150,14 @@ type command struct {
 	minArgs int
 	maxArgs int
 	run     func(a *app, ctx context.Context, args []string, opt options) int
+	// readOnly — команду можна запускати під час відтворення (див. newAppWith).
+	readOnly bool
 }
 
 // Таблиця — єдине джерело правди про арність команд: раніше вона жила
 // одночасно в мапі minArgs і в повторних перевірках len(positional) у switch.
 var commands = map[string]command{
-	"doctor": {minArgs: 1, maxArgs: 1, run: func(a *app, ctx context.Context, _ []string, opt options) int {
+	"doctor": {readOnly: true, minArgs: 1, maxArgs: 1, run: func(a *app, ctx context.Context, _ []string, opt options) int {
 		return a.cmdDoctor(ctx, opt.json)
 	}},
 	"export": {minArgs: 1, maxArgs: 1, run: func(a *app, _ context.Context, _ []string, _ options) int {
@@ -216,7 +226,7 @@ func run(args []string) (code int) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	a, err := newApp()
+	a, err := newApp(cmd.readOnly)
 	if err != nil {
 		errln(err)
 		return 1
@@ -267,7 +277,7 @@ func runTUI() (code int) {
 		errln(i18n.MsgNeedTTY)
 		return 2
 	}
-	a, err := newApp()
+	a, err := newApp(false)
 	if err != nil {
 		errln(err)
 		return 1
@@ -276,7 +286,24 @@ func runTUI() (code int) {
 	// плеєр і злити журнал до виходу (див. ui.Run).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := ui.Run(ctx, a.engine()); err != nil {
+	eng := a.engine()
+	// пульт живе стільки, скільки процес: між серіями сторінка каже «нічого не грає»
+	run, err := startRemote(a.store, eng.Live, a.cfg.Remote)
+	defer func() { run.Close() }() // замикання: після перезапуску run уже інший
+	opts := ui.Options{
+		Cfg:          a.cfg,
+		DataDir:      a.dataDir,
+		Remote:       run.info(err),
+		DetectPlayer: detectPlayer,
+		// Гарячий перезапуск з екрана налаштувань: нова адреса видна одразу.
+		RestartRemote: func(mode string) ui.RemoteInfo {
+			run.Close()
+			var err error
+			run, err = startRemote(a.store, eng.Live, mode)
+			return run.info(err)
+		},
+	}
+	if err := ui.Run(ctx, eng, opts); err != nil {
 		errln(err)
 		return 1
 	}
@@ -288,6 +315,7 @@ type doctorReport struct {
 	Players   []doctorPlayer       `json:"players"`
 	DataDir   string               `json:"data_dir"`
 	Providers []doctorProviderInfo `json:"providers"`
+	Remote    doctorRemote         `json:"remote"`
 }
 
 type doctorPlayer struct {
@@ -314,6 +342,7 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 		})
 	}
 	rep.DataDir, _ = store.DataDir()
+	rep.Remote = a.doctorRemoteReport()
 
 	health := a.store.LoadHealth()
 	info := doctorProviderInfo{ID: a.provider.ID(), Name: a.provider.Name()}
@@ -349,6 +378,7 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 		outln(playerInstallHint())
 	}
 	outf(i18n.MsgDoctorDataDir+"\n", rep.DataDir)
+	printDoctorRemote(rep.Remote)
 	for _, p := range rep.Providers {
 		if p.Alive {
 			outf(i18n.MsgDoctorProviderOK+"\n", p.Name)
@@ -491,6 +521,9 @@ func (a *app) engine() *playback.Engine {
 	eng.Player, eng.PlayerFallback, _ = detectPlayer(a.cfg.Player)
 	eng.Autoplay = a.cfg.Autoplay == "always"
 	eng.JournalInterval = journalInterval
+	// Live є завжди: без пульта воно нічого не коштує, а екран налаштувань
+	// має куди дивитися, коли пульт вмикають із «вимкнено».
+	eng.Live = &playback.Live{}
 	return eng
 }
 
@@ -522,6 +555,12 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		eng = a.engineWithoutPlayer()
 	} else {
 		eng = a.engine()
+		// Помилка не фатальна: без пульта play працює як досі, тому спершу
+		// звіт, а run (порожній або живий) закривається однаково.
+		run, err := startRemote(a.store, eng.Live, a.cfg.Remote)
+		run.reportRemoteErr(err)
+		defer run.Close()
+		run.announce()
 	}
 
 	for {
@@ -577,7 +616,14 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 			errf(i18n.MsgPlayerFailed+"\n", result.Reason)
 			return 1
 		}
-		if result.Reason != player.EndEOF || !eng.Autoplay {
+		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
+		// без автоплею, «стоп» уриває ланцюжок навіть з ним
+		switch {
+		case result.Intent == playback.IntentStop:
+			return 0
+		case result.Intent == playback.IntentNext:
+		case result.Reason == player.EndEOF && eng.Autoplay:
+		default:
 			return 0
 		}
 

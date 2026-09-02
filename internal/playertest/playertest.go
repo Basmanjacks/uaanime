@@ -1,6 +1,7 @@
 // Package playertest — керований фейк зовнішнього плеєра для наскрізних тестів
 // (cmd, ui, playback). Реальні VLC/mpv у тестах не запускаються: сесія
-// відтворює заздалегідь задані позиції й завершується вказаною причиною.
+// відтворює заздалегідь задані позиції, зберігає команди керування й
+// завершується вказаною причиною.
 package playertest
 
 import (
@@ -19,6 +20,12 @@ type Start struct {
 	MediaTitle string
 	Headers    map[string]string
 	StartSec   float64
+}
+
+// Call — одна команда керування, записана сесією для перевірки тестом.
+type Call struct {
+	Op    string
+	Delta float64
 }
 
 // Player видає сесії по черзі: кожен Start бере наступну з Sessions.
@@ -85,6 +92,8 @@ type Session struct {
 	Sampled chan struct{}
 
 	mu       sync.Mutex
+	calls    []Call
+	paused   bool
 	end      chan player.EndReason
 	posIdx   int
 	durIdx   int
@@ -92,6 +101,8 @@ type Session struct {
 	sampOnce sync.Once
 	startOne sync.Once
 }
+
+var _ player.Session = (*Session)(nil)
 
 // NewSession — сесія з ініціалізованими каналами; Reason/Positions/Durations
 // можна редагувати до Start.
@@ -154,6 +165,37 @@ func (s *Session) Duration() (float64, error) {
 	idx := min(s.durIdx, len(s.Durations)-1)
 	s.durIdx++
 	return s.Durations[idx], nil
+}
+
+func (s *Session) TogglePause() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, Call{Op: "pause"})
+	s.paused = !s.paused
+	return nil
+}
+
+func (s *Session) Paused() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.paused, nil
+}
+
+func (s *Session) Seek(deltaSec float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, Call{Op: "seek", Delta: deltaSec})
+	return nil
+}
+
+// Calls повертає копію, щоб асинхронний рушій не міг змінити зріз під час
+// перевірки тестом.
+func (s *Session) Calls() []Call {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Call, len(s.calls))
+	copy(out, s.calls)
+	return out
 }
 
 func (s *Session) End() <-chan player.EndReason { return s.end }

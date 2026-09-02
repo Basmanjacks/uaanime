@@ -123,6 +123,7 @@ func (s *Store) SaveHealth(h *Health) error {
 func (s *Store) libraryPath() string { return filepath.Join(s.dir, "library.json") }
 func (s *Store) configPath() string  { return filepath.Join(s.dir, "config.json") }
 func (s *Store) journalPath() string { return filepath.Join(s.dir, "state", "current.json") }
+func (s *Store) remotePath() string  { return filepath.Join(s.dir, "state", "remote.json") }
 
 // writeAtomic: tmp у тому самому каталозі + rename — атомарно на одній ФС.
 // Ім'я tmp унікальне (CreateTemp), інакше два одночасні записувачі писали б
@@ -202,6 +203,7 @@ type Config struct {
 	PreferKind     string   `json:"prefer_kind,omitempty"` // dub | voiceover | sub
 	Player         string   `json:"player,omitempty"`      // vlc | mpv
 	Autoplay       string   `json:"autoplay,omitempty"`    // always | never
+	Remote         string   `json:"remote,omitempty"`      // on | open | off
 	Providers      []string `json:"providers,omitempty"`
 }
 
@@ -214,10 +216,27 @@ func (s *Store) LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
+// SaveConfig пише конфіг атомарно, попередньо нормалізувавши: на диску ніколи
+// не лежить значення, якого LoadConfig не повернув би.
+func (s *Store) SaveConfig(cfg *Config) error {
+	normalizeConfig(cfg)
+	return writeAtomic(s.configPath(), cfg)
+}
+
+// DefaultConfig — конфіг з усіма дефолтами; те, що LoadConfig повертає без файла.
+func DefaultConfig() *Config {
+	cfg := &Config{}
+	normalizeConfig(cfg)
+	return cfg
+}
+
 // normalizeConfig тихо замінює невалідні значення дефолтами. Спільне для
 // читання з диска і для імпорту бекапа: чужий config.json довіри не має більше,
 // ніж свій.
 func normalizeConfig(cfg *Config) {
+	// Назва студії потрапляє в термінал (екран налаштувань), а чужий бекап
+	// довіри не має — чистимо так само, як library чистить назви й піни.
+	cfg.FavoriteStudio = provider.CleanText(cfg.FavoriteStudio)
 	// multi як налаштування безглуздий: користувач обирає, чого хоче, а не
 	// «невідомо що».
 	switch provider.Kind(cfg.PreferKind) {
@@ -233,6 +252,60 @@ func normalizeConfig(cfg *Config) {
 	if cfg.Autoplay != "always" && cfg.Autoplay != "never" {
 		cfg.Autoplay = "always"
 	}
+	// open — пульт без токена в корені; свідомий вибір, тому лише явним значенням.
+	switch cfg.Remote {
+	case "off", "open":
+	default:
+		cfg.Remote = "on"
+	}
+}
+
+// RemoteIdentity — постійні порт і токен веб-пульта: закладка на телефоні має
+// пережити перезапуск, тому обидва значення генеруються один раз.
+type RemoteIdentity struct {
+	Port  int    `json:"port"`
+	Token string `json:"token"`
+}
+
+func (s *Store) LoadRemoteIdentity() (RemoteIdentity, error) {
+	var id RemoteIdentity
+	found, err := readJSON(s.remotePath(), &id)
+	if err != nil {
+		var syntaxErr *json.SyntaxError
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &syntaxErr) && !errors.As(err, &typeErr) {
+			return RemoteIdentity{}, err
+		}
+		found = false
+	}
+	if !found {
+		return RemoteIdentity{Token: newRemoteToken()}, nil
+	}
+	if !validRemoteToken(id.Token) {
+		id.Token = newRemoteToken()
+	}
+	if id.Port != 0 && (id.Port < 1024 || id.Port > 65535) {
+		id.Port = 0
+	}
+	return id, nil
+}
+
+func (s *Store) SaveRemoteIdentity(id RemoteIdentity) error {
+	return writeAtomic(s.remotePath(), id)
+}
+
+func newRemoteToken() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
+}
+
+func validRemoteToken(token string) bool {
+	if len(token) != 32 || token != strings.ToLower(token) {
+		return false
+	}
+	_, err := hex.DecodeString(token)
+	return err == nil
 }
 
 // Journal — крихітний файл-журнал поточного перегляду (~200 байт).

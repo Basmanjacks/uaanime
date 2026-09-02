@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -110,7 +111,10 @@ type fakeSession struct {
 	durations []float64
 	posIndex  int
 	durIndex  int
+	paused    bool
 }
+
+var _ player.Session = (*fakeSession)(nil)
 
 func newFakeSession(reason player.EndReason, positions, durations []float64) *fakeSession {
 	end := make(chan player.EndReason, 1)
@@ -135,6 +139,14 @@ func (s *fakeSession) Duration() (float64, error) {
 	s.durIndex++
 	return s.durations[index], nil
 }
+
+func (s *fakeSession) TogglePause() error {
+	s.paused = !s.paused
+	return nil
+}
+
+func (s *fakeSession) Paused() (bool, error) { return s.paused, nil }
+func (s *fakeSession) Seek(float64) error    { return nil }
 
 func (s *fakeSession) End() <-chan player.EndReason { return s.end }
 func (s *fakeSession) Wait() error                  { return nil }
@@ -802,6 +814,9 @@ func TestResolveWithHintsMatchesResolve(t *testing.T) {
 	if want.StartSec != 120 || want.MediaTitle != "Local Name · 1" || want.Source.Studio != "Y" {
 		t.Fatalf("hints not applied: %+v", want)
 	}
+	if want.Name != "Local Name" {
+		t.Fatalf("Name = %q, очікував назву без номера серії", want.Name)
+	}
 }
 
 func TestBeginWithoutPlayerLeavesLibraryUntouched(t *testing.T) {
@@ -948,9 +963,12 @@ func TestResolveAllClassifiesUnsupportedHostAsNoStream(t *testing.T) {
 type constantSession struct {
 	mu       sync.Mutex
 	calls    int
+	paused   bool
 	end      chan player.EndReason
 	onSample func(n int)
 }
+
+var _ player.Session = (*constantSession)(nil)
 
 func (s *constantSession) TimePos() (float64, error) {
 	s.mu.Lock()
@@ -963,7 +981,19 @@ func (s *constantSession) TimePos() (float64, error) {
 	return 42, nil
 }
 
-func (s *constantSession) Duration() (float64, error)   { return 1200, nil }
+func (s *constantSession) Duration() (float64, error) { return 1200, nil }
+func (s *constantSession) TogglePause() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.paused = !s.paused
+	return nil
+}
+func (s *constantSession) Paused() (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.paused, nil
+}
+func (s *constantSession) Seek(float64) error           { return nil }
 func (s *constantSession) End() <-chan player.EndReason { return s.end }
 func (s *constantSession) Wait() error                  { return nil }
 func (s *constantSession) Close()                       {}
@@ -1001,5 +1031,67 @@ func TestRunSkipsJournalWhenPositionUnchanged(t *testing.T) {
 	}
 	if _, err := os.Stat(journalPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("журнал перезаписано при незмінній позиції (Stat = %v)", err)
+	}
+}
+
+func TestKnownStudios(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := provider.TitleRef{Provider: "stub", Slug: "a"}
+	lib := &library.Library{
+		Titles: []*library.LocalTitle{
+			{ID: "t1", Name: "A", Sources: []provider.TitleRef{ref}},
+			{ID: "t2", Name: "B"}, // без джерел — пропускається
+		},
+		Entries: []*library.Entry{
+			{TitleID: "t1", StudioPin: "Zeta"},
+			{TitleID: "t2", StudioPin: ""},
+		},
+	}
+	if err := st.SaveEpisodes(ref, []provider.Episode{
+		{Number: 1, Releases: []provider.Release{{Studio: "Alpha", Kind: provider.KindDub}, {Studio: "Zeta"}}},
+		{Number: 2, Releases: []provider.Release{{Studio: "", Kind: provider.KindSub}, {Studio: "Beta"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e := &Engine{Store: st, Lib: lib}
+	got := e.KnownStudios()
+	want := []string{"Alpha", "Beta", "Zeta"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("KnownStudios = %v, want %v", got, want)
+	}
+	if got := (&Engine{Lib: &library.Library{}}).KnownStudios(); len(got) != 0 {
+		t.Fatalf("порожня бібліотека: %v", got)
+	}
+}
+
+// ResolveWith читає Prefs зі знімка в Hints, тому зміна Engine.Prefs під час
+// резолву (екран налаштувань) не гониться з фоновою командою.
+func TestResolveWithUsesPrefsSnapshot(t *testing.T) {
+	sources := []provider.Source{
+		{Studio: "Dub", Kind: provider.KindDub, Embed: "https://handled.invalid/dub"},
+		{Studio: "Sub", Kind: provider.KindSub, Embed: "https://handled.invalid/sub"},
+	}
+	engine := testEngine(sources, []extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://stream.invalid/v.m3u8"}}}})
+	engine.Prefs = library.Prefs{PreferKind: provider.KindSub}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title"}
+	h := engine.ResolveHints(ref, 1)
+	if h.Prefs.PreferKind != provider.KindSub {
+		t.Fatalf("Hints.Prefs = %+v", h.Prefs)
+	}
+	done := make(chan *Resolved, 1)
+	go func() {
+		res, err := engine.ResolveWith(t.Context(), ref, 1, h, nil)
+		if err != nil {
+			t.Error(err)
+		}
+		done <- res
+	}()
+	engine.Prefs = library.Prefs{PreferKind: provider.KindDub}
+	res := <-done
+	if res == nil || res.Source.Kind != provider.KindSub {
+		t.Fatalf("резолв мав узяти знімок sub, отримав %+v", res)
 	}
 }

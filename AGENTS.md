@@ -59,6 +59,7 @@ internal/player/      зовнішні плеєри: VLC (RC/TCP) і mpv (JSON I
 internal/store/       library.json, config.json, progress journal, metadata cache, atomic writes
 internal/library/     domain logic: progress, completion, studio preference resolution
 internal/ui/          bubbletea models and views
+internal/remote/      web remote for the phone: OUR OWN embedded page, not scraping
 internal/i18n/        all user-facing strings
 internal/httpx/       shared HTTP client identity + fixture transport plumbing
 tools/record/         manual fixture recorder (never in CI)
@@ -71,6 +72,7 @@ docs/               product spec, architecture notes
 
 1. **No HTML, CSS selectors, or site URLs outside `internal/provider` and `internal/extractor`.**
    If domain code needs to know which site something came from, the abstraction is wrong.
+   (`internal/remote` renders its own `html/template` page — that is serving, not parsing.)
 2. **No network in unit tests.** Fixtures only. A test that fails when a site is down is a broken test.
 3. **No panic reaches the user.** Recover at the root; restore the terminal via `defer` on every exit path.
    A terminal left in raw mode after a crash is a P0 bug.
@@ -103,6 +105,9 @@ Check the v2 upgrade guide before writing UI code.
   No panes, tabs, split layouts, mouse, custom scrollbars, or animations. The only sanctioned ASCII art is
   the home-screen brand banner in `internal/ui/brand.go`, with a mandatory one-line fallback on small terminals.
 - Nerd Font icons are optional and must degrade to plain text.
+- Settings are edited on the settings screen (`internal/ui/screen_settings.go`), never by hand-holding the
+  user into `config.json`. Engine fields that background commands read (`Prefs`) are snapshotted into
+  `playback.Hints`; the settings screen opens only when nothing is pending or playing (see rule 10).
 - The list delegate is custom (`internal/ui/delegate.go`): fixed row height, fixed-width icon column.
   Do not switch back to `list.NewDefaultDelegate()` — it is hardcoded dark and pink.
 - Always call `DisableQuitKeybindings()` on a new list: bubbles v2.2.1 binds list Quit to the key `v`
@@ -130,5 +135,5 @@ Short version: record a fresh fixture, fix the parser against it, keep the old f
 
 - Don't add features from `docs/future.md` unless asked.
 - Don't turn this into a library manager, downloader, or tracker sync client.
-- Don't add settings. The target is ≤ 8. Adding one means removing one.
+- Don't add settings. The cap is 8 (`docs/build-brief.md`); adding a ninth means removing one.
 - Don't write architecture documents instead of code.

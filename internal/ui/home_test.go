@@ -188,7 +188,7 @@ func TestHomeRendersOfflineFast(t *testing.T) {
 
 	// DoD брифу: холодний старт — перший кадр без мережі за < 100 мс.
 	start := time.Now()
-	cold := New(m.eng)
+	cold := New(m.eng, Options{})
 	cold.w, cold.h = 80, 24
 	_ = cold.View()
 	if d := time.Since(start); d > 100*time.Millisecond {

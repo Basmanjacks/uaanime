@@ -14,7 +14,9 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/playback"
+	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
 type screen int
@@ -26,7 +28,35 @@ const (
 	screenStudio
 	screenPlaying
 	screenHistory
+	screenSettings
+	screenSettingValue
 )
+
+// RemoteInfo — стан веб-пульта після (пере)запуску. Err — фатально: пульт не
+// піднявся, URL порожній. Warn — пульт працює, але remote.json не записався:
+// адреса може змінитися після перезапуску.
+type RemoteInfo struct {
+	URL       string
+	AltURL    string
+	Ephemeral bool // збережений порт був зайнятий — закладка цього разу не спрацює
+	SavedPort int
+	Err       error
+	Warn      error
+}
+
+// Options — те, що TUI отримує від cmd і не може дістати сам: конфіг, стан
+// пульта і два хуки, які живуть по той бік пакетної межі (детекція плеєра —
+// шов для тестів cmd; перезапуск пульта — слухач і remote.json).
+type Options struct {
+	Cfg     *store.Config // nil → store.DefaultConfig() (тести)
+	DataDir string        // каталог даних для екрана «Про»; "" → store.DataDir()
+	Remote  RemoteInfo
+	// RestartRemote перезапускає пульт під новий режим ("on"|"open"|"off").
+	// nil = пульт недоступний (тести) — зберігається лише конфіг.
+	RestartRemote func(mode string) RemoteInfo
+	// DetectPlayer — player.Detect за швом cmd; nil → без перевірки наявності.
+	DetectPlayer func(id string) (player.Player, bool, error)
+}
 
 // view — стан екрана, який переживає перехід і повертається разом із кадром
 // стека. Одна структура замість десятка полів, продубльованих у frame: додати
@@ -44,6 +74,10 @@ type view struct {
 	cards   []provider.TitleCard
 	page    int
 	hasMore bool
+
+	// settingID — яке налаштування відкрито на екрані значень; у view, щоб
+	// заголовок пережив кадр стека.
+	settingID settingID
 }
 
 // clone — копія, яку не зачепить наступний пошук: слайси в моделі
@@ -84,6 +118,11 @@ type Model struct {
 	playPinned      string
 	quitting        bool
 	pendingBaseline *bookmarkBaselineMsg
+	// Налаштування та пульт: cfg — той самий покажчик, що в cmd; remote —
+	// поточна адреса для екрана «Грає» та «Налаштування» ("" = вимкнено).
+	cfg    *store.Config
+	remote RemoteInfo
+	opts   Options
 }
 
 // catalogKinds — порядок блоків каталогу на домівці, він же порядок запитів.
@@ -98,7 +137,13 @@ const (
 	badgeWorkers   = 4
 )
 
-func New(eng *playback.Engine) Model {
+func New(eng *playback.Engine, opts Options) Model {
+	if opts.Cfg == nil {
+		opts.Cfg = store.DefaultConfig()
+	}
+	if opts.DataDir == "" {
+		opts.DataDir, _ = store.DataDir()
+	}
 	ic := themeIcons(os.Getenv("UAANIME_ASCII") == "1")
 	l := list.New(nil, rowDelegate{ic: ic}, 0, 0)
 	l.Styles = listStyles()
@@ -126,6 +171,9 @@ func New(eng *playback.Engine) Model {
 		ic:      ic,
 		catalog: map[provider.CatalogKind][]provider.TitleCard{},
 		badges:  map[string]int{},
+		cfg:     opts.Cfg,
+		remote:  opts.Remote,
+		opts:    opts,
 	}
 	m.loadCachedCatalog()
 	m.showHome()
@@ -160,8 +208,9 @@ func (m *Model) catalogEnabled() bool {
 // (tea.go:662-684) на SIGTERM кладе QuitMsg у чергу і завершує цикл ДО
 // playDoneMsg, тобто до Finish — журнал не злився б, а плеєр лишився б сиротою.
 // Сигнали ловить ctx викликача і заходять у модель як signalMsg.
-func Run(ctx context.Context, eng *playback.Engine) error {
-	p := tea.NewProgram(New(eng), tea.WithoutSignalHandler())
+func Run(ctx context.Context, eng *playback.Engine, opts Options) error {
+	m := New(eng, opts)
+	p := tea.NewProgram(m, tea.WithoutSignalHandler())
 	done := make(chan struct{})
 	go func() {
 		select {

@@ -96,7 +96,7 @@ func journeyEnv(t *testing.T, sessions ...*playertest.Session) (dir string, ft *
 // journeyEngine — рушій так, як його збирає застосунок, але з фейковим плеєром.
 func journeyEngine(t *testing.T, ft *faultTransport, fp *playertest.Player) *playback.Engine {
 	t.Helper()
-	a, err := newAppWith(ft)
+	a, err := newAppWith(ft, false)
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestJourneyJournalSurvivesCrash(t *testing.T) {
 	}
 
 	// новий запуск застосунку
-	a, err := newAppWith(ft)
+	a, err := newAppWith(ft, false)
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}

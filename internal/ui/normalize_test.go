@@ -60,7 +60,7 @@ func TestViewSurvivesDirtyLibrary(t *testing.T) {
 		t.Fatalf("titles = %+v, очікував лише валідний тайтл", lib.Titles)
 	}
 
-	m := New(&playback.Engine{Store: st, Lib: lib, Provider: providertest.Stub{}})
+	m := New(&playback.Engine{Store: st, Lib: lib, Provider: providertest.Stub{}}, Options{})
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	// СИРИЙ View: ansi.Strip прибрав би і шкідливу послідовність — хибний успіх.
