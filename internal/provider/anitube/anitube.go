@@ -9,12 +9,13 @@
 //     (сезонний топ у div.box з h2 «Найкраще», новинки — у div.news_2);
 //   - сторінка тайтлу містить JS-змінну dle_login_hash; id новини — це числовий
 //     префікс слага (JS-змінна news_id є не всюди, data-news_id — fallback);
-//   - плейлисти: GET /engine/ajax/playlists.php?news_id=N&xfield=playlist&user_hash=H →
+//   - плейлисти (перевірено 2026-09-01): GET /engine/ajax/playlists.php?news_id=N&xfield=playlist&user_hash=H →
 //     JSON {success, response}, response — HTML зі <li>: навігаційні (лише data-id)
 //     і серії (data-file + data-id);
-//   - ієрархія data-id НЕ фіксована: буває тип→студія→плеєр (Фрірен) і
-//     студія→тип→плеєр (Судзуме). Рівень типу визначається за мітками
-//     ДУБЛЯЖ/ОЗВУЧЕННЯ/СУБТИТРИ, решта рівнів — студія і плеєр;
+//   - ієрархія data-id НЕ фіксована: буває тип→студія→плеєр (Фрірен),
+//     студія→тип→плеєр (Судзуме) і плоска плеєр→серії без рівнів студії/типу
+//     (OVA «Атаки титанів»). Рівень типу визначається за мітками
+//     ДУБЛЯЖ/ОЗВУЧЕННЯ/СУБТИТРИ, а студія плоского плейлиста — з поля «Переклад»;
 //   - підписи плеєрів («ПЛЕЄР ASHDI», «ПЛЄЕР MOON») містять одруківки — хост
 //     визначається з домену data-file, не з підпису;
 //   - фільми підписані «Фільм» без номера серії — трактуємо як серію 1.
@@ -25,7 +26,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -59,20 +59,57 @@ func New(httpClient *http.Client) *Client {
 func (c *Client) ID() string   { return providerID }
 func (c *Client) Name() string { return providerName }
 func (c *Client) Caps() provider.Caps {
-	return provider.Caps{Search: true, Catalog: true, Subtitles: true}
+	return provider.Caps{Search: true, Catalog: true}
 }
 
+// titleURL — єдине місце, де народжується URL сторінки тайтлу. Він завжди
+// будується зі слага і ніколи не береться з розмітки сайту чи з диска.
+func titleURL(slug string) string { return baseURL + "/" + slug + ".html" }
+
 // RefFromSlug відновлює TitleRef з самого слага (для headless-команд,
-// де користувач передає title-id без повного URL).
-func RefFromSlug(slug string) provider.TitleRef {
+// де користувач передає title-id без повного URL). Слаг — недовірений вхід,
+// тому валідується тим самим шаблоном, що й слаг зі сторінки.
+func RefFromSlug(slug string) (provider.TitleRef, error) {
+	if !provider.ValidSlug(slug) {
+		return provider.TitleRef{}, fmt.Errorf("невалідний title-id %q: %w", slug, errs.ErrProvider)
+	}
 	return provider.TitleRef{
 		Provider: providerID,
 		Slug:     slug,
-		URL:      baseURL + "/" + slug + ".html",
-	}
+		URL:      titleURL(slug),
+	}, nil
 }
 
-var reSlug = regexp.MustCompile(`/(\d+-[^/]+)\.html`)
+// reSlug звужений до реального формату DLE (id-слово): широкий `[^/]+` пропускав
+// у слаг будь-що, включно з traversal-послідовностями і не-ascii.
+var reSlug = regexp.MustCompile(`/(\d+-[A-Za-z0-9_-]+)\.html`)
+
+// searchRequest будує POST-форму пошуку. Її ж використовує запис фікстур —
+// форма мусить бути однією, інакше фікстура перестає відповідати реальному запиту.
+func searchRequest(ctx context.Context, story string, searchStart, resultFrom int) (*http.Request, error) {
+	form := url.Values{
+		"do":           {"search"},
+		"subaction":    {"search"},
+		"search_start": {strconv.Itoa(searchStart)},
+		"full_search":  {"0"},
+		"result_from":  {strconv.Itoa(resultFrom)},
+		"story":        {story},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		baseURL+"/index.php?do=search", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("пошук: створення запиту: %w: %w", errs.ErrProvider, err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	setCommonHeaders(req, baseURL+"/")
+	return req, nil
+}
+
+// playlistsURL — AJAX-ендпоінт зі списком плейлистів тайтлу (спільний із записом фікстур).
+func playlistsURL(newsID, loginHash string) string {
+	return fmt.Sprintf("%s/engine/ajax/playlists.php?news_id=%s&xfield=playlist&user_hash=%s",
+		baseURL, newsID, loginHash)
+}
 
 func (c *Client) Search(ctx context.Context, q string, page int) (provider.Page, error) {
 	searchStart := 0
@@ -81,22 +118,11 @@ func (c *Client) Search(ctx context.Context, q string, page int) (provider.Page,
 		searchStart = page
 		resultFrom = (page-1)*searchPerPage + 1
 	}
-	form := url.Values{
-		"do":           {"search"},
-		"subaction":    {"search"},
-		"search_start": {strconv.Itoa(searchStart)},
-		"full_search":  {"0"},
-		"result_from":  {strconv.Itoa(resultFrom)},
-		"story":        {q},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		baseURL+"/index.php?do=search", strings.NewReader(form.Encode()))
+	req, err := searchRequest(ctx, q, searchStart, resultFrom)
 	if err != nil {
-		return provider.Page{}, fmt.Errorf("пошук: створення запиту: %w: %w", errs.ErrProvider, err)
+		return provider.Page{}, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	setCommonHeaders(req, baseURL+"/")
-	body, err := c.do(req)
+	body, err := httpx.Do(c.http, req)
 	if err != nil {
 		return provider.Page{}, fmt.Errorf("пошук: %w", err)
 	}
@@ -137,15 +163,19 @@ func (c *Client) Catalog(ctx context.Context, kind provider.CatalogKind) ([]prov
 
 // Блоки головної не несуть ні року, ні рейтингу — лише назву й посилання.
 // Решта полів TitleCard свідомо лишається нульовою: вигадувати метадані нема з чого.
+//
+// З href береться ЛИШЕ слаг, а URL будується наново: ворожа сторінка могла б
+// підсунути href на http://127.0.0.1/… — і застосунок сам сходив би туди
+// (allSources) та зберіг би це в library.json.
 func cardFromAnchor(link *goquery.Selection) (provider.TitleCard, bool) {
 	href, _ := link.Attr("href")
 	m := reSlug.FindStringSubmatch(href)
-	name := strings.TrimSpace(link.Text())
+	name := provider.CleanText(link.Text())
 	if m == nil || name == "" {
 		return provider.TitleCard{}, false
 	}
 	return provider.TitleCard{TitleRef: provider.TitleRef{
-		Provider: providerID, Slug: m[1], Name: name, URL: href,
+		Provider: providerID, Slug: m[1], Name: name, URL: titleURL(m[1]),
 	}}, true
 }
 
@@ -211,23 +241,16 @@ var (
 // article.story з обов'язковим h2[itemprop="name"] a[href]; метадані лежать у
 // сусідніх story_infa, story_c_rate, dubsub і story_link усередині тієї ж картки.
 func parseCards(body []byte) ([]provider.TitleCard, error) {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("пошук: розбір HTML: %w: %w", errs.ErrProvider, err)
 	}
 	var cards []provider.TitleCard
 	doc.Find(`article.story`).Each(func(_ int, article *goquery.Selection) {
-		link := article.Find(`h2[itemprop="name"] a[href]`).First()
-		href, _ := link.Attr("href")
-		m := reSlug.FindStringSubmatch(href)
-		name := strings.TrimSpace(link.Text())
-		if m == nil || name == "" {
+		card, ok := cardFromAnchor(article.Find(`h2[itemprop="name"] a[href]`).First())
+		if !ok {
 			return
 		}
-
-		card := provider.TitleCard{TitleRef: provider.TitleRef{
-			Provider: providerID, Slug: m[1], Name: name, URL: href,
-		}}
 		info := article.Find(`div.story_infa`).First()
 		card.Year, _ = strconv.Atoi(fieldAfterLabel(info, "Рік виходу аніме:"))
 		card.Episodes, card.EpAired, card.EpTotal = parseEpisodes(fieldAfterLabel(info, "Серій:"))
@@ -252,12 +275,16 @@ func parseCards(body []byte) ([]provider.TitleCard, error) {
 func fieldAfterLabel(info *goquery.Selection, label string) string {
 	var value string
 	info.Find("dt").EachWithBreak(func(_ int, dt *goquery.Selection) bool {
-		if strings.TrimSpace(dt.Text()) != label || len(dt.Nodes) == 0 {
+		if provider.CleanText(dt.Text()) != label || len(dt.Nodes) == 0 {
 			return true
 		}
+		// empty — порожня вибірка того ж документа: AddNodes на ній дає текст
+		// одного вузла без NewDocumentFromNode, який будував цілий документ
+		// на КОЖНОГО сусіда (а їх у картці десятки).
+		empty := dt.Slice(0, 0)
 		var parts []string
 		for node := dt.Nodes[0].NextSibling; node != nil && node.Data != "hr" && node.Data != "dt"; node = node.NextSibling {
-			text := strings.TrimSpace(goquery.NewDocumentFromNode(node).Text())
+			text := provider.CleanText(empty.AddNodes(node).Text())
 			if text != "" {
 				parts = append(parts, text)
 			}
@@ -284,7 +311,7 @@ func parseEpisodes(text string) (string, int, int) {
 func splitTrimmed(text string) []string {
 	var values []string
 	for _, value := range strings.Split(text, ",") {
-		if value = strings.TrimSpace(value); value != "" {
+		if value = provider.CleanText(value); value != "" {
 			values = append(values, value)
 		}
 	}
@@ -295,7 +322,7 @@ func parseStudios(text string) []string {
 	seen := make(map[string]bool)
 	var studios []string
 	for _, match := range reStudio.FindAllStringSubmatch(text, -1) {
-		studio := strings.TrimSpace(match[1])
+		studio := provider.CleanText(match[1])
 		if studio != "" && !seen[studio] {
 			seen[studio] = true
 			studios = append(studios, studio)
@@ -371,20 +398,30 @@ func newsID(slug string, page []byte) (string, bool) {
 	return "", false
 }
 
+// allSources свідомо ігнорує ref.URL: він приходить із library.json або з кешу,
+// тобто з диска, і може бути порожнім чи вказувати на чужий хост. Єдине надійне
+// поле ідентичності — слаг, тому адреса будується з нього.
 func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provider.Source, error) {
-	page, err := c.get(ctx, ref.URL, ref.URL)
+	if !provider.ValidSlug(ref.Slug) {
+		return nil, fmt.Errorf("невалідний слаг %q: %w", ref.Slug, errs.ErrProvider)
+	}
+	pageURL := titleURL(ref.Slug)
+	page, err := c.get(ctx, pageURL, pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("сторінка тайтлу: %w", err)
 	}
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(page))
+	if err != nil {
+		return nil, fmt.Errorf("сторінка тайтлу: розбір HTML: %w: %w", errs.ErrProvider, err)
+	}
+	fallbackStudio := provider.CleanText(doc.Find(`a[href*="/xfsearch/translation/"]`).First().Text())
 	hashMatch := reLoginHash.FindSubmatch(page)
 	id, okID := newsID(ref.Slug, page)
 	if hashMatch == nil || !okID {
-		return nil, fmt.Errorf("сторінка тайтлу %s: не знайдено dle_login_hash/news_id (сайт змінив розмітку?): %w", ref.URL, errs.ErrProvider)
+		return nil, fmt.Errorf("сторінка тайтлу %s: не знайдено dle_login_hash/news_id (сайт змінив розмітку?): %w", pageURL, errs.ErrProvider)
 	}
 
-	ajaxURL := fmt.Sprintf("%s/engine/ajax/playlists.php?news_id=%s&xfield=playlist&user_hash=%s",
-		baseURL, id, hashMatch[1])
-	body, err := c.get(ctx, ajaxURL, ref.URL)
+	body, err := c.get(ctx, playlistsURL(id, string(hashMatch[1])), pageURL)
 	if err != nil {
 		return nil, fmt.Errorf("плейлисти: %w", err)
 	}
@@ -399,22 +436,25 @@ func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provi
 	if !resp.Success {
 		return nil, fmt.Errorf("плейлисти: сайт відповів success=false: %w", errs.ErrProvider)
 	}
-	return parsePlaylists(resp.Response, ref.URL)
+	return parsePlaylists(resp.Response, pageURL, fallbackStudio)
 }
 
-func parsePlaylists(playlistHTML, titleURL string) ([]provider.Source, error) {
+func parsePlaylists(playlistHTML, titleURL, fallbackStudio string) ([]provider.Source, error) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(playlistHTML))
 	if err != nil {
 		return nil, fmt.Errorf("плейлисти: розбір HTML: %w: %w", errs.ErrProvider, err)
 	}
 
+	// Назва студії з будь-якої гілки йде просто в список вибору озвучки, тому
+	// чистяться обидва її джерела — мітки плейлиста і резервна студія зі сторінки.
+	fallbackStudio = provider.CleanText(fallbackStudio)
 	labels := map[string]string{}
 	doc.Find("li[data-id]").Each(func(_ int, s *goquery.Selection) {
 		if _, hasFile := s.Attr("data-file"); hasFile {
 			return
 		}
 		id, _ := s.Attr("data-id")
-		labels[id] = strings.TrimSpace(s.Text())
+		labels[id] = provider.CleanText(s.Text())
 	})
 
 	var sources []provider.Source
@@ -429,14 +469,34 @@ func parsePlaylists(playlistHTML, titleURL string) ([]provider.Source, error) {
 			return
 		}
 		parts := strings.Split(branch, "_")
-		if len(parts) < 3 {
+		if len(parts) < 2 {
 			return
 		}
-		l1 := labels[strings.Join(parts[:2], "_")]
-		l2 := labels[strings.Join(parts[:3], "_")]
-		studio, kind := studioAndKind(l1, l2)
+
+		var navLabels []string
+		for depth := 2; depth < len(parts); depth++ {
+			navLabels = append(navLabels, labels[strings.Join(parts[:depth], "_")])
+		}
+
+		studio := ""
+		kind := provider.KindMulti
+		switch len(navLabels) {
+		case 0:
+			studio = fallbackStudio
+		case 1:
+			if labelKind, isType := kindFromLabel(navLabels[0]); isType {
+				studio, kind = fallbackStudio, labelKind
+			} else {
+				studio = navLabels[0]
+			}
+		default:
+			studio, kind = studioAndKind(navLabels[0], navLabels[1])
+		}
 		if studio == "" {
-			return // гілка поза відомою структурою — пропускаємо, не панікуємо
+			studio = labels[branch]
+		}
+		if studio == "" {
+			return
 		}
 		sources = append(sources, provider.Source{
 			Studio:  studio,
@@ -512,27 +572,5 @@ func (c *Client) get(ctx context.Context, rawURL, referer string) ([]byte, error
 		return nil, fmt.Errorf("створення запиту %s: %w: %w", rawURL, errs.ErrProvider, err)
 	}
 	setCommonHeaders(req, referer)
-	return c.do(req)
-}
-
-func (c *Client) do(req *http.Request) ([]byte, error) {
-	res, err := c.http.Do(req)
-	if err != nil {
-		if errs.Offline(err) {
-			return nil, fmt.Errorf("%s: %w: %w", req.URL, errs.ErrOffline, err)
-		}
-		return nil, fmt.Errorf("%s: %w: %w", req.URL, errs.ErrProvider, err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d: %w", req.URL, res.StatusCode, errs.ErrProvider)
-	}
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		if errs.Offline(err) {
-			return nil, fmt.Errorf("%s: читання відповіді: %w: %w", req.URL, errs.ErrOffline, err)
-		}
-		return nil, fmt.Errorf("%s: читання відповіді: %w: %w", req.URL, errs.ErrProvider, err)
-	}
-	return body, nil
+	return httpx.Do(c.http, req)
 }

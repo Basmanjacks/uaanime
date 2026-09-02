@@ -58,6 +58,84 @@ type Library struct {
 	Progress []*Progress   `json:"progress"`
 }
 
+// Normalize приводить прочитану з диска бібліотеку до інваріантів, на які
+// решта коду покладається без перевірок: TUI бере `t.Sources[0]` у шести
+// місцях, а назви й піни йдуть у термінал як є. JSON `null` у масиві дає
+// nil-елемент, тож структурні дірки чистяться тут же.
+//
+// clean передається ззовні, щоб домен не залежав від конкретного санітайзера
+// (виклик передає provider.CleanText). Повертає кількість ВИДАЛЕНИХ записів —
+// почищені рядки не рахуються: store.Import за цим числом відхиляє бекап цілком.
+func (l *Library) Normalize(clean func(string) string) (dropped int) {
+	known := make(map[string]bool, len(l.Titles))
+	titles := l.Titles[:0]
+	for _, t := range l.Titles {
+		if t == nil {
+			dropped++
+			continue
+		}
+		t.Name = clean(t.Name)
+		sources := t.Sources[:0]
+		for _, s := range t.Sources {
+			s.Name = clean(s.Name)
+			// Збережений URL недовірений (міг прийти зі старого href або з
+			// чужого бекапа); коректний уміє побудувати лише провайдер зі слага.
+			s.URL = ""
+			if !provider.ValidSlug(s.Slug) || s.Provider == "" {
+				dropped++
+				continue
+			}
+			sources = append(sources, s)
+		}
+		t.Sources = sources
+		if t.ID == "" || len(t.Sources) == 0 {
+			dropped++
+			continue
+		}
+		known[t.ID] = true
+		titles = append(titles, t)
+	}
+	l.Titles = titles
+
+	seen := make(map[string]bool, len(l.Entries))
+	entries := l.Entries[:0]
+	for _, e := range l.Entries {
+		if e == nil {
+			dropped++
+			continue
+		}
+		e.StudioPin = clean(e.StudioPin)
+		// Порожній KindPin означає «пін не стоїть» — саме це й потрібно,
+		// коли на диску опинилося щось невідоме: гадати тип заборонено.
+		if e.KindPin != "" && !provider.ValidKind(e.KindPin) {
+			e.KindPin = ""
+		}
+		switch e.State {
+		case StateWatching, StatePlanned, StateCompleted, "":
+		default:
+			e.State = ""
+		}
+		if !known[e.TitleID] || seen[e.TitleID] {
+			dropped++
+			continue
+		}
+		seen[e.TitleID] = true
+		entries = append(entries, e)
+	}
+	l.Entries = entries
+
+	progress := l.Progress[:0]
+	for _, p := range l.Progress {
+		if p == nil || !known[p.TitleID] {
+			dropped++
+			continue
+		}
+		progress = append(progress, p)
+	}
+	l.Progress = progress
+	return dropped
+}
+
 // TitleByRef знаходить локальний тайтл, що має вказане джерело.
 func (l *Library) TitleByRef(ref provider.TitleRef) *LocalTitle {
 	for _, t := range l.Titles {

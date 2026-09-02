@@ -6,15 +6,10 @@
 package ashdi
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
@@ -34,42 +29,28 @@ func New(httpClient *http.Client) *Extractor {
 func (e *Extractor) ID() string { return "ashdi" }
 
 func (e *Extractor) Handles(embed string) bool {
-	return strings.Contains(embed, host+"/")
+	return extractor.HostIs(embed, host)
 }
 
 var reFile = regexp.MustCompile(`file:\s*'(https?://[^']+\.m3u8[^']*)'`)
 
 func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extractor.Stream, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, embed, nil)
+	body, err := extractor.FetchEmbed(ctx, e.http, embed, referer, nil)
 	if err != nil {
-		return nil, fmt.Errorf("ashdi: створення запиту: %w: %w", errs.ErrProvider, err)
-	}
-	req.Header.Set("User-Agent", httpx.UserAgent)
-	req.Header.Set("Referer", referer)
-	res, err := e.http.Do(req)
-	if err != nil {
-		if errs.Offline(err) {
-			return nil, fmt.Errorf("ashdi: %w: %w", errs.ErrOffline, err)
-		}
-		return nil, fmt.Errorf("ashdi: %w: %w", errs.ErrProvider, err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ashdi: HTTP %d: %w", res.StatusCode, errs.ErrProvider)
-	}
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		if errs.Offline(err) {
-			return nil, fmt.Errorf("ashdi: читання відповіді: %w: %w", errs.ErrOffline, err)
-		}
-		return nil, fmt.Errorf("ashdi: читання відповіді: %w: %w", errs.ErrProvider, err)
+		return nil, fmt.Errorf("ashdi: %w", err)
 	}
 	m := reFile.FindSubmatch(body)
 	if m == nil {
-		return nil, fmt.Errorf("ashdi: у embed %s не знайдено file:'…m3u8' (хост змінив плеєр?): %w", embed, errs.ErrNoStream)
+		return nil, fmt.Errorf("ashdi: у embed %q не знайдено file:'…m3u8' (хост змінив плеєр?): %w", embed, errs.ErrNoStream)
+	}
+	streamURL := string(m[1])
+	// Regex пускає http:// і будь-який хост, тому URL із недовіреної сторінки
+	// проходить ту саму перевірку, що й у решти екстракторів.
+	if !extractor.ValidStreamURL(streamURL) {
+		return nil, fmt.Errorf("ashdi: підозрілий URL потоку: %w", errs.ErrNoStream)
 	}
 	return []extractor.Stream{{
-		URL:     string(m[1]),
+		URL:     streamURL,
 		Quality: 0, // master-плейлист, варіанти обирає плеєр
 		Headers: map[string]string{
 			"Referer":    "https://" + host + "/",
@@ -81,24 +62,7 @@ func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extra
 // FixtureTransport відповідає на будь-який /vod/-запит до ashdi.vip
 // канонічною фікстурою embed.html. Чужі домени пропускає.
 func FixtureTransport(dir string) http.RoundTripper {
-	return fixtureTransport{dir: dir}
-}
-
-type fixtureTransport struct{ dir string }
-
-func (t fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Host != host {
-		return nil, httpx.ErrSkip
-	}
-	b, err := os.ReadFile(filepath.Join(t.dir, "embed.html"))
-	if err != nil {
-		return nil, fmt.Errorf("фікстура embed.html: %w", err)
-	}
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Body:       io.NopCloser(bytes.NewReader(b)),
-		Header:     http.Header{},
-	}, nil
+	return extractor.FixtureTransport(host, dir)
 }
 
 // recordEmbedURL — embed канонічної фікстури (Фрірен, 1 серія, FanVoxUA).
@@ -106,23 +70,5 @@ const recordEmbedURL = "https://ashdi.vip/vod/104245"
 
 // RecordFixtures переписує embed.html з живого хоста (вручну, не в CI).
 func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, recordEmbedURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", httpx.UserAgent)
-	req.Header.Set("Referer", "https://anitube.in.ua/")
-	res, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("запис embed.html: %w", err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("запис embed.html: HTTP %d", res.StatusCode)
-	}
-	body, err := io.ReadAll(res.Body)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(dir, "embed.html"), body, 0o644)
+	return extractor.RecordEmbed(ctx, httpClient, recordEmbedURL, dir, nil)
 }

@@ -25,7 +25,7 @@ Not "another ani-cli".
 
 ```bash
 make build            # go build -o bin/uaanime ./cmd/uaanime
-make test             # go test ./... — must pass with no network
+make test             # go test -race ./... — must pass with no network
 make lint             # gofmt -l . && go vet ./... && golangci-lint run
 make run              # build + run TUI
 make record-fixtures  # refresh testdata/ from the live site (manual, never in CI)
@@ -52,6 +52,8 @@ cmd/uaanime/          entrypoint, flag parsing, headless commands
 internal/provider/    site-specific scraping — the ONLY package that knows HTML
 internal/extractor/   video host → playable stream + required headers
 internal/providertest/ shared contract tests every provider must pass
+internal/extractortest/ the same for extractors — every video host passes it
+internal/playertest/   controllable fake player + session for end-to-end tests (cmd, ui)
 internal/playback/    orchestration: preference pick → extract → player session → journal
 internal/player/      зовнішні плеєри: VLC (RC/TCP) і mpv (JSON IPC)
 internal/store/       library.json, config.json, progress journal, metadata cache, atomic writes
@@ -82,6 +84,8 @@ docs/               product spec, architecture notes
    and never execute it.
 9. **UI strings go through `internal/i18n`.** No literal Ukrainian text in `internal/ui`.
    Studio and provider names are never translated.
+10. **`library.Library` is not goroutine-safe:** Engine methods marked `sync:` in `internal/playback`
+    run only on the TUI Update goroutine or sequentially in the CLI; `tea.Cmd` closures never touch `Lib`.
 
 ---
 

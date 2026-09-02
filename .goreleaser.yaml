@@ -8,6 +8,9 @@ builds:
       - CGO_ENABLED=0
     goos: [darwin, linux]
     goarch: [amd64, arm64]
+    # -trimpath: шляхи збірки не залежать від машини (відтворюваність) і не
+    # тягнуть у бінарник абсолютні шляхи GOPATH — мінус ~33 КБ.
+    flags: [-trimpath]
     ldflags: ["-s", "-w"]
 
 archives:

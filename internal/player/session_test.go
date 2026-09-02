@@ -2,9 +2,11 @@ package player
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
@@ -55,7 +57,10 @@ func TestMPVSessionRequestReturnsWhenReaderCloses(t *testing.T) {
 
 func startFakeIPC(t *testing.T, serve func(net.Conn)) (*mpvSession, <-chan struct{}) {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "mpv.sock")
+	dir := t.TempDir()
+	sock := filepath.Join(dir, "mpv.sock")
+	// Справжня дитина: сесія без процесу не існує — жнець живе в process.
+	sess := newMPVSession(startShell(t, "sleep 30"), dir)
 	listener, err := net.Listen("unix", sock)
 	if err != nil {
 		if !errors.Is(err, syscall.EINVAL) && !errors.Is(err, syscall.EPERM) {
@@ -70,7 +75,8 @@ func startFakeIPC(t *testing.T, serve func(net.Conn)) (*mpvSession, <-chan struc
 			defer func() { _ = server.Close() }()
 			serve(server)
 		}()
-		return newMPVSession(nil, sock, client), serverDone
+		sess.attachIPC(client)
+		return sess, serverDone
 	}
 	serverDone := make(chan struct{})
 	go func() {
@@ -87,9 +93,61 @@ func startFakeIPC(t *testing.T, serve func(net.Conn)) (*mpvSession, <-chan struc
 	if err != nil {
 		_ = listener.Close()
 		<-serverDone
+		sess.Close()
 		t.Fatalf("Dial: %v", err)
 	}
-	return newMPVSession(nil, sock, conn), serverDone
+	sess.attachIPC(conn)
+	return sess, serverDone
+}
+
+// Каталог сокета має бути приватним (0700) і зникати після Close: у спільному
+// /tmp будь-який локальний користувач міг би слати mpv команди через IPC.
+func TestMPVSocketDirectoryIsPrivateAndRemoved(t *testing.T) {
+	if _, err := exec.LookPath("mpv"); err != nil {
+		t.Skip("mpv не встановлено")
+	}
+	if !unixSocketsAvailable(t) {
+		t.Skip("пісочниця забороняє Unix-сокети")
+	}
+
+	withMPVTestArgs(t)
+	sess, err := startMPV(context.Background(), "av://lavfi:testsrc2=duration=60", "тест", nil, 0)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	info, err := os.Stat(sess.dir)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("права каталогу сокета = %o, очікував 700", perm)
+	}
+	sess.Close()
+	if _, err := os.Stat(sess.dir); !os.IsNotExist(err) {
+		t.Fatalf("каталог сокета лишився після Close: %v", err)
+	}
+}
+
+// withMPVTestArgs вмикає ізольований запуск mpv (без конфігу і без виводу)
+// і повертає прапорець у попередній стан.
+func withMPVTestArgs(t *testing.T) {
+	t.Helper()
+	old := mpvTestArgs
+	mpvTestArgs = []string{"--no-config", "--vo=null", "--ao=null"}
+	t.Cleanup(func() { mpvTestArgs = old })
+}
+
+func unixSocketsAvailable(t *testing.T) bool {
+	t.Helper()
+	probe, err := net.Listen("unix", filepath.Join(t.TempDir(), "probe.sock"))
+	if err != nil {
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EPERM) {
+			return false
+		}
+		t.Fatalf("перевірка Unix-сокета: %v", err)
+	}
+	_ = probe.Close()
+	return true
 }
 
 // Інтеграційний тест з реальним mpv на синтетичному джерелі (lavfi, без мережі).
@@ -98,29 +156,25 @@ func TestSessionIPC(t *testing.T) {
 	if _, err := exec.LookPath("mpv"); err != nil {
 		t.Skip("mpv не встановлено")
 	}
-	probe, err := net.Listen("unix", filepath.Join(t.TempDir(), "probe.sock"))
-	if err != nil {
-		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.EPERM) {
-			t.Skip("пісочниця забороняє Unix-сокети")
-		}
-		t.Fatalf("перевірка Unix-сокета: %v", err)
+	if !unixSocketsAvailable(t) {
+		t.Skip("пісочниця забороняє Unix-сокети")
 	}
-	_ = probe.Close()
 
-	sess, err := startMPV("av://lavfi:testsrc2=duration=60", "тест", nil, 7,
-		"--no-config", "--vo=null", "--ao=null")
+	withMPVTestArgs(t)
+	sess, err := startMPV(context.Background(), "av://lavfi:testsrc2=duration=60", "тест", nil, 7)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer sess.Close()
-	go func() { _ = sess.Wait() }()
 
-	// --start=7 має бути застосований, а позиція — рухатися
+	// --start=7 має бути застосований, а позиція — рухатися. Перше читання може
+	// випередити сам seek (mpv віддає time-pos уже на першому кадрі), тому
+	// чекаємо саме на позицію після старту, а не на будь-яку ненульову.
 	deadline := time.Now().Add(15 * time.Second)
 	var pos float64
 	for time.Now().Before(deadline) {
 		pos, err = sess.TimePos()
-		if err == nil && pos > 0 {
+		if err == nil && pos >= 6.5 {
 			break
 		}
 		time.Sleep(200 * time.Millisecond)

@@ -12,6 +12,14 @@ type Prefs struct {
 	PreferKind     provider.Kind // за замовчуванням dub
 }
 
+// Pin — закріплення тайтлу значеннями, а не покажчиком на Entry: Pick
+// викликається з фонової горутини, якій заборонено читати пам'ять Library.
+// Нульове значення означає «піна немає».
+type Pin struct {
+	Studio string
+	Kind   provider.Kind
+}
+
 // Pick — серце продукту: вибір релізу для серії. Порядок розв'язання:
 //
 //  1. закріплена студія тайтлу (StudioPin, з урахуванням KindPin)
@@ -21,15 +29,15 @@ type Prefs struct {
 //     невідомий тип імовірніше озвучення, ніж саби)
 //  5. українські субтитри
 //
-// Жорстке правило: якщо доступне будь-яке українське озвучення — на субтитри
-// не перемикаємо. Ніколи.
+// Жорстке правило: пріоритет студії ніколи не може знизити вибір до субтитрів,
+// поки доступне будь-яке українське озвучення. Ніколи.
 //
 // Повертає обране джерело і candidates: якщо на переможному ярусі лишилося
 // кілька студій і жоден пін/улюблена не вирішили — інтерфейс має спитати
 // ОДИН раз і закріпити вибір (питати повторно за той самий тайтл — баг).
 // chosen при цьому детермінований (перша студія за абеткою), щоб headless-режим
 // працював без інтерактиву.
-func Pick(sources []provider.Source, e *Entry, p Prefs) (chosen *provider.Source, candidates []provider.Source) {
+func Pick(sources []provider.Source, pin Pin, p Prefs) (chosen *provider.Source, candidates []provider.Source) {
 	if len(sources) == 0 {
 		return nil, nil
 	}
@@ -38,13 +46,13 @@ func Pick(sources []provider.Source, e *Entry, p Prefs) (chosen *provider.Source
 	}
 
 	// 1–2: студійні пріоритети.
-	if e != nil && e.StudioPin != "" {
-		if s := bestOfStudio(sources, e.StudioPin, e.KindPin); s != nil {
+	if pin.Studio != "" {
+		if s := studioPick(sources, pin.Studio, pin.Kind); s != nil {
 			return s, nil
 		}
 	}
 	if p.FavoriteStudio != "" {
-		if s := bestOfStudio(sources, p.FavoriteStudio, ""); s != nil {
+		if s := studioPick(sources, p.FavoriteStudio, ""); s != nil {
 			return s, nil
 		}
 	}
@@ -67,6 +75,32 @@ func Pick(sources []provider.Source, e *Entry, p Prefs) (chosen *provider.Source
 		return &tier[0], nil
 	}
 	return nil, nil
+}
+
+// StudioChoices повертає найкраще джерело кожної студії в абетковому порядку.
+func StudioChoices(sources []provider.Source) []provider.Source {
+	byStudio := make(map[string]provider.Source, len(sources))
+	for _, source := range sources {
+		best, ok := byStudio[source.Studio]
+		if !ok || kindRank(source.Kind) < kindRank(best.Kind) {
+			byStudio[source.Studio] = source
+		}
+	}
+
+	choices := make([]provider.Source, 0, len(byStudio))
+	for _, source := range byStudio {
+		choices = append(choices, source)
+	}
+	sort.Slice(choices, func(i, j int) bool { return choices[i].Studio < choices[j].Studio })
+	return choices
+}
+
+func studioPick(sources []provider.Source, studio string, kindPin provider.Kind) *provider.Source {
+	chosen := bestOfStudio(sources, studio, kindPin)
+	if chosen != nil && chosen.Kind == provider.KindSub && len(filterVoiced(sources)) > 0 {
+		return nil
+	}
+	return chosen
 }
 
 // bestOfStudio: джерела студії, озвучення попереду; kindPin звужує вибір,

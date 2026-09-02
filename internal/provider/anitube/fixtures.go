@@ -11,12 +11,10 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
-	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // Канонічні фікстури. Кожен запис — реальний стан сайту на момент запису;
@@ -29,22 +27,13 @@ var canonicalTitles = []struct {
 	{"title-ongoing", "5663-frren-scho-provodzhaye-v-ostannyu-put-2-sezon"},      // онгоїнг, часткові релізи
 	{"title-single-release", "5808-pokoyivka-scho-lishe-yist"},                   // одна студія, лише субтитри
 	{"title-dub-layout", "4304-sudzume-zachinyaye-dver"},                         // фільм, студія→тип→плеєр, ДУБЛЯЖ
+	{"title-flat-ova", "1917-na-by-proti-titanv-ova"},                            // OVA, лише плеєр без рівнів студії/типу
 }
 
 const (
 	searchFixtureQuery = "фрірен"
 	searchPagedQuery   = "аніме"
 )
-
-// CanonicalRef повертає TitleRef канонічної фікстури за її ім'ям файлу.
-func CanonicalRef(file string) provider.TitleRef {
-	for _, t := range canonicalTitles {
-		if t.File == file {
-			return RefFromSlug(t.Slug)
-		}
-	}
-	return provider.TitleRef{}
-}
 
 // FixtureTransport відповідає на запити до anitube.in.ua вмістом testdata-каталогу.
 // Чужі домени пропускає (httpx.ErrSkip).
@@ -122,8 +111,8 @@ func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) er
 	}
 
 	for _, ct := range canonicalTitles {
-		ref := RefFromSlug(ct.Slug)
-		page, err := c.get(ctx, ref.URL, ref.URL)
+		pageURL := titleURL(ct.Slug)
+		page, err := c.get(ctx, pageURL, pageURL)
 		if err != nil {
 			return fmt.Errorf("запис %s: %w", ct.File, err)
 		}
@@ -135,9 +124,7 @@ func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) er
 		if hashMatch == nil || !okID {
 			return fmt.Errorf("запис %s: не знайдено hash/news_id", ct.File)
 		}
-		ajaxURL := fmt.Sprintf("%s/engine/ajax/playlists.php?news_id=%s&xfield=playlist&user_hash=%s",
-			baseURL, id, hashMatch[1])
-		pl, err := c.get(ctx, ajaxURL, ref.URL)
+		pl, err := c.get(ctx, playlistsURL(id, string(hashMatch[1])), pageURL)
 		if err != nil {
 			return fmt.Errorf("запис %s-playlists: %w", ct.File, err)
 		}
@@ -169,22 +156,11 @@ func recordSearchFixture(
 	dir, file, story string,
 	searchStart, resultFrom int,
 ) error {
-	form := url.Values{
-		"do":           {"search"},
-		"subaction":    {"search"},
-		"search_start": {strconv.Itoa(searchStart)},
-		"full_search":  {"0"},
-		"result_from":  {strconv.Itoa(resultFrom)},
-		"story":        {story},
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		baseURL+"/index.php?do=search", strings.NewReader(form.Encode()))
+	req, err := searchRequest(ctx, story, searchStart, resultFrom)
 	if err != nil {
 		return fmt.Errorf("запис %s: %w", file, err)
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	setCommonHeaders(req, baseURL+"/")
-	body, err := c.do(req)
+	body, err := httpx.Do(c.http, req)
 	if err != nil {
 		return fmt.Errorf("запис %s: %w", file, err)
 	}

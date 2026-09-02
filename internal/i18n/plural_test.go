@@ -27,8 +27,8 @@ func TestUkrainianEpisodePlurals(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.episodes, func(t *testing.T) {
-			if got := Plural(tt.n, "серія", "серії", "серій"); got != tt.plural {
-				t.Errorf("Plural(%d) = %q, want %q", tt.n, got, tt.plural)
+			if got := plural(tt.n, "серія", "серії", "серій"); got != tt.plural {
+				t.Errorf("plural(%d) = %q, want %q", tt.n, got, tt.plural)
 			}
 			if got := Episodes(tt.n); got != tt.episodes {
 				t.Errorf("Episodes(%d) = %q, want %q", tt.n, got, tt.episodes)

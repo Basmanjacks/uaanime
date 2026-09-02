@@ -2,6 +2,8 @@
 // англійська додається пізніше без рефакторингу викликів.
 package i18n
 
+import "github.com/Basmanjacks/uaanime/internal/provider"
+
 const (
 	MsgUsage = `використання:
   uaanime                              # TUI
@@ -13,6 +15,7 @@ const (
   uaanime export > backup.json
   uaanime import backup.json`
 	MsgBadEpisode       = "номер серії має бути додатним числом, отримано: %s"
+	MsgBadTitleID       = "невалідний ідентифікатор тайтлу: %s"
 	MsgNothingFound     = "нічого не знайдено"
 	MsgResolving        = "Шукаю джерела, серія %d…"
 	MsgPickedSource     = "Обрано: %s (%s), хост %s"
@@ -32,6 +35,7 @@ const (
 	MsgNeedTTY          = "TUI потребує термінала; headless-команди: search/episodes/resolve/play/doctor/export/import"
 	MsgImported         = "Бібліотеку відновлено з бекапа (попередня — library.json.bak)"
 	MsgOffline          = "немає з'єднання — перевір інтернет"
+	MsgInternalError    = "внутрішня помилка: %v"
 	MsgOfflineCache     = "Немає мережі — показую збережені дані"
 
 	// doctor
@@ -64,8 +68,11 @@ const (
 	TuiBookmarkRemoved = "прибрано із закладок"
 	TuiHintHome        = "↑↓ Вибір · Enter Відкрити · M Закладка · / Пошук · Q Вихід"
 	TuiHintSearch      = "Enter Шукати/відкрити · M Закладка · Esc Назад"
-	TuiHintEpisodes    = "↑↓ Вибір · Enter Грати · M Закладка · / Фільтр · Esc Назад"
+	TuiHintEpisodes    = "↑↓ Вибір · Enter Грати · S Озвучка · M Закладка · / Фільтр · Esc Назад"
 	TuiHintStudio      = "↑↓ Вибір · Enter Закріпити й грати · Esc Назад"
+	TuiStudioPinned    = "озвучка: %s"
+	TuiStudioAuto      = "авто"
+	TuiStudioFallback  = "озвучка %s недоступна — грає %s"
 	TuiEmptyLibrary    = "Закладок ще немає — почни з пошуку"
 	TuiNothingFound    = "Нічого не знайдено"
 	TuiMoreStudios     = "+%d"
@@ -74,6 +81,7 @@ const (
 	TuiBlockContinue   = "Продовжити"
 	TuiBlockLibrary    = "Закладки"
 	TuiBlockMore       = "Ще"
+	TuiBlockCatalog    = "Каталог"
 	TuiBlockTop        = "Топ сезону"
 	TuiBlockFresh      = "Нові релізи"
 	TuiShowMore        = "показати ще"
@@ -87,3 +95,20 @@ const (
 	TuiHistoryItem = "Історія"
 	TuiHintList    = "↑↓ Вибір · Enter Грати · Esc Назад"
 )
+
+func KindLabel(k provider.Kind) string {
+	switch k {
+	case provider.KindDub:
+		return "дубляж"
+	case provider.KindVoiceover:
+		return "озвучення"
+	case provider.KindSub:
+		return "субтитри"
+	case provider.KindMulti:
+		return "змішано"
+	default:
+		// Сирий kind із диска чи зі сторінки сайту не має потрапляти в термінал:
+		// невідоме значення — це той самий «немає доказів типу», тобто multi.
+		return "змішано"
+	}
+}

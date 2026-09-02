@@ -5,7 +5,9 @@ package providertest
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"unicode"
 
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
@@ -177,6 +179,9 @@ func Run(t *testing.T, p provider.Provider, c Cases) {
 			if len(e.Releases) == 0 {
 				t.Errorf("Episodes: серія %d без релізів", e.Number)
 			}
+			for _, r := range e.Releases {
+				mustNoControls(t, "Release.Studio", r.Studio)
+			}
 		}
 	})
 }
@@ -191,6 +196,35 @@ func mustRefs(t *testing.T, p provider.Provider, where string, cards []provider.
 		}
 		if card.Provider != p.ID() {
 			t.Errorf("%s: Provider=%q, очікував %q", where, card.Provider, p.ID())
+		}
+		// Слаг — ідентичність тайтлу: він потрапляє в library.json, в імена
+		// файлів кешу і в CLI-аргумент, тому мусить бути в канонічній формі.
+		if !provider.ValidSlug(card.Slug) {
+			t.Errorf("%s: невалідний слаг %q", where, card.Slug)
+		}
+		// Свіжа картка несе URL, побудований провайдером, а не взятий із розмітки:
+		// http:// або чужий хост тут означали б, що провайдер довіряє href.
+		if !strings.HasPrefix(card.URL, "https://") {
+			t.Errorf("%s: URL=%q не починається з https://", where, card.URL)
+		}
+		mustNoControls(t, where+": Name", card.Name)
+		for _, g := range card.Genres {
+			mustNoControls(t, where+": Genre", g)
+		}
+		for _, s := range card.Studios {
+			mustNoControls(t, where+": Studio", s)
+		}
+	}
+}
+
+// mustNoControls — межа між недовіреним HTML і терміналом користувача:
+// керуючий символ у назві чи студії перемальовує чужий екран.
+func mustNoControls(t *testing.T, where, s string) {
+	t.Helper()
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			t.Errorf("%s: керуючий символ %U у %q", where, r, s)
+			return
 		}
 	}
 }
@@ -215,6 +249,7 @@ func mustSources(t *testing.T, p provider.Provider, ref provider.TitleRef, ep in
 		if !validKinds[s.Kind] {
 			t.Errorf("Source з невідомим Kind %q: %+v", s.Kind, s)
 		}
+		mustNoControls(t, "Source.Studio", s.Studio)
 	}
 	return sources
 }

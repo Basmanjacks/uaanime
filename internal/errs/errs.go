@@ -12,11 +12,18 @@ var (
 	ErrNoStream = errors.New("потік не знайдено")
 	ErrNoPlayer = errors.New("не знайдено жодного відеоплеєра")
 	ErrProvider = errors.New("джерело зламалось")
+	// ErrPlayer — плеєр знайдено, але сесія не піднялася (старт, IPC, сокет).
+	// Це інший клас, ніж ErrNoPlayer: підказка «встановіть плеєр» тут хибна.
+	ErrPlayer = errors.New("плеєр не запустився")
 )
 
 // Offline розпізнає помилки, якими стандартний HTTP-клієнт обгортає
-// недоступну мережу, DNS і тайм-аут запиту.
+// недоступну мережу, DNS і тайм-аут запиту, а також уже класифіковані
+// ErrOffline — щоб виклики не дублювали errors.Is поруч із Offline.
 func Offline(err error) bool {
+	if errors.Is(err, ErrOffline) {
+		return true
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

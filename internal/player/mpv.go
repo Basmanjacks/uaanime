@@ -2,6 +2,7 @@
 package player
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -13,12 +14,13 @@ type MPV struct{}
 
 func (MPV) ID() string { return "mpv" }
 
-// Command збирає команду mpv для потоку з обов'язковими заголовками.
-// startSec > 0 додає --start (resume, Phase 2). Заголовки сортуються,
-// щоб команда була детермінованою (важливо для --dry-run і тестів).
-func (MPV) Command(streamURL, mediaTitle string, headers map[string]string, startSec float64) *exec.Cmd {
+// mpvArgs — аргументи mpv без бінарника і без URL (mpv очікує URL останнім).
+// startSec > 0 додає --start (resume). Заголовки сортуються, щоб команда була
+// детермінованою (важливо для --dry-run і тестів).
+func mpvArgs(mediaTitle string, headers map[string]string, startSec float64) []string {
 	args := []string{
 		"--no-terminal",
+		"--fs",
 		"--force-media-title=" + mediaTitle,
 	}
 	if len(headers) > 0 {
@@ -36,10 +38,14 @@ func (MPV) Command(streamURL, mediaTitle string, headers map[string]string, star
 	if startSec > 0 {
 		args = append(args, fmt.Sprintf("--start=%.1f", startSec))
 	}
-	args = append(args, streamURL)
-	return exec.Command("mpv", args...)
+	return args
 }
 
-func (p MPV) Start(streamURL, mediaTitle string, headers map[string]string, startSec float64) (Session, error) {
-	return startMPV(streamURL, mediaTitle, headers, startSec)
+// Command збирає команду mpv для потоку з обов'язковими заголовками.
+func (MPV) Command(streamURL, mediaTitle string, headers map[string]string, startSec float64) *exec.Cmd {
+	return exec.Command("mpv", append(mpvArgs(mediaTitle, headers, startSec), streamURL)...)
+}
+
+func (MPV) Start(ctx context.Context, streamURL, mediaTitle string, headers map[string]string, startSec float64) (Session, error) {
+	return startMPV(ctx, streamURL, mediaTitle, headers, startSec)
 }

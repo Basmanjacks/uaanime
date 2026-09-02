@@ -11,9 +11,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Basmanjacks/uaanime/internal/library"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // DataDir — каталог даних застосунку. UAANIME_DATA_DIR — службовий override
@@ -43,11 +45,60 @@ type Store struct {
 
 func Open(dir string) (*Store, error) {
 	for _, sub := range []string{"state", "cache"} {
-		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+		// Каталог даних — приватний: у library.json видно, що людина дивиться.
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
 			return nil, err
 		}
 	}
+	migrateModes(dir)
+	sweepCache(dir)
 	return &Store{dir: dir}, nil
+}
+
+// migrateModes доводить права наявної інсталяції до 0700/0600: MkdirAll не
+// чіпає режим уже створеного каталогу, а writeAtomic не торкається файлів,
+// які цього запуску не переписувалися. Помилки ігноруються — чужий власник
+// або read-only ФС не привід не запускатися.
+func migrateModes(dir string) {
+	for _, d := range []string{dir, filepath.Join(dir, "state"), filepath.Join(dir, "cache")} {
+		_ = os.Chmod(d, 0o700)
+	}
+	for _, name := range []string{"library.json", "config.json", "library.json.bak"} {
+		_ = os.Chmod(filepath.Join(dir, name), 0o600)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "state"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".json") {
+			_ = os.Chmod(filepath.Join(dir, "state", e.Name()), 0o600)
+		}
+	}
+}
+
+// cacheMaxAge — після цього віку запис кешу вже нікому не потрібен навіть як
+// офлайн-fallback. Без прибирання каталог ріс би вічно: файл на кожен тайтл,
+// який колись відкривали.
+const cacheMaxAge = 90 * 24 * time.Hour
+
+func sweepCache(dir string) {
+	cacheDir := filepath.Join(dir, "cache")
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-cacheMaxAge)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		_ = os.Remove(filepath.Join(cacheDir, e.Name()))
+	}
 }
 
 // Health — результат останньої перевірки doctor (час останньої успішної
@@ -74,16 +125,40 @@ func (s *Store) configPath() string  { return filepath.Join(s.dir, "config.json"
 func (s *Store) journalPath() string { return filepath.Join(s.dir, "state", "current.json") }
 
 // writeAtomic: tmp у тому самому каталозі + rename — атомарно на одній ФС.
+// Ім'я tmp унікальне (CreateTemp), інакше два одночасні записувачі писали б
+// в один файл і rename віддав би суміш. CreateTemp одразу створює 0600 —
+// саме той режим, який нам потрібен, тому Chmod не потрібен.
 func writeAtomic(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("%s: тимчасовий файл: %w", path, err)
 	}
-	return os.Rename(tmp, path)
+	tmp := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: запис: %w", path, err)
+	}
+	// Sync до rename: інакше після зникнення живлення rename міг би показати
+	// існуючий, але порожній файл.
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: sync: %w", path, err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: закриття: %w", path, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("%s: rename: %w", path, err)
+	}
+	return nil
 }
 
 func readJSON(path string, v any) (found bool, err error) {
@@ -104,6 +179,15 @@ func (s *Store) LoadLibrary() (*library.Library, error) {
 	lib := &library.Library{}
 	if _, err := readJSON(s.libraryPath(), lib); err != nil {
 		return nil, err
+	}
+	// Best-effort: library.json старших версій ніс сирі рядки зі сторінки, а
+	// ручне редагування лишає `null` у масивах. Читати далі важливіше за звіт,
+	// але викинуте не має зникати мовчки: наступний SaveLibrary закріпив би
+	// втрату, тому оригінал перед першим записом лягає в .bak.
+	if lib.Normalize(provider.CleanText) > 0 {
+		if raw, err := os.ReadFile(s.libraryPath()); err == nil {
+			_ = os.WriteFile(s.libraryPath()+".bak", raw, 0o600)
+		}
 	}
 	return lib, nil
 }
@@ -126,10 +210,21 @@ func (s *Store) LoadConfig() (*Config, error) {
 	if _, err := readJSON(s.configPath(), cfg); err != nil {
 		return nil, err
 	}
-	if cfg.PreferKind == "" {
-		cfg.PreferKind = "dub"
+	normalizeConfig(cfg)
+	return cfg, nil
+}
+
+// normalizeConfig тихо замінює невалідні значення дефолтами. Спільне для
+// читання з диска і для імпорту бекапа: чужий config.json довіри не має більше,
+// ніж свій.
+func normalizeConfig(cfg *Config) {
+	// multi як налаштування безглуздий: користувач обирає, чого хоче, а не
+	// «невідомо що».
+	switch provider.Kind(cfg.PreferKind) {
+	case provider.KindDub, provider.KindVoiceover, provider.KindSub:
+	default:
+		cfg.PreferKind = string(provider.KindDub)
 	}
-	// Невалідне значення тихо нормалізуємо, як і Autoplay.
 	if cfg.Player != "vlc" && cfg.Player != "mpv" {
 		cfg.Player = "vlc"
 	}
@@ -138,7 +233,6 @@ func (s *Store) LoadConfig() (*Config, error) {
 	if cfg.Autoplay != "always" && cfg.Autoplay != "never" {
 		cfg.Autoplay = "always"
 	}
-	return cfg, nil
 }
 
 // Journal — крихітний файл-журнал поточного перегляду (~200 байт).

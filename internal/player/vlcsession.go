@@ -11,12 +11,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Basmanjacks/uaanime/internal/errs"
 )
 
 const (
 	vlcRequestTimeout = 5 * time.Second
 	vlcAttemptTimeout = 700 * time.Millisecond
-	vlcPollInterval   = time.Second
 	// Бібліотека позначає серію завершеною на 90%; для непрямого EOF від VLC
 	// беремо консервативніші 95%, щоб ранній вихід не спричинив автоперехід.
 	vlcEOFThreshold = 0.95
@@ -24,36 +25,48 @@ const (
 
 // vlcSession — запущений VLC під контролем через текстовий RC IPC.
 type vlcSession struct {
-	cmd *exec.Cmd
+	*process
 
 	requestMu sync.Mutex
 	stateMu   sync.Mutex
 	conn      net.Conn
 	reader    *bufio.Reader
 
+	// Кеш останніх виміряних значень: RC відповідає не завжди (до старту
+	// відтворення get_time мовчить), а причина завершення рахується вже після
+	// виходу VLC, коли питати нема кого.
 	cacheMu sync.RWMutex
 	lastPos float64
 	lastDur float64
 	hasPos  bool
 	hasDur  bool
-	hasPair bool
-
-	stopPoll chan struct{}
-	stopOnce sync.Once
-	end      chan EndReason
-	endOnce  sync.Once
 }
 
-func newVLCSession(cmd *exec.Cmd, conn net.Conn) *vlcSession {
-	s := &vlcSession{
-		cmd:      cmd,
-		conn:     conn,
-		reader:   bufio.NewReader(conn),
-		stopPoll: make(chan struct{}),
-		end:      make(chan EndReason, 1),
-	}
-	go s.pollLoop()
+func newVLCSession(cmd *exec.Cmd) *vlcSession {
+	s := &vlcSession{}
+	s.process = newProcess(cmd, s.classifyExit)
 	return s
+}
+
+// attachRC вмикає RC-канал; до цього моменту сесія лише тримає процес.
+func (s *vlcSession) attachRC(conn net.Conn) {
+	s.stateMu.Lock()
+	s.conn = conn
+	s.reader = bufio.NewReader(conn)
+	s.stateMu.Unlock()
+}
+
+// classifyExit — причина завершення за виходом процесу. VLC не повідомляє EOF
+// через RC, тому чистий вихід розрізняється за останнім виміром позиції.
+func (s *vlcSession) classifyExit(waitErr error, closing bool) EndReason {
+	switch {
+	case closing:
+		return EndQuit
+	case waitErr != nil:
+		return EndError
+	default:
+		return s.endReasonOnCleanExit()
+	}
 }
 
 // request пропускає службовий шум RC, доки не отримає окремий цілий рядок.
@@ -71,7 +84,7 @@ func (s *vlcSession) request(command string) (float64, error) {
 	reader := s.reader
 	s.stateMu.Unlock()
 	if conn == nil || reader == nil {
-		return 0, errors.New("VLC RC: сесію закрито")
+		return 0, fmt.Errorf("VLC RC: сесію закрито: %w", errs.ErrPlayer)
 	}
 
 	deadline := time.Now().Add(vlcRequestTimeout)
@@ -92,10 +105,10 @@ func (s *vlcSession) request(command string) (float64, error) {
 			attemptEnd = deadline
 		}
 		if err := conn.SetDeadline(attemptEnd); err != nil {
-			return 0, fmt.Errorf("VLC RC: дедлайн: %w", err)
+			return 0, fmt.Errorf("VLC RC: дедлайн: %w: %w", err, errs.ErrPlayer)
 		}
 		if _, err := fmt.Fprintln(conn, command); err != nil {
-			return 0, fmt.Errorf("VLC RC: запис: %w", err)
+			return 0, fmt.Errorf("VLC RC: запис: %w: %w", err, errs.ErrPlayer)
 		}
 		for {
 			line, err := reader.ReadString('\n')
@@ -104,7 +117,7 @@ func (s *vlcSession) request(command string) (float64, error) {
 				if errors.As(err, &netErr) && netErr.Timeout() {
 					break // порожня відповідь — повторюємо команду
 				}
-				return 0, fmt.Errorf("VLC RC: читання: %w", err)
+				return 0, fmt.Errorf("VLC RC: читання: %w: %w", err, errs.ErrPlayer)
 			}
 			valueText := strings.TrimSpace(line)
 			// після повторів промпти накопичуються: "> > 5"
@@ -117,38 +130,7 @@ func (s *vlcSession) request(command string) (float64, error) {
 			}
 		}
 	}
-	return 0, fmt.Errorf("VLC RC: %s: значення недоступне: %w", command, context.DeadlineExceeded)
-}
-
-func (s *vlcSession) pollLoop() {
-	ticker := time.NewTicker(vlcPollInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-s.stopPoll:
-			return
-		case <-ticker.C:
-			pos, err := s.request("get_time")
-			if err != nil {
-				return
-			}
-			dur, err := s.request("get_length")
-			if err != nil {
-				return
-			}
-			s.cacheSample(pos, dur)
-		}
-	}
-}
-
-func (s *vlcSession) cacheSample(pos, dur float64) {
-	s.cacheMu.Lock()
-	s.lastPos = pos
-	s.lastDur = dur
-	s.hasPos = true
-	s.hasDur = true
-	s.hasPair = true
-	s.cacheMu.Unlock()
+	return 0, fmt.Errorf("VLC RC: %s: значення недоступне: %w: %w", command, context.DeadlineExceeded, errs.ErrPlayer)
 }
 
 func (s *vlcSession) cachePosition(pos float64) {
@@ -193,34 +175,22 @@ func (s *vlcSession) Duration() (float64, error) {
 	return 0, err
 }
 
-func (s *vlcSession) End() <-chan EndReason { return s.end }
-
+// endReasonOnCleanExit: VLC із --play-and-exit виходить і після кінця файла, і
+// після Ctrl+Q, тому EOF відновлюється з останніх виміряних pos/dur. Виміри
+// приходять із тика двигуна (5 с) — для 95 %-евристики цього достатньо.
+// Окремий pollLoop прибрано: він назавжди виходив з першої ж порожньої
+// відповіді get_time до старту відтворення, тож EOF не детектувався взагалі.
 func (s *vlcSession) endReasonOnCleanExit() EndReason {
 	s.cacheMu.RLock()
 	defer s.cacheMu.RUnlock()
-	if s.hasPair && s.lastDur > 0 && s.lastPos/s.lastDur >= vlcEOFThreshold {
+	if s.hasPos && s.hasDur && s.lastDur > 0 && s.lastPos/s.lastDur >= vlcEOFThreshold {
 		return EndEOF
 	}
 	return EndQuit
 }
 
-func (s *vlcSession) Wait() error {
-	if s.cmd == nil {
-		err := errors.New("vlc: процес не запущено")
-		s.endOnce.Do(func() { s.end <- EndError })
-		return err
-	}
-	if err := s.cmd.Wait(); err != nil {
-		s.endOnce.Do(func() { s.end <- EndError })
-		return err
-	}
-	s.endOnce.Do(func() { s.end <- s.endReasonOnCleanExit() })
-	return nil
-}
-
-// Close прибирає сесію: зупиняє опитування, закриває TCP і процес VLC.
+// Close прибирає сесію: закриває RC-канал і зупиняє процес VLC.
 func (s *vlcSession) Close() {
-	s.stopOnce.Do(func() { close(s.stopPoll) })
 	s.stateMu.Lock()
 	conn := s.conn
 	s.conn = nil
@@ -229,8 +199,5 @@ func (s *vlcSession) Close() {
 	if conn != nil {
 		_ = conn.Close()
 	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-		_, _ = s.cmd.Process.Wait()
-	}
+	s.process.Close()
 }

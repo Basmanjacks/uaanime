@@ -85,10 +85,12 @@ func TestLoadConfigNormalizesPlayerAndAutoplay(t *testing.T) {
 func TestJournalRecovery(t *testing.T) {
 	s := openTemp(t)
 	lib, _ := s.LoadLibrary()
+	// тайтл має існувати: прогрес без свого тайтлу LoadLibrary викидає як сироту
+	title := lib.EnsureTitle(provider.TitleRef{Provider: "anitube", Slug: "1-x", Name: "Ім'я"}, NewID)
 
 	// симуляція kill -9: журнал є, чистого завершення не було
 	err := s.WriteJournal(&Journal{
-		TitleID: "t1", Episode: 3, PositionSec: 872, DurationSec: 1440, UpdatedAt: time.Now(),
+		TitleID: title.ID, Episode: 3, PositionSec: 872, DurationSec: 1440, UpdatedAt: time.Now(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +100,7 @@ func TestJournalRecovery(t *testing.T) {
 	if err != nil || !merged {
 		t.Fatalf("RecoverJournal = (%v, %v)", merged, err)
 	}
-	if p := lib.ProgressFor("t1", 3); p == nil || p.PositionSec != 872 {
+	if p := lib.ProgressFor(title.ID, 3); p == nil || p.PositionSec != 872 {
 		t.Fatalf("журнал не злився: %+v", p)
 	}
 	// журнал видалено, повторне злиття — no-op
@@ -107,7 +109,7 @@ func TestJournalRecovery(t *testing.T) {
 	}
 	// бібліотека на диску вже містить результат злиття
 	got, _ := s.LoadLibrary()
-	if got.ProgressFor("t1", 3) == nil {
+	if got.ProgressFor(title.ID, 3) == nil {
 		t.Fatal("злиття не збережено на диск")
 	}
 }
@@ -169,7 +171,8 @@ func TestCatalogCacheMissesOtherKind(t *testing.T) {
 
 func TestCatalogCacheStaleAfterTTL(t *testing.T) {
 	s := openTemp(t)
-	cards := []provider.TitleCard{{TitleRef: provider.TitleRef{Provider: "anitube", Slug: "1-x"}}}
+	// назва обов'язкова: картку без ідентичності читання кешу відкидає
+	cards := []provider.TitleCard{{TitleRef: provider.TitleRef{Provider: "anitube", Slug: "1-x", Name: "Ім'я"}}}
 	writeCatalogCache(t, s, provider.CatalogFresh, catalogCache{
 		FetchedAt: time.Now().Add(-catalogTTL - time.Minute),
 		Year:      time.Now().Year(),
