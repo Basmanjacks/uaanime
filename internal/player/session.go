@@ -190,19 +190,36 @@ func (s *mpvSession) request(command ...any) (json.RawMessage, error) {
 		return nil, fmt.Errorf("mpv IPC: запис: %w: %w", err, errs.ErrPlayer)
 	}
 
-	timer := time.NewTimer(5 * time.Second)
+	return s.await(response, 5*time.Second)
+}
+
+// await чекає на відповідь. Відповідь могла прийти тим самим рядком, після
+// якого сокет закрився (mpv відповідає і виходить): тоді обидві гілки select
+// готові разом, а Go обирає випадково — тому вже доставлена відповідь має
+// пріоритет над «читач зупинився».
+func (s *mpvSession) await(response <-chan ipcResponse, timeout time.Duration) (json.RawMessage, error) {
+	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
 	case result := <-response:
-		if result.Error != "success" {
-			return nil, fmt.Errorf("mpv IPC: %s: %w", result.Error, errs.ErrPlayer)
-		}
-		return result.Data, nil
+		return unpackResponse(result)
 	case <-s.readerDone:
+		select {
+		case result := <-response:
+			return unpackResponse(result)
+		default:
+		}
 		return nil, s.readerFailure()
 	case <-timer.C:
 		return nil, fmt.Errorf("mpv IPC: тайм-аут запиту: %w: %w", context.DeadlineExceeded, errs.ErrPlayer)
 	}
+}
+
+func unpackResponse(result ipcResponse) (json.RawMessage, error) {
+	if result.Error != "success" {
+		return nil, fmt.Errorf("mpv IPC: %s: %w", result.Error, errs.ErrPlayer)
+	}
+	return result.Data, nil
 }
 
 func (s *mpvSession) readerFailure() error {
