@@ -2,6 +2,7 @@ package library
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -235,5 +236,142 @@ func TestKnownEpisodesJSONCompatibility(t *testing.T) {
 	}
 	if entry := old.EntryLookup("old"); entry == nil || entry.KnownEpisodes != 0 {
 		t.Fatalf("KnownEpisodes старої бібліотеки = %+v, очікував 0", entry)
+	}
+}
+
+func TestNormalizeDropsNilElements(t *testing.T) {
+	// JSON `null` у масиві дає саме nil-елемент — так виглядає бібліотека,
+	// яку хтось редагував руками.
+	const raw = `{"titles":[null,{"id":"t1","name":"X","sources":[{"provider":"anitube","slug":"1-x"}]}],
+	              "entries":[null,{"title_id":"t1","state":"watching"}],
+	              "progress":[null,{"title_id":"t1","episode":1}]}`
+	var lib Library
+	if err := json.Unmarshal([]byte(raw), &lib); err != nil {
+		t.Fatal(err)
+	}
+
+	if dropped := lib.Normalize(provider.CleanText); dropped != 3 {
+		t.Fatalf("dropped = %d, очікував 3", dropped)
+	}
+	if len(lib.Titles) != 1 || len(lib.Entries) != 1 || len(lib.Progress) != 1 {
+		t.Fatalf("після Normalize: titles=%d entries=%d progress=%d",
+			len(lib.Titles), len(lib.Entries), len(lib.Progress))
+	}
+	for i, tt := range lib.Titles {
+		if tt == nil {
+			t.Fatalf("titles[%d] лишився nil", i)
+		}
+	}
+}
+
+func TestNormalizeCleansControlChars(t *testing.T) {
+	lib := &Library{
+		Titles: []*LocalTitle{{
+			ID:      "t1",
+			Name:    "Фрірен\x1b[2J",
+			Sources: []provider.TitleRef{{Provider: "anitube", Slug: "1-x", Name: "Фрірен\u009b2J", URL: "https://evil.invalid/x"}},
+		}},
+		Entries: []*Entry{{TitleID: "t1", State: StateWatching, StudioPin: "FanVox\x1b[2J", KindPin: provider.Kind("\x1b")}},
+	}
+
+	if dropped := lib.Normalize(provider.CleanText); dropped != 0 {
+		t.Fatalf("dropped = %d, чистка рядків не має нічого видаляти", dropped)
+	}
+	if got := lib.Titles[0].Name; got != "Фрірен" {
+		t.Errorf("Name = %q", got)
+	}
+	if got := lib.Titles[0].Sources[0].Name; got != "Фрірен" {
+		t.Errorf("Sources[0].Name = %q", got)
+	}
+	if got := lib.Titles[0].Sources[0].URL; got != "" {
+		t.Errorf("Sources[0].URL = %q, збережений URL має обнулятися", got)
+	}
+	if got := lib.Entries[0].StudioPin; got != "FanVox" {
+		t.Errorf("StudioPin = %q", got)
+	}
+	if got := lib.Entries[0].KindPin; got != "" {
+		t.Errorf("KindPin = %q, невалідний пін має зникати", got)
+	}
+}
+
+func TestNormalizeDropsTitleWithBadSlug(t *testing.T) {
+	lib := &Library{
+		Titles: []*LocalTitle{{
+			ID:      "bad",
+			Name:    "Погана",
+			Sources: []provider.TitleRef{{Provider: "anitube", Slug: "../x"}},
+		}},
+		Entries:  []*Entry{{TitleID: "bad", State: StateWatching}},
+		Progress: []*Progress{{TitleID: "bad", Episode: 1}},
+	}
+
+	// джерело + тайтл + запис списку + прогрес
+	if dropped := lib.Normalize(provider.CleanText); dropped != 4 {
+		t.Fatalf("dropped = %d, очікував 4", dropped)
+	}
+	if len(lib.Titles) != 0 || len(lib.Entries) != 0 || len(lib.Progress) != 0 {
+		t.Fatalf("тайтл без валідних джерел мав зникнути разом зі своїми записами: %+v", lib)
+	}
+}
+
+func TestNormalizeDropsOrphansAndDuplicates(t *testing.T) {
+	lib := &Library{
+		Titles: []*LocalTitle{{
+			ID:      "t1",
+			Name:    "X",
+			Sources: []provider.TitleRef{{Provider: "anitube", Slug: "1-x"}},
+		}},
+		Entries: []*Entry{
+			{TitleID: "t1", State: StateWatching, LastEpisode: 5},
+			{TitleID: "t1", State: StatePlanned},
+			{TitleID: "ghost", State: StateWatching},
+		},
+		Progress: []*Progress{{TitleID: "t1", Episode: 1}, {TitleID: "ghost", Episode: 1}},
+	}
+
+	// дубль + сирота серед Entries, сирота серед Progress
+	if dropped := lib.Normalize(provider.CleanText); dropped != 3 {
+		t.Fatalf("dropped = %d, очікував 3", dropped)
+	}
+	if len(lib.Entries) != 1 || lib.Entries[0].LastEpisode != 5 {
+		t.Fatalf("з дублів має лишатися перший: %+v", lib.Entries)
+	}
+	if len(lib.Progress) != 1 || lib.Progress[0].TitleID != "t1" {
+		t.Fatalf("прогрес без тайтлу мав зникнути: %+v", lib.Progress)
+	}
+}
+
+func TestNormalizeResetsUnknownState(t *testing.T) {
+	lib := &Library{
+		Titles:  []*LocalTitle{{ID: "t1", Sources: []provider.TitleRef{{Provider: "anitube", Slug: "1-x"}}}},
+		Entries: []*Entry{{TitleID: "t1", State: State("dropped-by-user")}},
+	}
+	if dropped := lib.Normalize(provider.CleanText); dropped != 0 {
+		t.Fatalf("dropped = %d, невідомий стан не привід викидати запис", dropped)
+	}
+	if got := lib.Entries[0].State; got != "" {
+		t.Errorf("State = %q, очікував порожній", got)
+	}
+}
+
+func TestNormalizeLeavesValidLibraryIntact(t *testing.T) {
+	build := func() *Library {
+		return &Library{
+			Titles: []*LocalTitle{{
+				ID:      "t1",
+				Name:    "Фрірен",
+				Sources: []provider.TitleRef{{Provider: "anitube", Slug: "4465-frren", Name: "Фрірен"}},
+			}},
+			Entries:  []*Entry{{TitleID: "t1", State: StateCompleted, StudioPin: "FanVox", KindPin: provider.KindDub}},
+			Progress: []*Progress{{TitleID: "t1", Episode: 2, PositionSec: 60, DurationSec: 1440}},
+		}
+	}
+	lib, want := build(), build()
+
+	if dropped := lib.Normalize(provider.CleanText); dropped != 0 {
+		t.Fatalf("dropped = %d, чиста бібліотека має лишатися цілою", dropped)
+	}
+	if !reflect.DeepEqual(lib, want) {
+		t.Fatalf("Normalize змінив чисту бібліотеку:\n got %+v\nwant %+v", lib, want)
 	}
 }

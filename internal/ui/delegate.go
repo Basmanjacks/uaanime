@@ -74,55 +74,57 @@ func (d rowDelegate) Render(w io.Writer, m list.Model, index int, li list.Item) 
 	prefix := cursor + iconStyle.Render(padIcon(it.icon, iconWidth))
 
 	if !d.twoLine {
-		cluster := ""
-		if it.meta != "" {
-			cluster = metaStyle.Render(it.meta)
+		// В однорядковому списку мета стоїть одразу після назви: на широкому
+		// терміналі погляд більше не мусить бігти через весь екран до правого краю.
+		const titleMin = 24
+		titleWidth := lipgloss.Width(it.title)
+		badge := it.badge
+		badgeWidth := lipgloss.Width(badge)
+		badgeSpace := 0
+		if badge != "" {
+			badgeSpace = 1 + badgeWidth
 		}
-		if it.badge != "" {
-			if cluster != "" {
-				cluster += " "
+
+		meta := it.meta
+		metaWidth := lipgloss.Width(meta)
+		metaSpace := 0
+		if meta != "" {
+			metaSpace = lipgloss.Width(metaSep) + metaWidth
+		}
+
+		if titleWidth+metaSpace+badgeSpace > avail {
+			metaWidth = min(metaWidth, max(0, avail/3))
+			meta = truncate(meta, metaWidth)
+			if meta == "" {
+				metaSpace = 0
+			} else {
+				metaSpace = lipgloss.Width(metaSep) + metaWidth
 			}
-			cluster += styleBadge.Render(it.badge)
+			fitTitleWidth := avail - metaSpace - badgeSpace
+			if titleWidth <= avail && fitTitleWidth >= min(titleMin, titleWidth) {
+				titleWidth = fitTitleWidth
+			} else {
+				meta = ""
+				titleWidth = avail - badgeSpace
+				if titleWidth < 1 {
+					badge = ""
+					titleWidth = avail
+				}
+			}
 		}
-		clusterWidth := lipgloss.Width(cluster)
-		titleWidth := max(0, avail-clusterWidth-2)
-		left := prefix + d.title(m, index, it, titleWidth, titleStyle)
-		pad := width - lipgloss.Width(left) - clusterWidth
-		if cluster != "" && pad >= 2 {
-			fmt.Fprint(w, left+strings.Repeat(" ", pad)+cluster) //nolint:errcheck
-			return
-		}
-	}
 
-	titleWidth, badge := avail, ""
-	// В одному рядку бейдж живе праворуч від назви; у двох — під нею, з метою.
-	if !d.twoLine && it.badge != "" && avail > lipgloss.Width(it.badge)+2 {
-		badge, titleWidth = it.badge, avail-lipgloss.Width(it.badge)-1
-	}
-	// В одному рядку мета йде одразу за назвою приглушеним кольором,
-	// інакше «зупинився на 12:34» чи «переглядаєш» ніде показати.
-	meta := ""
-	if !d.twoLine && it.meta != "" {
-		metaW := lipgloss.Width(it.meta) + 2
-		if titleWidth-metaW >= lipgloss.Width(it.title) {
-			meta, titleWidth = it.meta, titleWidth-metaW
-		} else if titleWidth > metaW+10 { // довга назва: ділимо, але не душимо її
-			meta = truncate(it.meta, titleWidth/3)
-			titleWidth -= lipgloss.Width(meta) + 2
+		line := prefix + d.title(m, index, it, titleWidth, titleStyle)
+		if meta != "" {
+			line += styleMetaSep.Render(metaSep) + metaStyle.Render(meta)
 		}
-	}
-
-	line := prefix + d.title(m, index, it, titleWidth, titleStyle)
-	if meta != "" {
-		line += "  " + metaStyle.Render(meta)
-	}
-	if badge != "" {
-		line += " " + styleBadge.Render(badge)
-	}
-	if !d.twoLine {
+		if badge != "" {
+			line += " " + styleBadge.Render(badge)
+		}
 		fmt.Fprint(w, line) //nolint:errcheck
 		return
 	}
+
+	line := prefix + d.title(m, index, it, avail, titleStyle)
 	fmt.Fprint(w, line+"\n"+d.metaLine(it, width, metaStyle, selected)) //nolint:errcheck
 }
 
@@ -248,7 +250,22 @@ func (d rowDelegate) renderHeader(w io.Writer, it item, width int) {
 		}
 		return
 	}
-	out := "  " + styleSectionName.Render(strings.ToUpper(truncate(it.title, width-2)))
+	label := strings.ToUpper(it.title)
+	out := ""
+	if it.rule {
+		labelW := lipgloss.Width(label)
+		if 2+2+1+labelW+1 > width {
+			out = "  " + styleSectionName.Render(truncate(label, max(0, width-2)))
+		} else {
+			rule := func(n int) string {
+				return styleRule.Render(strings.Repeat(d.ic.Rule, n))
+			}
+			n := max(0, min(ruleWidth, width-2-2-1-labelW-1))
+			out = "  " + rule(2) + " " + styleSectionName.Render(label) + " " + rule(n)
+		}
+	} else {
+		out = "  " + styleSectionName.Render(truncate(label, width-2))
+	}
 	if d.twoLine {
 		out += "\n"
 	}

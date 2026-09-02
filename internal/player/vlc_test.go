@@ -3,6 +3,7 @@ package player
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -31,6 +32,7 @@ func TestVLCCommandWithoutStart(t *testing.T) {
 	want := []string{
 		"vlc",
 		"--play-and-exit",
+		"--fullscreen",
 		"--quiet",
 		"--meta-title=Тайтл · 1",
 		"--http-referrer=https://x/",
@@ -47,6 +49,7 @@ func TestVLCCommandWithStart(t *testing.T) {
 	want := []string{
 		"vlc",
 		"--play-and-exit",
+		"--fullscreen",
 		"--quiet",
 		"--meta-title=t",
 		"--start-time=93.5",
@@ -63,7 +66,7 @@ func TestVLCStartReportsMissingBinary(t *testing.T) {
 	vlcDarwinBundlePaths = nil
 	t.Cleanup(func() { vlcDarwinBundlePaths = old })
 
-	_, err := (VLC{}).Start("u", "t", nil, 0)
+	_, err := (VLC{}).Start(context.Background(), "u", "t", nil, 0)
 	if !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("Start error = %v, очікував обгортку exec.ErrNotFound", err)
 	}
@@ -100,12 +103,16 @@ func TestVLCSessionParsesIntegerRepliesAfterNoise(t *testing.T) {
 }
 
 func TestVLCSessionFallsBackToCachedValues(t *testing.T) {
-	server, client := net.Pipe()
-	sess := newVLCSession(nil, client)
-	defer sess.Close()
+	sess, serverDone := startFakeVLCIPC(t, replyRC(17, 80))
 
-	sess.cacheSample(17, 80)
-	_ = server.Close()
+	if _, err := sess.TimePos(); err != nil {
+		t.Fatalf("TimePos: %v", err)
+	}
+	if _, err := sess.Duration(); err != nil {
+		t.Fatalf("Duration: %v", err)
+	}
+	sess.Close() // RC закрито: далі відповідати нікому
+	<-serverDone
 
 	pos, err := sess.TimePos()
 	if err != nil || pos != 17 {
@@ -120,21 +127,30 @@ func TestVLCSessionFallsBackToCachedValues(t *testing.T) {
 func TestVLCSessionCleanExitReason(t *testing.T) {
 	tests := []struct {
 		name    string
-		pos     float64
-		dur     float64
+		pos     int
+		dur     int
 		sampled bool
 		want    EndReason
 	}{
 		{name: "на межі EOF", pos: 95, dur: 100, sampled: true, want: EndEOF},
-		{name: "нижче межі", pos: 94.9, dur: 100, sampled: true, want: EndQuit},
+		{name: "нижче межі", pos: 94, dur: 100, sampled: true, want: EndQuit},
 		{name: "без вимірів", want: EndQuit},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sess := &vlcSession{}
+			sess, serverDone := startFakeVLCIPC(t, replyRC(tt.pos, tt.dur))
+			defer func() {
+				sess.Close()
+				<-serverDone
+			}()
 			if tt.sampled {
-				sess.cacheSample(tt.pos, tt.dur)
+				if _, err := sess.TimePos(); err != nil {
+					t.Fatalf("TimePos: %v", err)
+				}
+				if _, err := sess.Duration(); err != nil {
+					t.Fatalf("Duration: %v", err)
+				}
 			}
 			if got := sess.endReasonOnCleanExit(); got != tt.want {
 				t.Fatalf("endReasonOnCleanExit = %q, очікував %q", got, tt.want)
@@ -145,6 +161,8 @@ func TestVLCSessionCleanExitReason(t *testing.T) {
 
 func startFakeVLCIPC(t *testing.T, serve func(net.Conn)) (*vlcSession, <-chan struct{}) {
 	t.Helper()
+	// Справжня дитина: сесія без процесу не існує — жнець живе в process.
+	sess := newVLCSession(startShell(t, "sleep 30"))
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		if !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.EACCES) {
@@ -159,7 +177,8 @@ func startFakeVLCIPC(t *testing.T, serve func(net.Conn)) (*vlcSession, <-chan st
 			defer func() { _ = server.Close() }()
 			serve(server)
 		}()
-		return newVLCSession(nil, client), serverDone
+		sess.attachRC(client)
+		return sess, serverDone
 	}
 	serverDone := make(chan struct{})
 	go func() {
@@ -176,9 +195,26 @@ func startFakeVLCIPC(t *testing.T, serve func(net.Conn)) (*vlcSession, <-chan st
 	if err != nil {
 		_ = listener.Close()
 		<-serverDone
+		sess.Close()
 		t.Fatalf("Dial: %v", err)
 	}
-	return newVLCSession(nil, conn), serverDone
+	sess.attachRC(conn)
+	return sess, serverDone
+}
+
+// replyRC — фейковий RC-сервер, що віддає задані pos/dur після типового шуму.
+func replyRC(pos, dur int) func(net.Conn) {
+	return func(conn net.Conn) {
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			switch scanner.Text() {
+			case "get_time":
+				_, _ = fmt.Fprintf(conn, "> %d\n", pos)
+			case "get_length":
+				_, _ = fmt.Fprintf(conn, "> %d\n", dur)
+			}
+		}
+	}
 }
 
 // Інтеграційний тест з реальним VLC на локальному синтетичному WAV без мережі.
@@ -200,7 +236,7 @@ func TestVLCSessionIPC(t *testing.T) {
 	// 10 с тиші: з --play-and-exit коротший файл встигає закінчитися до
 	// першого запиту, і VLC закриває TCP — тест ставав флейкі.
 	writeSilentWAV(t, mediaPath, 10)
-	sess, err := (VLC{}).Start(mediaPath, "тест", nil, 0)
+	sess, err := (VLC{}).Start(context.Background(), mediaPath, "тест", nil, 0)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}

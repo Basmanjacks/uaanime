@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,8 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/extractor/ashdi"
+	"github.com/Basmanjacks/uaanime/internal/extractor/moonanime"
+	"github.com/Basmanjacks/uaanime/internal/extractor/tortuga"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
@@ -36,6 +39,22 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
+// stdout/stderr — єдині виходи headless-команд. Змінні, а не os.Stdout напряму,
+// щоб табличні тести run() читали вивід без підміни файлових дескрипторів.
+// Перевірка «це термінал?» у runTUI лишається на справжньому os.Stdout.
+var (
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+)
+
+// Помилку запису у власний термінал перевіряти нема сенсу: повідомити про неї
+// теж нікуди. Обгортки роблять це рішення явним один раз замість `_, _ =`
+// біля кожного з сорока викликів.
+func outf(format string, a ...any) { _, _ = fmt.Fprintf(stdout, format, a...) }
+func outln(a ...any)               { _, _ = fmt.Fprintln(stdout, a...) }
+func errf(format string, a ...any) { _, _ = fmt.Fprintf(stderr, format, a...) }
+func errln(a ...any)               { _, _ = fmt.Fprintln(stderr, a...) }
+
 type app struct {
 	provider   provider.Provider
 	extractors []extractor.Extractor
@@ -44,14 +63,41 @@ type app struct {
 	cfg        *store.Config
 }
 
-func newApp() (*app, error) {
-	var rt http.RoundTripper
+func newApp() (*app, error) { return newAppWith(newTransport()) }
+
+// newTransport — шов для тестів: наскрізні сценарії підставляють фікстури
+// з інжекцією збоїв мережі. У продакшні — мережа або фікстури за env.
+var newTransport = defaultTransport
+
+func defaultTransport() http.RoundTripper {
 	if os.Getenv("UAANIME_FIXTURES") == "1" {
-		rt = httpx.MultiTransport{
-			anitube.FixtureTransport("internal/provider/anitube/testdata"),
-			ashdi.FixtureTransport("internal/extractor/ashdi/testdata"),
-		}
+		return fixtureTransport()
 	}
+	return nil
+}
+
+// fixtureTransport — усі фікстурні транспорти разом; шляхи відносні до кореня
+// репозиторію. Окремою функцією, щоб наскрізні тести могли обгорнути його
+// інжекцією збоїв мережі.
+func fixtureTransport() httpx.MultiTransport {
+	return httpx.MultiTransport{
+		anitube.FixtureTransport("internal/provider/anitube/testdata"),
+		ashdi.FixtureTransport("internal/extractor/ashdi/testdata"),
+		tortuga.FixtureTransport("internal/extractor/tortuga/testdata"),
+		moonanime.FixtureTransport("internal/extractor/moonanime/testdata"),
+	}
+}
+
+// detectPlayer і journalInterval — шви для тестів: наскрізні сценарії
+// підставляють фейковий плеєр і короткий крок журналу, проходячи справжній
+// шлях Begin → Run → Finish. journalInterval 0 = дефолт рушія (5 с).
+var (
+	detectPlayer    = player.Detect
+	journalInterval time.Duration
+)
+
+// newAppWith збирає застосунок поверх заданого транспорту (nil — мережа).
+func newAppWith(rt http.RoundTripper) (*app, error) {
 	client := httpx.NewClient(rt)
 
 	dir, err := store.DataDir()
@@ -76,22 +122,83 @@ func newApp() (*app, error) {
 	}
 	return &app{
 		provider:   anitube.New(client),
-		extractors: []extractor.Extractor{ashdi.New(client)},
+		extractors: []extractor.Extractor{ashdi.New(client), tortuga.New(client), moonanime.New(client)},
 		store:      st,
 		lib:        lib,
 		cfg:        cfg,
 	}, nil
 }
 
-func run(args []string) int {
+// options — прапорці, спільні для всіх команд; кожна бере лише ті, що розуміє.
+type options struct {
+	json   bool
+	dryRun bool
+}
+
+// command — одна headless-команда. args завжди починається з імені команди,
+// тому індекси збігаються з тим, що набрав користувач.
+// maxArgs == 0 означає «без верхньої межі» (search склеює решту в запит).
+type command struct {
+	minArgs int
+	maxArgs int
+	run     func(a *app, ctx context.Context, args []string, opt options) int
+}
+
+// Таблиця — єдине джерело правди про арність команд: раніше вона жила
+// одночасно в мапі minArgs і в повторних перевірках len(positional) у switch.
+var commands = map[string]command{
+	"doctor": {minArgs: 1, maxArgs: 1, run: func(a *app, ctx context.Context, _ []string, opt options) int {
+		return a.cmdDoctor(ctx, opt.json)
+	}},
+	"export": {minArgs: 1, maxArgs: 1, run: func(a *app, _ context.Context, _ []string, _ options) int {
+		if err := a.store.Export(stdout); err != nil {
+			errln(err)
+			return 1
+		}
+		return 0
+	}},
+	"import": {minArgs: 2, maxArgs: 2, run: func(a *app, _ context.Context, args []string, _ options) int {
+		return a.cmdImport(args[1])
+	}},
+	"search": {minArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
+		return a.cmdSearch(ctx, strings.Join(args[1:], " "), opt.json)
+	}},
+	"episodes": {minArgs: 2, maxArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
+		return a.cmdEpisodes(ctx, args[1], opt.json)
+	}},
+	"resolve": {minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
+		ep, ok := parseEpisode(args[2])
+		if !ok {
+			return 2
+		}
+		return a.cmdResolve(ctx, args[1], ep, opt.json)
+	}},
+	"play": {minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
+		ep, ok := parseEpisode(args[2])
+		if !ok {
+			return 2
+		}
+		return a.cmdPlay(ctx, args[1], ep, opt.dryRun)
+	}},
+}
+
+func run(args []string) (code int) {
+	// жоден panic не долітає до користувача — ані з TUI, ані з headless-команди
+	defer func() {
+		if r := recover(); r != nil {
+			errf(i18n.MsgInternalError+"\n", r)
+			code = 1
+		}
+	}()
+
 	var positional []string
-	jsonOut, dryRun := false, false
+	var opt options
 	for _, a := range args {
 		switch a {
 		case "--json":
-			jsonOut = true
+			opt.json = true
 		case "--dry-run":
-			dryRun = true
+			opt.dryRun = true
 		default:
 			positional = append(positional, a)
 		}
@@ -101,10 +208,9 @@ func run(args []string) int {
 		return runTUI()
 	}
 
-	// doctor/export — одноаргументні; import/search/episodes — два; resolve/play — три
-	minArgs := map[string]int{"doctor": 1, "export": 1, "import": 2, "search": 2, "episodes": 2, "resolve": 3, "play": 3}
-	if need, ok := minArgs[positional[0]]; !ok || len(positional) < need {
-		fmt.Fprintln(os.Stderr, i18n.MsgUsage)
+	cmd, ok := commands[positional[0]]
+	if !ok || len(positional) < cmd.minArgs || (cmd.maxArgs > 0 && len(positional) > cmd.maxArgs) {
+		errln(i18n.MsgUsage)
 		return 2
 	}
 
@@ -112,46 +218,40 @@ func run(args []string) int {
 	defer cancel()
 	a, err := newApp()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		return 1
 	}
+	return cmd.run(a, ctx, positional, opt)
+}
 
-	switch positional[0] {
-	case "doctor":
-		return a.cmdDoctor(ctx, jsonOut)
-	case "export":
-		if err := a.store.Export(os.Stdout); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return 1
-		}
-		return 0
-	case "import":
-		return a.cmdImport(positional[1])
-	case "search":
-		return a.cmdSearch(ctx, strings.Join(positional[1:], " "), jsonOut)
-	case "episodes":
-		return a.cmdEpisodes(ctx, positional[1], jsonOut)
-	case "resolve":
-		if len(positional) != 3 {
-			break
-		}
-		ep, ok := parseEpisode(positional[2])
-		if !ok {
-			return 2
-		}
-		return a.cmdResolve(ctx, positional[1], ep, jsonOut)
-	case "play":
-		if len(positional) != 3 {
-			break
-		}
-		ep, ok := parseEpisode(positional[2])
-		if !ok {
-			return 2
-		}
-		return a.cmdPlay(ctx, positional[1], ep, dryRun)
+// shellQuote друкує argv так, щоб рядок можна було вставити в оболонку без
+// змін: назва тайтлу містить пробіли, а адреса потоку — `?` і `&`.
+// Керуючі символи лишаються як є — --dry-run має показувати справжній argv,
+// а не його очищену копію; вони вже всередині лапок, а сам текст назви
+// почистив provider.CleanText вище за течією.
+func shellQuote(args []string) string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		out = append(out, shellQuoteArg(a))
 	}
-	fmt.Fprintln(os.Stderr, i18n.MsgUsage)
-	return 2
+	return strings.Join(out, " ")
+}
+
+func shellQuoteArg(s string) string {
+	if s != "" && !strings.ContainsFunc(s, shellNeedsQuote) {
+		return s
+	}
+	// POSIX: усередині одинарних лапок спецсимволів немає, а сама лапка
+	// закривається, екранується і відкривається знову.
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func shellNeedsQuote(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return false
+	}
+	return !strings.ContainsRune("_@%+=:,./-", r)
 }
 
 func runTUI() (code int) {
@@ -159,21 +259,25 @@ func runTUI() (code int) {
 	// а тут — останній рубіж
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Fprintf(os.Stderr, "внутрішня помилка: %v\n", r)
+			errf(i18n.MsgInternalError+"\n", r)
 			code = 1
 		}
 	}()
 	if fi, _ := os.Stdout.Stat(); fi == nil || fi.Mode()&os.ModeCharDevice == 0 {
-		fmt.Fprintln(os.Stderr, i18n.MsgNeedTTY)
+		errln(i18n.MsgNeedTTY)
 		return 2
 	}
 	a, err := newApp()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		return 1
 	}
-	if err := ui.Run(a.engine()); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	// Сигнали ловить контекст, а не bubbletea: модель має встигнути закрити
+	// плеєр і злити журнал до виходу (див. ui.Run).
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := ui.Run(ctx, a.engine()); err != nil {
+		errln(err)
 		return 1
 	}
 	return 0
@@ -236,24 +340,24 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 	for _, p := range rep.Players {
 		if p.Found {
 			foundPlayer = true
-			fmt.Printf(i18n.MsgDoctorPlayerOK+"\n", p.ID)
+			outf(i18n.MsgDoctorPlayerOK+"\n", p.ID)
 		} else {
-			fmt.Printf(i18n.MsgDoctorPlayerMissing+"\n", p.ID)
+			outf(i18n.MsgDoctorPlayerMissing+"\n", p.ID)
 		}
 	}
 	if !foundPlayer {
-		fmt.Println(playerInstallHint())
+		outln(playerInstallHint())
 	}
-	fmt.Printf(i18n.MsgDoctorDataDir+"\n", rep.DataDir)
+	outf(i18n.MsgDoctorDataDir+"\n", rep.DataDir)
 	for _, p := range rep.Providers {
 		if p.Alive {
-			fmt.Printf(i18n.MsgDoctorProviderOK+"\n", p.Name)
+			outf(i18n.MsgDoctorProviderOK+"\n", p.Name)
 		} else {
 			last := i18n.MsgDoctorNever
 			if p.LastOK != nil {
 				last = p.LastOK.Format("2006-01-02 15:04")
 			}
-			fmt.Printf(i18n.MsgDoctorProviderDown+"\n", p.Name, last)
+			outf(i18n.MsgDoctorProviderDown+"\n", p.Name, last)
 		}
 	}
 	return 0
@@ -262,31 +366,37 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 func (a *app) cmdImport(path string) int {
 	f, err := os.Open(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		return 1
 	}
 	defer func() { _ = f.Close() }()
 	if err := a.store.Import(f); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		return 1
 	}
-	fmt.Println(i18n.MsgImported)
+	outln(i18n.MsgImported)
 	return 0
 }
 
 func parseEpisode(s string) (int, bool) {
 	ep, err := strconv.Atoi(s)
 	if err != nil || ep < 1 {
-		fmt.Fprintf(os.Stderr, i18n.MsgBadEpisode+"\n", s)
+		errf(i18n.MsgBadEpisode+"\n", s)
 		return 0, false
 	}
 	return ep, true
 }
 
-// title-id: "<slug>" або "anitube:<slug>".
-func (a *app) refFromID(id string) provider.TitleRef {
+// title-id: "<slug>" або "anitube:<slug>". Слаг приходить з командного рядка,
+// тому провайдер його валідує; невалідний аргумент — помилка вжитку (код 2).
+func (a *app) refFromID(id string) (provider.TitleRef, bool) {
 	slug := strings.TrimPrefix(id, a.provider.ID()+":")
-	return anitube.RefFromSlug(slug)
+	ref, err := anitube.RefFromSlug(slug)
+	if err != nil {
+		errf(i18n.MsgBadTitleID+"\n", id)
+		return provider.TitleRef{}, false
+	}
+	return ref, true
 }
 
 func titleID(r provider.TitleRef) string { return r.Provider + ":" + r.Slug }
@@ -301,11 +411,11 @@ func (a *app) cmdSearch(ctx context.Context, q string, jsonOut bool) int {
 		return printJSON(page.Titles)
 	}
 	if len(page.Titles) == 0 {
-		fmt.Println(i18n.MsgNothingFound)
+		outln(i18n.MsgNothingFound)
 		return 0
 	}
 	for _, r := range page.Titles {
-		fmt.Printf("%s\t%s\t%s\t%s\n", titleID(r.TitleRef), r.Name, cardYear(r), cardRating(r))
+		outf("%s\t%s\t%s\t%s\n", titleID(r.TitleRef), r.Name, cardYear(r), cardRating(r))
 	}
 	return 0
 }
@@ -327,13 +437,17 @@ func cardRating(card provider.TitleCard) string {
 }
 
 func (a *app) cmdEpisodes(ctx context.Context, id string, jsonOut bool) int {
-	eps, offline, err := a.engine().EpisodesCached(ctx, a.refFromID(id))
+	ref, ok := a.refFromID(id)
+	if !ok {
+		return 2
+	}
+	eps, offline, err := a.engine().EpisodesCached(ctx, ref)
 	if err != nil {
 		printCommandError(err)
 		return 1
 	}
 	if offline && !jsonOut {
-		fmt.Fprintln(os.Stderr, i18n.MsgOfflineCache)
+		errln(i18n.MsgOfflineCache)
 	}
 	if jsonOut {
 		return printJSON(eps)
@@ -343,75 +457,17 @@ func (a *app) cmdEpisodes(ctx context.Context, id string, jsonOut bool) int {
 		for _, r := range e.Releases {
 			parts = append(parts, fmt.Sprintf("%s (%s)", r.Studio, r.Kind))
 		}
-		fmt.Printf("%d\t%s\n", e.Number, strings.Join(parts, ", "))
+		outf("%d\t%s\n", e.Number, strings.Join(parts, ", "))
 	}
 	return 0
 }
 
-// candidate — один придатний до відтворення потік для resolve --json.
-type candidate struct {
-	Studio string           `json:"studio"`
-	Kind   provider.Kind    `json:"kind"`
-	Host   string           `json:"host"`
-	Stream extractor.Stream `json:"stream"`
-}
-
-func (a *app) candidates(ctx context.Context, ref provider.TitleRef, ep int) ([]candidate, error) {
-	sources, err := a.provider.Sources(ctx, ref, ep)
-	if err != nil {
-		return nil, err
-	}
-	if len(sources) == 0 {
-		return nil, fmt.Errorf("серія %d: провайдер не повернув джерел: %w", ep, errs.ErrNoStream)
-	}
-	var out []candidate
-	var failures []error
-	for _, src := range sources {
-		ex, ok := extractor.Find(a.extractors, src.Embed)
-		if !ok {
-			failures = append(failures, fmt.Errorf("embed %s: немає підтримуваного екстрактора: %w", src.Embed, errs.ErrNoStream))
-			continue
-		}
-		streams, err := ex.Extract(ctx, src.Embed, src.Referer)
-		if err != nil {
-			failures = append(failures, err)
-			continue // одне мертве джерело не має ховати решту
-		}
-		if len(streams) == 0 {
-			failures = append(failures, fmt.Errorf("екстрактор %s не повернув потоку: %w", ex.ID(), errs.ErrNoStream))
-			continue
-		}
-		for _, st := range streams {
-			out = append(out, candidate{Studio: src.Studio, Kind: src.Kind, Host: ex.ID(), Stream: st})
-		}
-	}
-	if len(out) == 0 {
-		return nil, aggregateCandidateFailures(ep, failures)
-	}
-	return out, nil
-}
-
-func aggregateCandidateFailures(ep int, failures []error) error {
-	offline, noStream := 0, 0
-	for _, err := range failures {
-		switch {
-		case errors.Is(err, errs.ErrOffline) || errs.Offline(err):
-			offline++
-		case errors.Is(err, errs.ErrNoStream):
-			noStream++
-		}
-	}
-	class := errs.ErrProvider
-	if len(failures) > 0 && offline == len(failures) {
-		class = errs.ErrOffline
-	} else if len(failures) > 0 && noStream == len(failures) {
-		class = errs.ErrNoStream
-	}
-	return fmt.Errorf("серія %d: жодне джерело не дало потоку: %w: %w", ep, class, errors.Join(failures...))
-}
-
 func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) int {
-	cands, err := a.candidates(ctx, a.refFromID(id), ep)
+	ref, ok := a.refFromID(id)
+	if !ok {
+		return 2
+	}
+	cands, err := a.engineWithoutPlayer().ResolveAll(ctx, ref, ep)
 	if err != nil || len(cands) == 0 {
 		if err == nil {
 			err = fmt.Errorf("серія %d: порожній список потоків: %w", ep, errs.ErrNoStream)
@@ -423,28 +479,18 @@ func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) i
 		return printJSON(cands)
 	}
 	for _, c := range cands {
-		fmt.Printf("%s\t%s\t%s\t%s\n", c.Studio, c.Kind, c.Host, c.Stream.URL)
+		outf("%s\t%s\t%s\t%s\n", c.Studio, c.Kind, c.Host, c.Stream.URL)
 	}
 	return 0
 }
 
-func commandErrText(err error) string {
-	switch {
-	case errors.Is(err, errs.ErrOffline):
-		return i18n.MsgOffline
-	case errors.Is(err, errs.ErrNoStream):
-		return i18n.MsgNoPlayableHost
-	default:
-		return fmt.Sprintf(i18n.MsgProviderFailed, err)
-	}
-}
-
-func printCommandError(err error) { fmt.Fprintln(os.Stderr, commandErrText(err)) }
+func printCommandError(err error) { errln(i18n.ErrorText(err)) }
 
 func (a *app) engine() *playback.Engine {
 	eng := a.engineWithoutPlayer()
-	eng.Player, eng.PlayerFallback, _ = player.Detect(a.cfg.Player)
+	eng.Player, eng.PlayerFallback, _ = detectPlayer(a.cfg.Player)
 	eng.Autoplay = a.cfg.Autoplay == "always"
+	eng.JournalInterval = journalInterval
 	return eng
 }
 
@@ -467,7 +513,10 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	ref := a.refFromID(id)
+	ref, ok := a.refFromID(id)
+	if !ok {
+		return 2
+	}
 	var eng *playback.Engine
 	if dryRun {
 		eng = a.engineWithoutPlayer()
@@ -476,53 +525,56 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 	}
 
 	for {
-		fmt.Printf(i18n.MsgResolving+"\n", ep)
+		outf(i18n.MsgResolving+"\n", ep)
 		resolveCtx, cancel := context.WithTimeout(sigCtx, 60*time.Second)
-		res, err := eng.Resolve(resolveCtx, ref, ep, func(playback.Event) { fmt.Println(i18n.MsgTryingNext) })
+		res, err := eng.Resolve(resolveCtx, ref, ep, func(playback.Event) { outln(i18n.MsgTryingNext) })
 		cancel()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, i18n.MsgProviderFailed+"\n", err)
+			errln(i18n.ErrorText(err))
 			return 1
 		}
-		if res.StartSec > 0 {
-			fmt.Printf(i18n.MsgResume+"\n", int(res.StartSec)/60, int(res.StartSec)%60)
+		if res.PinFallback {
+			if title := eng.Lib.TitleByRef(ref); title != nil {
+				if entry := eng.Lib.EntryLookup(title.ID); entry != nil {
+					errf(i18n.TuiStudioFallback+"\n", entry.StudioPin, res.Source.Studio)
+				}
+			}
 		}
-		fmt.Printf(i18n.MsgPickedSource+"\n", res.Source.Studio, res.Source.Kind, res.HostID)
+		if res.StartSec > 0 {
+			outf(i18n.MsgResume+"\n", int(res.StartSec)/60, int(res.StartSec)%60)
+		}
+		outf(i18n.MsgPickedSource+"\n", res.Source.Studio, res.Source.Kind, res.HostID)
 
 		if dryRun {
-			var backend player.Player = player.VLC{}
-			if a.cfg.Player == "mpv" {
-				backend = player.MPV{}
-			}
-			cmd := backend.Command(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
-			fmt.Println(strings.Join(cmd.Args, " "))
+			cmd := player.ByID(a.cfg.Player).Command(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
+			outln(shellQuote(cmd.Args))
 			return 0
 		}
 
 		if eng.PlayerFallback {
-			fmt.Printf(i18n.MsgPlayerFallback+"\n", eng.Player.ID())
+			outf(i18n.MsgPlayerFallback+"\n", eng.Player.ID())
 		}
-		fmt.Println(i18n.MsgLaunchingPlayer)
+		outln(i18n.MsgLaunchingPlayer)
 		result, err := eng.Play(sigCtx, res)
 		if errors.Is(err, errs.ErrNoPlayer) {
-			fmt.Fprintln(os.Stderr, i18n.MsgNoPlayer)
-			fmt.Fprintln(os.Stderr, playerInstallHint())
+			errln(i18n.MsgNoPlayer)
+			errln(playerInstallHint())
 			return 1
 		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, i18n.MsgPlayerFailed+"\n", err)
+			errf(i18n.MsgPlayerFailed+"\n", err)
 			return 1
 		}
 		if result.PinnedStudio != "" {
-			fmt.Printf(i18n.MsgStudioPinned+"\n", result.PinnedStudio)
+			outf(i18n.MsgStudioPinned+"\n", result.PinnedStudio)
 		}
 		if result.Completed {
-			fmt.Printf(i18n.MsgEpisodeDone+"\n", ep)
+			outf(i18n.MsgEpisodeDone+"\n", ep)
 		} else if result.PositionSec > 0 {
-			fmt.Printf(i18n.MsgProgressSaved+"\n", int(result.PositionSec)/60, int(result.PositionSec)%60)
+			outf(i18n.MsgProgressSaved+"\n", int(result.PositionSec)/60, int(result.PositionSec)%60)
 		}
 		if result.Reason == player.EndError {
-			fmt.Fprintf(os.Stderr, i18n.MsgPlayerFailed+"\n", result.Reason)
+			errf(i18n.MsgPlayerFailed+"\n", result.Reason)
 			return 1
 		}
 		if result.Reason != player.EndEOF || !eng.Autoplay {
@@ -552,11 +604,11 @@ func playerInstallHint() string {
 }
 
 func printJSON(v any) int {
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(stdout)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		errln(err)
 		return 1
 	}
 	return 0

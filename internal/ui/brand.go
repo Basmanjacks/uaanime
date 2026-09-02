@@ -49,7 +49,7 @@ func (m *Model) brandHeader() string {
 	}
 	banner := styleBanner.UnsetForeground().Render(strings.Join(lines, "\n"))
 	return banner + "\n" +
-		styleTagline.Render(i18n.TuiTagline) + "\n\n"
+		styleTagline.Render(strings.ToUpper(i18n.TuiTagline)) + "\n\n"
 }
 
 func (m *Model) brandFallbackTitle() string {
@@ -57,7 +57,7 @@ func (m *Model) brandFallbackTitle() string {
 	cut := min(2, len(title))
 	brand := styleBrandUA.Render(m.ic.Spark+" "+string(title[:cut])) +
 		styleBrandRest.Render(string(title[cut:]))
-	tagline := styleTagline.Padding(0).Render(metaSep + i18n.TuiTaglineShort)
+	tagline := styleTagline.Padding(0).Render(metaSep + strings.ToUpper(i18n.TuiTaglineShort))
 	return lipgloss.NewStyle().Padding(0, 0, 1, 2).Render(brand + tagline)
 }
 

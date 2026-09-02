@@ -19,45 +19,77 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/Basmanjacks/uaanime/internal/providertest"
 	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
-type stubProvider struct {
-	episodes     []provider.Episode
-	episodesErr  error
-	episodeCalls *int
-	catalog      []provider.TitleCard
-	catalogErr   error
-	sources      []provider.Source
-	err          error
+// Провайдер у цих тестах — providertest.Stub із полями-функціями; локальні
+// конструктори лише вкладають у нього потрібну поведінку.
+func episodesStub(eps []provider.Episode, err error, calls *int) providertest.Stub {
+	return providertest.Stub{
+		IDValue:   "stub",
+		NameValue: "Stub",
+		EpisodesFn: func(context.Context, provider.TitleRef) ([]provider.Episode, error) {
+			if calls != nil {
+				*calls++
+			}
+			return eps, err
+		},
+	}
 }
 
-func (p stubProvider) ID() string          { return "stub" }
-func (p stubProvider) Name() string        { return "Stub" }
-func (p stubProvider) Caps() provider.Caps { return provider.Caps{} }
-func (p stubProvider) Search(context.Context, string, int) (provider.Page, error) {
-	return provider.Page{}, nil
-}
-func (p stubProvider) Catalog(context.Context, provider.CatalogKind) ([]provider.TitleCard, error) {
-	return p.catalog, p.catalogErr
-}
-func (p stubProvider) Episodes(context.Context, provider.TitleRef) ([]provider.Episode, error) {
-	if p.episodeCalls != nil {
-		*p.episodeCalls++
+func catalogStub(cards []provider.TitleCard, err error) providertest.Stub {
+	return providertest.Stub{
+		IDValue:   "stub",
+		NameValue: "Stub",
+		CatalogFn: func(context.Context, provider.CatalogKind) ([]provider.TitleCard, error) {
+			return cards, err
+		},
 	}
-	return p.episodes, p.episodesErr
 }
-func (p stubProvider) Sources(context.Context, provider.TitleRef, int) ([]provider.Source, error) {
-	return p.sources, p.err
+
+func sourcesStub(sources []provider.Source) providertest.Stub {
+	return providertest.Stub{
+		IDValue:   "stub",
+		NameValue: "Stub",
+		SourcesFn: func(context.Context, provider.TitleRef, int) ([]provider.Source, error) {
+			return sources, nil
+		},
+	}
+}
+
+// perEpisodeSourcesStub фільтрує джерела за номером серії, як це робить anitube,
+// і рахує звернення — цього досить для перевірки memo.
+func perEpisodeSourcesStub(sources []provider.Source, calls *int) providertest.Stub {
+	return providertest.Stub{
+		IDValue:   "stub",
+		NameValue: "Stub",
+		SourcesFn: func(_ context.Context, _ provider.TitleRef, episode int) ([]provider.Source, error) {
+			if calls != nil {
+				*calls++
+			}
+			var out []provider.Source
+			for _, s := range sources {
+				if s.Episode == episode {
+					out = append(out, s)
+				}
+			}
+			if len(out) == 0 {
+				return nil, fmt.Errorf("серія %d: не знайдено жодного джерела: %w", episode, errs.ErrNoStream)
+			}
+			return out, nil
+		},
+	}
 }
 
 type stubExtractor struct {
 	streams []extractor.Stream
 	err     error
+	handle  string
 }
 
 type fakePlayer struct {
-	session  *fakeSession
+	session  player.Session
 	startErr error
 }
 
@@ -65,7 +97,7 @@ func (fakePlayer) ID() string { return "fake" }
 func (fakePlayer) Command(string, string, map[string]string, float64) *exec.Cmd {
 	return nil
 }
-func (p fakePlayer) Start(string, string, map[string]string, float64) (player.Session, error) {
+func (p fakePlayer) Start(context.Context, string, string, map[string]string, float64) (player.Session, error) {
 	if p.startErr != nil {
 		return nil, p.startErr
 	}
@@ -108,10 +140,105 @@ func (s *fakeSession) End() <-chan player.EndReason { return s.end }
 func (s *fakeSession) Wait() error                  { return nil }
 func (s *fakeSession) Close()                       {}
 
-func (stubExtractor) ID() string          { return "stub" }
-func (stubExtractor) Handles(string) bool { return true }
+func (stubExtractor) ID() string { return "stub" }
+func (e stubExtractor) Handles(embed string) bool {
+	return e.handle == "" || e.handle == embed
+}
 func (e stubExtractor) Extract(context.Context, string, string) ([]extractor.Stream, error) {
 	return e.streams, e.err
+}
+
+func TestStudioChoicesFiltersUnplayableHosts(t *testing.T) {
+	playableEmbed := "https://handled.invalid/embed"
+	sources := []provider.Source{
+		{Studio: "X", Kind: provider.KindDub, Embed: "https://unsupported.invalid/embed"},
+		{Studio: "Y", Kind: provider.KindVoiceover, Embed: playableEmbed},
+	}
+	engine := testEngine(sources, []extractor.Extractor{stubExtractor{handle: playableEmbed}})
+
+	choices, err := engine.StudioChoices(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
+	if err != nil {
+		t.Fatalf("StudioChoices: %v", err)
+	}
+	if len(choices) != 1 || choices[0].Studio != "Y" {
+		t.Fatalf("StudioChoices = %+v, want only Y", choices)
+	}
+
+	engine.Extractors = nil
+	choices, err = engine.StudioChoices(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
+	if !errors.Is(err, errs.ErrNoStream) || len(choices) != 0 {
+		t.Fatalf("StudioChoices all unplayable = (%+v, %v), want ErrNoStream", choices, err)
+	}
+}
+
+func TestResolvePinFallback(t *testing.T) {
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
+	playableEmbed := "https://handled.invalid/embed"
+	sources := []provider.Source{
+		{Studio: "X", Kind: provider.KindDub, Embed: "https://unsupported.invalid/embed"},
+		{Studio: "Y", Kind: provider.KindVoiceover, Embed: playableEmbed},
+	}
+	engine := testEngine(sources, []extractor.Extractor{stubExtractor{
+		handle:  playableEmbed,
+		streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}},
+	}})
+	title := engine.Lib.EnsureTitle(ref, func() string { return "title-id" })
+	engine.Lib.EntryFor(title.ID).StudioPin = "X"
+
+	resolved, err := engine.Resolve(t.Context(), ref, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !resolved.PinFallback || resolved.Source.Studio != "Y" {
+		t.Fatalf("Resolved = %+v, want fallback to Y", resolved)
+	}
+}
+
+func TestResolveCandidatesPlayable(t *testing.T) {
+	playableEmbed := "https://handled.invalid/embed"
+	sources := []provider.Source{
+		{Studio: "X", Kind: provider.KindVoiceover, Embed: "https://unsupported.invalid/embed"},
+		{Studio: "Y", Kind: provider.KindVoiceover, Embed: playableEmbed},
+		{Studio: "Z", Kind: provider.KindVoiceover, Embed: playableEmbed},
+	}
+	engine := testEngine(sources, []extractor.Extractor{stubExtractor{
+		handle:  playableEmbed,
+		streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}},
+	}})
+
+	resolved, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(resolved.Candidates) != 2 {
+		t.Fatalf("Candidates = %+v, want Y and Z", resolved.Candidates)
+	}
+	for _, candidate := range resolved.Candidates {
+		if candidate.Studio == "X" {
+			t.Fatalf("Candidates contains unplayable studio X: %+v", resolved.Candidates)
+		}
+	}
+}
+
+func TestPinStudioClearsKindPin(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
+	lib := &library.Library{}
+	title := lib.EnsureTitle(ref, func() string { return "title-id" })
+	entry := lib.EntryFor(title.ID)
+	entry.StudioPin = "Old"
+	entry.KindPin = provider.KindDub
+	engine := &Engine{Store: st, Lib: lib}
+
+	if err := engine.PinStudio(ref, "New"); err != nil {
+		t.Fatalf("PinStudio: %v", err)
+	}
+	if entry.StudioPin != "New" || entry.KindPin != "" {
+		t.Fatalf("pins = (%q, %q), want (New, empty)", entry.StudioPin, entry.KindPin)
+	}
 }
 
 func TestResolveDoesNotMutateLibrary(t *testing.T) {
@@ -120,7 +247,7 @@ func TestResolveDoesNotMutateLibrary(t *testing.T) {
 		[]extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}}}},
 	)
 
-	if _, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "title"}, 1, nil); err != nil {
+	if _, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1, nil); err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if len(engine.Lib.Titles) != 0 || len(engine.Lib.Entries) != 0 {
@@ -133,7 +260,7 @@ func TestParallelResolvesDoNotMutateLibrary(t *testing.T) {
 		[]provider.Source{{Studio: "Студія", Kind: provider.KindDub, Embed: "https://video.invalid/embed"}},
 		[]extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}}}},
 	)
-	ref := provider.TitleRef{Provider: "stub", Slug: "title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title"}
 
 	const resolves = 16
 	errs := make(chan error, resolves)
@@ -169,7 +296,7 @@ func TestPlayEnsuresTitleBeforeStartingPlayer(t *testing.T) {
 		Lib:    &library.Library{},
 		Player: fakePlayer{startErr: errors.New("player start failed")},
 	}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 
 	_, err = engine.Play(t.Context(), &Resolved{
 		Ref:        ref,
@@ -193,7 +320,7 @@ func TestPlayWithoutPlayerDoesNotMutateLibrary(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	engine := &Engine{Store: st, Lib: &library.Library{}}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 
 	_, err = engine.Play(t.Context(), &Resolved{Ref: ref, Episode: 1})
 	if !errors.Is(err, errs.ErrNoPlayer) {
@@ -214,7 +341,7 @@ func TestBookmarkPersistsAddedAndRemoved(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	engine := &Engine{Store: st, Lib: &library.Library{}}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 
 	result, err := engine.Bookmark(ref, 12)
 	if err != nil || result != library.BookmarkAdded {
@@ -253,7 +380,7 @@ func TestMarkSeenPersistsKnownEpisodes(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	engine := &Engine{Store: st, Lib: &library.Library{}}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 	if _, err := engine.Bookmark(ref, 3); err != nil {
 		t.Fatalf("Bookmark: %v", err)
 	}
@@ -277,7 +404,7 @@ func TestReconcileKnownPersistsActualEpisodes(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	engine := &Engine{Store: st, Lib: &library.Library{}}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 	if _, err := engine.Bookmark(ref, 12); err != nil {
 		t.Fatalf("Bookmark: %v", err)
 	}
@@ -301,7 +428,7 @@ func TestBookmarkRemoveWritesLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 	lib := &library.Library{}
 	title := lib.EnsureTitle(ref, func() string { return "title-id" })
 	lib.RecordPosition(title.ID, 3, 872, 1440, time.Now())
@@ -385,7 +512,7 @@ func engineWithProgress(t *testing.T, reason player.EndReason) (*Engine, *librar
 		t.Fatalf("open store: %v", err)
 	}
 	lib := &library.Library{}
-	ref := provider.TitleRef{Provider: "stub", Slug: "title", Name: "Title"}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
 	title := lib.EnsureTitle(ref, func() string { return "title-id" })
 	lib.RecordPosition(title.ID, 1, 60, 1200, time.Now())
 	return &Engine{
@@ -412,7 +539,7 @@ func TestResolveClassifiesAllOfflineAttempts(t *testing.T) {
 		[]extractor.Extractor{stubExtractor{err: fmt.Errorf("embed: %w", dnsErr)}},
 	)
 
-	_, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "title"}, 1, nil)
+	_, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1, nil)
 	if !errors.Is(err, errs.ErrOffline) {
 		t.Fatalf("Resolve error = %v, очікував ErrOffline", err)
 	}
@@ -424,7 +551,7 @@ func TestResolveClassifiesUnsupportedHostAsNoStream(t *testing.T) {
 		nil,
 	)
 
-	_, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "title"}, 1, nil)
+	_, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1, nil)
 	if !errors.Is(err, errs.ErrNoStream) {
 		t.Fatalf("Resolve error = %v, очікував ErrNoStream", err)
 	}
@@ -433,15 +560,18 @@ func TestResolveClassifiesUnsupportedHostAsNoStream(t *testing.T) {
 func TestResolveClassifiesEmptySourcesAsNoStream(t *testing.T) {
 	engine := testEngine(nil, nil)
 
-	_, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "title"}, 1, nil)
+	_, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1, nil)
 	if !errors.Is(err, errs.ErrNoStream) {
 		t.Fatalf("Resolve error = %v, очікував ErrNoStream", err)
 	}
 }
 
 func TestEpisodesCachedStaleFallback(t *testing.T) {
-	ref := provider.TitleRef{Provider: "stub", Slug: "title"}
-	cached := []provider.Episode{{Number: 1}, {Number: 2}}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title"}
+	cached := []provider.Episode{
+		{Number: 1, Releases: []provider.Release{{Studio: "Студія", Kind: provider.KindDub}}},
+		{Number: 2, Releases: []provider.Release{{Studio: "Студія", Kind: provider.KindDub}}},
+	}
 	tests := []struct {
 		name        string
 		providerErr error
@@ -479,13 +609,13 @@ func TestEpisodesCachedStaleFallback(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal stale cache: %v", err)
 			}
-			cachePath := filepath.Join(dir, "cache", "episodes-stub-title.json")
+			cachePath := filepath.Join(dir, "cache", "episodes-stub-1-title.json")
 			if err := os.WriteFile(cachePath, cache, 0o644); err != nil {
 				t.Fatalf("write stale cache: %v", err)
 			}
 
 			engine := &Engine{
-				Provider: stubProvider{episodesErr: tt.providerErr},
+				Provider: episodesStub(nil, tt.providerErr, nil),
 				Store:    st,
 			}
 			gotEps, gotOffline, gotErr := engine.EpisodesCached(t.Context(), ref)
@@ -513,9 +643,12 @@ func TestEpisodesFreshBypassesCacheAndSavesResult(t *testing.T) {
 		t.Fatalf("save initial cache: %v", err)
 	}
 	calls := 0
-	want := []provider.Episode{{Number: 2}, {Number: 4}}
+	want := []provider.Episode{
+		{Number: 2, Releases: []provider.Release{{Studio: "Студія", Kind: provider.KindDub}}},
+		{Number: 4, Releases: []provider.Release{{Studio: "Студія", Kind: provider.KindDub}}},
+	}
 	engine := &Engine{
-		Provider: stubProvider{episodes: want, episodeCalls: &calls},
+		Provider: episodesStub(want, nil, &calls),
 		Store:    st,
 	}
 
@@ -537,8 +670,8 @@ func TestEpisodesFreshBypassesCacheAndSavesResult(t *testing.T) {
 
 func TestCatalogCachedStaleFallback(t *testing.T) {
 	cached := []provider.TitleCard{
-		{TitleRef: provider.TitleRef{Provider: "stub", Slug: "a"}},
-		{TitleRef: provider.TitleRef{Provider: "stub", Slug: "b"}},
+		{TitleRef: provider.TitleRef{Provider: "stub", Slug: "1-a", Name: "A"}},
+		{TitleRef: provider.TitleRef{Provider: "stub", Slug: "2-b", Name: "B"}},
 	}
 	tests := []struct {
 		name        string
@@ -585,7 +718,7 @@ func TestCatalogCachedStaleFallback(t *testing.T) {
 			}
 
 			engine := &Engine{
-				Provider: stubProvider{catalogErr: tt.providerErr},
+				Provider: catalogStub(nil, tt.providerErr),
 				Store:    st,
 			}
 			gotCards, gotOffline, gotErr := engine.CatalogCached(t.Context(), provider.CatalogTopSeason)
@@ -608,14 +741,14 @@ func TestCatalogCachedFreshCacheSkipsNetwork(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
-	cached := []provider.TitleCard{{TitleRef: provider.TitleRef{Provider: "stub", Slug: "a"}}}
+	cached := []provider.TitleCard{{TitleRef: provider.TitleRef{Provider: "stub", Slug: "1-a", Name: "A"}}}
 	if err := st.SaveCatalog("stub", provider.CatalogFresh, cached); err != nil {
 		t.Fatalf("save catalog: %v", err)
 	}
 
 	// провайдер із помилкою: якщо його смикнули — тест впаде
 	engine := &Engine{
-		Provider: stubProvider{catalogErr: fmt.Errorf("catalog: %w", errs.ErrProvider)},
+		Provider: catalogStub(nil, fmt.Errorf("catalog: %w", errs.ErrProvider)),
 		Store:    st,
 	}
 	got, offline, err := engine.CatalogCached(t.Context(), provider.CatalogFresh)
@@ -629,8 +762,244 @@ func TestCatalogCachedFreshCacheSkipsNetwork(t *testing.T) {
 
 func testEngine(sources []provider.Source, extractors []extractor.Extractor) *Engine {
 	return &Engine{
-		Provider:   stubProvider{sources: sources},
+		Provider:   sourcesStub(sources),
 		Extractors: extractors,
 		Lib:        &library.Library{},
+	}
+}
+
+// ---- 2.2: hints/with, Begin/Run/Finish, memo, фільтр потоків ----
+
+func TestResolveWithHintsMatchesResolve(t *testing.T) {
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Ref Name"}
+	playableEmbed := "https://handled.invalid/embed"
+	engine := testEngine(
+		[]provider.Source{
+			{Studio: "X", Kind: provider.KindDub, Embed: playableEmbed, Episode: 1},
+			{Studio: "Y", Kind: provider.KindVoiceover, Embed: playableEmbed, Episode: 1},
+		},
+		[]extractor.Extractor{stubExtractor{
+			handle:  playableEmbed,
+			streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}},
+		}},
+	)
+	title := engine.Lib.EnsureTitle(ref, func() string { return "title-id" })
+	title.Name = "Local Name"
+	engine.Lib.EntryFor(title.ID).StudioPin = "Y"
+	engine.Lib.RecordPosition(title.ID, 1, 120, 1200, time.Now())
+
+	want, err := engine.Resolve(t.Context(), ref, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	got, err := engine.ResolveWith(t.Context(), ref, 1, engine.ResolveHints(ref, 1), nil)
+	if err != nil {
+		t.Fatalf("ResolveWith: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ResolveWith = %+v, want %+v", got, want)
+	}
+	if want.StartSec != 120 || want.MediaTitle != "Local Name · 1" || want.Source.Studio != "Y" {
+		t.Fatalf("hints not applied: %+v", want)
+	}
+}
+
+func TestBeginWithoutPlayerLeavesLibraryUntouched(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
+	lib := &library.Library{}
+	engine := &Engine{Store: st, Lib: lib}
+	before := *lib
+
+	_, _, err = engine.Begin(&Resolved{Ref: ref, Episode: 1})
+	if !errors.Is(err, errs.ErrNoPlayer) {
+		t.Fatalf("Begin error = %v, очікував ErrNoPlayer", err)
+	}
+	if !reflect.DeepEqual(before, *lib) {
+		t.Fatalf("Begin змінив бібліотеку: %+v, було %+v", *lib, before)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "library.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("library.json мав бути відсутній, Stat error = %v", err)
+	}
+}
+
+func TestBeginRunFinishMatchesPlay(t *testing.T) {
+	sequence, sequenceTitle := engineWithProgress(t, player.EndEOF)
+	titleID, pinned, err := sequence.Begin(testResolved(sequenceTitle.Sources[0]))
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	reason, err := sequence.Run(t.Context(), testResolved(sequenceTitle.Sources[0]), titleID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got, err := sequence.Finish(reason, titleID, 1)
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	got.PinnedStudio = pinned
+
+	whole, wholeTitle := engineWithProgress(t, player.EndEOF)
+	want, err := whole.Play(t.Context(), testResolved(wholeTitle.Sources[0]))
+	if err != nil {
+		t.Fatalf("Play: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Begin/Run/Finish = %+v, Play = %+v", got, want)
+	}
+	if want.PinnedStudio != "Студія" || !want.Completed {
+		t.Fatalf("Result = %+v, очікував пін студії і completed", want)
+	}
+}
+
+func TestSourcesMemoSkipsSecondFetch(t *testing.T) {
+	calls := 0
+	engine := &Engine{
+		Provider: perEpisodeSourcesStub(
+			[]provider.Source{{Studio: "X", Kind: provider.KindDub, Embed: "https://video.invalid/embed", Episode: 1}},
+			&calls,
+		),
+		Extractors: []extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}}}},
+		Lib:        &library.Library{},
+	}
+	fresh := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Свіжа картка", URL: "https://site.invalid/1-title.html"}
+	stored := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "З бібліотеки"}
+
+	if _, err := engine.Resolve(t.Context(), fresh, 1, nil); err != nil {
+		t.Fatalf("перший Resolve: %v", err)
+	}
+	if _, err := engine.Resolve(t.Context(), stored, 1, nil); err != nil {
+		t.Fatalf("другий Resolve: %v", err)
+	}
+	if _, err := engine.StudioChoices(t.Context(), fresh, 1); err != nil {
+		t.Fatalf("StudioChoices: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("звернень до провайдера = %d, want 1 (Name/URL не входять у ключ memo)", calls)
+	}
+
+	// інша серія — окремий ключ, memo не підмінює її кешем першої
+	if _, err := engine.Resolve(t.Context(), fresh, 2, nil); !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("Resolve серії 2 = %v, очікував ErrNoStream від провайдера", err)
+	}
+	if calls != 2 {
+		t.Fatalf("звернень до провайдера після іншої серії = %d, want 2", calls)
+	}
+
+	// протермінований запис оновлюється мережею
+	engine.sourcesMu.Lock()
+	key := sourceKey{Provider: "stub", Slug: "1-title", Episode: 1}
+	stale := engine.sourcesCache[key]
+	stale.at = time.Now().Add(-sourcesTTL - time.Minute)
+	engine.sourcesCache[key] = stale
+	engine.sourcesMu.Unlock()
+
+	if _, err := engine.Resolve(t.Context(), fresh, 1, nil); err != nil {
+		t.Fatalf("Resolve після TTL: %v", err)
+	}
+	if calls != 3 {
+		t.Fatalf("звернень до провайдера після TTL = %d, want 3", calls)
+	}
+}
+
+func TestResolveRejectsInvalidStreamURL(t *testing.T) {
+	engine := testEngine(
+		[]provider.Source{{Studio: "Студія", Kind: provider.KindDub, Embed: "https://video.invalid/embed", Episode: 1}},
+		[]extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "http://127.0.0.1/x.m3u8"}}}},
+	)
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title"}
+
+	if _, err := engine.Resolve(t.Context(), ref, 1, nil); !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("Resolve error = %v, очікував ErrNoStream", err)
+	}
+	if _, err := engine.ResolveAll(t.Context(), ref, 1); !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("ResolveAll error = %v, очікував ErrNoStream", err)
+	}
+}
+
+func TestResolveAllPreservesOfflineClassification(t *testing.T) {
+	dnsErr := &net.DNSError{Err: "no such host", Name: "video.invalid", IsNotFound: true}
+	engine := testEngine(
+		[]provider.Source{{Embed: "https://video.invalid/embed", Episode: 1}},
+		[]extractor.Extractor{stubExtractor{err: fmt.Errorf("embed: %w", dnsErr)}},
+	)
+
+	candidates, err := engine.ResolveAll(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
+	if len(candidates) != 0 || !errors.Is(err, errs.ErrOffline) {
+		t.Fatalf("ResolveAll = %v, error = %v; очікував ErrOffline", candidates, err)
+	}
+}
+
+func TestResolveAllClassifiesUnsupportedHostAsNoStream(t *testing.T) {
+	engine := testEngine([]provider.Source{{Embed: "https://unsupported.invalid/embed", Episode: 1}}, nil)
+
+	candidates, err := engine.ResolveAll(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
+	if len(candidates) != 0 || !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("ResolveAll = %v, error = %v; очікував ErrNoStream", candidates, err)
+	}
+}
+
+// constantSession — плеєр із незмінною позицією: журнал має бути записаний
+// один раз, а не на кожен тік.
+type constantSession struct {
+	mu       sync.Mutex
+	calls    int
+	end      chan player.EndReason
+	onSample func(n int)
+}
+
+func (s *constantSession) TimePos() (float64, error) {
+	s.mu.Lock()
+	s.calls++
+	n := s.calls
+	s.mu.Unlock()
+	if s.onSample != nil {
+		s.onSample(n)
+	}
+	return 42, nil
+}
+
+func (s *constantSession) Duration() (float64, error)   { return 1200, nil }
+func (s *constantSession) End() <-chan player.EndReason { return s.end }
+func (s *constantSession) Wait() error                  { return nil }
+func (s *constantSession) Close()                       {}
+
+func TestRunSkipsJournalWhenPositionUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	journalPath := filepath.Join(dir, "state", "current.json")
+
+	sess := &constantSession{end: make(chan player.EndReason, 1)}
+	wroteFirst := false
+	sess.onSample = func(n int) {
+		// На третьому семплі запис першого вже завершився: прибираємо файл,
+		// щоб будь-який наступний запис став видимим.
+		switch n {
+		case 3:
+			_, statErr := os.Stat(journalPath)
+			wroteFirst = statErr == nil
+			_ = os.Remove(journalPath)
+		case 10:
+			sess.end <- player.EndQuit
+		}
+	}
+	engine := &Engine{Store: st, Lib: &library.Library{}, Player: fakePlayer{session: sess}, JournalInterval: 2 * time.Millisecond}
+
+	reason, err := engine.Run(t.Context(), &Resolved{Episode: 1}, "title-id")
+	if err != nil || reason != player.EndQuit {
+		t.Fatalf("Run = (%v, %v), очікував EndQuit", reason, err)
+	}
+	if !wroteFirst {
+		t.Fatal("перший семпл не потрапив у журнал")
+	}
+	if _, err := os.Stat(journalPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("журнал перезаписано при незмінній позиції (Stat = %v)", err)
 	}
 }

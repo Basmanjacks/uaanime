@@ -1,6 +1,7 @@
 package player
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +12,9 @@ import (
 type Player interface {
 	ID() string
 	Command(streamURL, mediaTitle string, headers map[string]string, startSec float64) *exec.Cmd
-	Start(streamURL, mediaTitle string, headers map[string]string, startSec float64) (Session, error)
+	// Start приймає ctx, бо піднімає керуючий сокет: очікування має
+	// скасовуватися разом із відтворенням.
+	Start(ctx context.Context, streamURL, mediaTitle string, headers map[string]string, startSec float64) (Session, error)
 }
 
 // Session дає доступ до стану запущеного відеоплеєра.
@@ -28,6 +31,17 @@ var vlcDarwinBundlePaths = []string{
 	filepath.Join(os.Getenv("HOME"), "Applications", "VLC.app", "Contents", "MacOS", "VLC"),
 }
 
+// ByID повертає бекенд за ідентифікатором із конфігу, НЕ перевіряючи, чи він
+// встановлений: --dry-run має друкувати команду й на машині без плеєрів.
+// Нормалізація конфігу вже звузила значення до vlc|mpv, тому все, що не "mpv",
+// — це vlc (плеєр за замовчуванням).
+func ByID(id string) Player {
+	if id == "mpv" {
+		return MPV{}
+	}
+	return VLC{}
+}
+
 // Detect вибирає доступний бекенд. Відсутність плеєрів є штатним результатом:
 // повідомлення для користувача формуватиме вищий шар.
 func Detect(preferred string) (p Player, fallback bool, err error) {
@@ -40,18 +54,18 @@ func Detect(preferred string) (p Player, fallback bool, err error) {
 	switch preferred {
 	case "vlc":
 		if vlcFound {
-			return VLC{}, false, nil
+			return ByID("vlc"), false, nil
 		}
 		if mpvFound {
-			return MPV{}, true, nil
+			return ByID("mpv"), true, nil
 		}
 		return nil, false, nil
 	case "mpv", "":
 		if mpvFound {
-			return MPV{}, false, nil
+			return ByID("mpv"), false, nil
 		}
 		if vlcFound {
-			return VLC{}, true, nil
+			return ByID("vlc"), true, nil
 		}
 		return nil, false, nil
 	}

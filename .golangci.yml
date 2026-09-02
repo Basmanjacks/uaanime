@@ -1,0 +1,14 @@
+# golangci-lint v2 (CI пінить v2.13.2, локально та сама версія).
+# Дефолтний набір (errcheck, govet, ineffassign, staticcheck, unused) плюс три,
+# які ловлять саме наші класи багів:
+#   bodyclose  — незакритий res.Body у мережевому шарі витікає з'єднаннями;
+#   errorlint  — порівняння помилок повз errors.Is ламає класифікацію
+#                offline / provider / no-stream (жорстке правило 6);
+#   gocritic   — типові Go-помилки, які vet не бачить.
+version: "2"
+
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gocritic

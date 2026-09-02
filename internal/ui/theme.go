@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/compat"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // AdaptiveColor прибрано у v2: світлий/темний фон обираємо явно.
@@ -53,6 +54,7 @@ var (
 	styleBrandUA     = lipgloss.NewStyle().Foreground(colAccent)
 	styleBrandRest   = lipgloss.NewStyle().Foreground(colFg)
 	styleSectionName = lipgloss.NewStyle().Foreground(colDim)
+	styleRule        = lipgloss.NewStyle().Foreground(colFaint)
 	styleBadge       = lipgloss.NewStyle().Foreground(colOK)
 	styleCursor      = lipgloss.NewStyle().Foreground(colAccent)
 	styleMatch       = lipgloss.NewStyle().Underline(true)
@@ -60,6 +62,12 @@ var (
 
 // bullet — крапка пагінації; список тримає свою копію приватною.
 const bullet = "•"
+
+const ruleWidth = 40
+
+// На широких терміналах список лишається в читабельній мірі, а не
+// розтягується на весь екран.
+const contentCap = 92
 
 // ellipsis — символ обрізання рядка.
 const ellipsis = "…"
@@ -117,14 +125,14 @@ func searchInputStyles() textinput.Styles {
 // Іконки — звичайний Unicode, без Nerd Font і без емодзі: емодзі займають
 // дві комірки й ламають вирівнювання колонки. За UAANIME_ASCII=1 — чистий ASCII.
 type icons struct {
-	Play, Done, Pending, Search, Cursor, Spark string
+	Play, Done, Pending, Search, Cursor, Spark, Rule string
 }
 
 func themeIcons(ascii bool) icons {
 	if ascii {
-		return icons{Play: ">", Done: "v", Pending: "-", Search: "+", Cursor: ">", Spark: "*"}
+		return icons{Play: ">", Done: "v", Pending: "-", Search: "+", Cursor: ">", Spark: "*", Rule: "-"}
 	}
-	return icons{Play: "▶", Done: "✓", Pending: "·", Search: "+", Cursor: "❯", Spark: "✳"}
+	return icons{Play: "▶", Done: "✓", Pending: "·", Search: "+", Cursor: "❯", Spark: "✳", Rule: "─"}
 }
 
 // padIcon доповнює рядок пробілами до ширини w у комірках терміналу.
@@ -138,7 +146,7 @@ func padIcon(s string, w int) string {
 }
 
 // truncate обрізає рядок до w комірок, лишаючи «…» замість хвоста.
-// Працює з чистим текстом: стилі накладаємо вже після обрізання.
+// ANSI-послідовності не рахуються як видимі комірки й не розриваються.
 func truncate(s string, w int) string {
 	if w <= 0 {
 		return ""
@@ -149,15 +157,5 @@ func truncate(s string, w int) string {
 	if w == 1 {
 		return ellipsis
 	}
-	var b strings.Builder
-	used := 0
-	for _, r := range s {
-		rw := lipgloss.Width(string(r))
-		if used+rw > w-1 {
-			break
-		}
-		b.WriteRune(r)
-		used += rw
-	}
-	return b.String() + ellipsis
+	return ansi.Truncate(s, w, ellipsis)
 }

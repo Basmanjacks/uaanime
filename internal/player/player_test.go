@@ -112,3 +112,24 @@ func writeExecutable(t *testing.T, path string) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 }
+
+func TestByID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		id   string
+		want string
+	}{
+		{id: "mpv", want: "mpv"},
+		{id: "vlc", want: "vlc"},
+		{id: "", want: "vlc"},
+		{id: "smplayer", want: "vlc"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			if got := ByID(tt.id).ID(); got != tt.want {
+				t.Fatalf("ByID(%q).ID() = %q, want %q", tt.id, got, tt.want)
+			}
+		})
+	}
+}

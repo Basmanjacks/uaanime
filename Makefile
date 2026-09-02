@@ -4,7 +4,7 @@ build:
 	go build -o bin/uaanime ./cmd/uaanime
 
 test:
-	go test ./...
+	go test -race ./...
 
 lint:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)

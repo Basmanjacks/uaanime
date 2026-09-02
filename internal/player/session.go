@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -12,6 +11,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Basmanjacks/uaanime/internal/errs"
 )
 
 // EndReason — чому закінчилося відтворення. Це різні сценарії для UI:
@@ -24,11 +25,19 @@ const (
 	EndError EndReason = "error"
 )
 
+// mpvEventGrace — скільки чекати на читача після чистого виходу mpv: подія
+// end-file уже може лежати в сокеті, і вона точніша за запасний EndQuit.
+const mpvEventGrace = 100 * time.Millisecond
+
+// mpvTestArgs — тестовий хук: інтеграційні тести додають сюди --no-config
+// та null-виводи. У продакшн-сигнатурі таких аргументів немає.
+var mpvTestArgs []string
+
 // mpvSession — запущений mpv під контролем через JSON IPC.
 // Шлях сокета не закладає POSIX в API: на Windows це буде named pipe (поза v1).
 type mpvSession struct {
-	cmd  *exec.Cmd
-	sock string
+	*process
+	dir string // приватний каталог сокета, видаляється в Close
 
 	mu        sync.Mutex
 	conn      net.Conn
@@ -37,51 +46,76 @@ type mpvSession struct {
 	readerErr error
 
 	readerDone chan struct{}
-	end        chan EndReason
-	endOnce    sync.Once
 }
 
-func startMPV(streamURL, mediaTitle string, headers map[string]string, startSec float64, extraArgs ...string) (*mpvSession, error) {
-	sock := filepath.Join(os.TempDir(), fmt.Sprintf("uaanime-mpv-%d-%d.sock", os.Getpid(), time.Now().UnixNano()))
-	base := (MPV{}).Command(streamURL, mediaTitle, headers, startSec)
-	args := append([]string{"--input-ipc-server=" + sock}, base.Args[1:]...)
-	// Службові аргументи мають стояти перед URL, який mpv очікує останнім.
-	args = append(args[:len(args)-1], append(append([]string{}, extraArgs...), streamURL)...)
-
-	cmd := exec.Command(base.Path, args...)
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("mpv: %w", err)
-	}
-
-	// mpv створює сокет після старту; чекаємо до 10 с.
-	var conn net.Conn
-	var err error
-	for i := 0; i < 100; i++ {
-		conn, err = net.Dial("unix", sock)
-		if err == nil {
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+func startMPV(ctx context.Context, streamURL, mediaTitle string, headers map[string]string, startSec float64) (*mpvSession, error) {
+	// Сокет живе у власному каталозі 0700: у спільному /tmp будь-який локальний
+	// користувач міг би під'єднатися до IPC і надіслати mpv команду run.
+	dir, err := os.MkdirTemp("", "uaanime-mpv-")
 	if err != nil {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-		return nil, fmt.Errorf("mpv IPC: сокет не з'явився: %w", err)
+		return nil, fmt.Errorf("mpv: тимчасовий каталог: %w: %w", err, errs.ErrPlayer)
 	}
-	return newMPVSession(cmd, sock, conn), nil
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(dir)
+		}
+	}()
+	sock := filepath.Join(dir, "mpv.sock")
+
+	args := append([]string{"--input-ipc-server=" + sock}, mpvArgs(mediaTitle, headers, startSec)...)
+	args = append(args, mpvTestArgs...)
+	cmd := exec.Command("mpv", append(args, streamURL)...)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("mpv: %w: %w", err, errs.ErrPlayer)
+	}
+
+	// Сесія (а з нею і жнець процесу) існує до першої спроби з'єднання:
+	// інакше невдалий dial не мав би кому віддати вбитий процес.
+	s := newMPVSession(cmd, dir)
+	conn, err := dialRetry(ctx, s.done, "unix", sock)
+	if err != nil {
+		s.Close()
+		return nil, fmt.Errorf("mpv IPC: %w", err)
+	}
+	s.attachIPC(conn)
+	ok = true
+	return s, nil
 }
 
-func newMPVSession(cmd *exec.Cmd, sock string, conn net.Conn) *mpvSession {
+func newMPVSession(cmd *exec.Cmd, dir string) *mpvSession {
 	s := &mpvSession{
-		cmd:        cmd,
-		sock:       sock,
-		conn:       conn,
+		dir:        dir,
 		pending:    make(map[int]chan ipcResponse),
 		readerDone: make(chan struct{}),
-		end:        make(chan EndReason, 1),
 	}
-	go s.readLoop()
+	s.process = newProcess(cmd, s.classifyExit)
 	return s
+}
+
+// attachIPC вмикає читача сокета; до цього моменту сесія лише тримає процес.
+func (s *mpvSession) attachIPC(conn net.Conn) {
+	s.mu.Lock()
+	s.conn = conn
+	s.mu.Unlock()
+	go s.readLoop()
+}
+
+// classifyExit — причина завершення за виходом процесу. Після чистого виходу
+// читач має коротке вікно, щоб доставити вже записану подію end-file: вона
+// публікується через той самий endOnce і має пріоритет над запасним EndQuit.
+func (s *mpvSession) classifyExit(waitErr error, closing bool) EndReason {
+	if closing {
+		return EndQuit
+	}
+	select {
+	case <-s.readerDone:
+	case <-time.After(mpvEventGrace):
+	}
+	if waitErr != nil {
+		return EndError
+	}
+	return EndQuit
 }
 
 type ipcResponse struct {
@@ -95,7 +129,10 @@ type ipcResponse struct {
 // readLoop є єдиним читачем сокета: події обробляє одразу, а відповіді
 // передає запиту з відповідним request_id.
 func (s *mpvSession) readLoop() {
-	reader := bufio.NewReader(s.conn)
+	s.mu.Lock()
+	conn := s.conn
+	s.mu.Unlock()
+	reader := bufio.NewReader(conn)
 	defer close(s.readerDone)
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -129,7 +166,7 @@ func (s *mpvSession) request(command ...any) (json.RawMessage, error) {
 	s.mu.Lock()
 	if s.conn == nil {
 		s.mu.Unlock()
-		return nil, errors.New("mpv IPC: сесію закрито")
+		return nil, fmt.Errorf("mpv IPC: сесію закрито: %w", errs.ErrPlayer)
 	}
 	s.nextID++
 	id := s.nextID
@@ -145,10 +182,10 @@ func (s *mpvSession) request(command ...any) (json.RawMessage, error) {
 
 	req, err := json.Marshal(map[string]any{"command": command, "request_id": id})
 	if err != nil {
-		return nil, fmt.Errorf("mpv IPC: побудова запиту: %w", err)
+		return nil, fmt.Errorf("mpv IPC: побудова запиту: %w: %w", err, errs.ErrPlayer)
 	}
 	if _, err := conn.Write(append(req, '\n')); err != nil {
-		return nil, fmt.Errorf("mpv IPC: запис: %w", err)
+		return nil, fmt.Errorf("mpv IPC: запис: %w: %w", err, errs.ErrPlayer)
 	}
 
 	timer := time.NewTimer(5 * time.Second)
@@ -156,13 +193,13 @@ func (s *mpvSession) request(command ...any) (json.RawMessage, error) {
 	select {
 	case result := <-response:
 		if result.Error != "success" {
-			return nil, fmt.Errorf("mpv IPC: %s", result.Error)
+			return nil, fmt.Errorf("mpv IPC: %s: %w", result.Error, errs.ErrPlayer)
 		}
 		return result.Data, nil
 	case <-s.readerDone:
 		return nil, s.readerFailure()
 	case <-timer.C:
-		return nil, fmt.Errorf("mpv IPC: тайм-аут запиту: %w", context.DeadlineExceeded)
+		return nil, fmt.Errorf("mpv IPC: тайм-аут запиту: %w: %w", context.DeadlineExceeded, errs.ErrPlayer)
 	}
 }
 
@@ -170,9 +207,9 @@ func (s *mpvSession) readerFailure() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.readerErr == nil {
-		return errors.New("mpv IPC: читач зупинився")
+		return fmt.Errorf("mpv IPC: читач зупинився: %w", errs.ErrPlayer)
 	}
-	return fmt.Errorf("mpv IPC: читання: %w", s.readerErr)
+	return fmt.Errorf("mpv IPC: читання: %w: %w", s.readerErr, errs.ErrPlayer)
 }
 
 func (s *mpvSession) handleEvent(response ipcResponse) {
@@ -186,7 +223,7 @@ func (s *mpvSession) handleEvent(response ipcResponse) {
 	case "quit", "stop":
 		reason = EndQuit
 	}
-	s.endOnce.Do(func() { s.end <- reason })
+	s.publish(reason)
 }
 
 // floatProperty: mpv віддає time-pos/duration як число або як помилку,
@@ -198,7 +235,7 @@ func (s *mpvSession) floatProperty(name string) (float64, error) {
 	}
 	var value float64
 	if err := json.Unmarshal(data, &value); err != nil {
-		return 0, fmt.Errorf("mpv IPC: %s: %w", name, err)
+		return 0, fmt.Errorf("mpv IPC: %s: %w: %w", name, err, errs.ErrPlayer)
 	}
 	return value, nil
 }
@@ -206,29 +243,8 @@ func (s *mpvSession) floatProperty(name string) (float64, error) {
 func (s *mpvSession) TimePos() (float64, error)  { return s.floatProperty("time-pos") }
 func (s *mpvSession) Duration() (float64, error) { return s.floatProperty("duration") }
 
-// End повертає канал, що отримає причину завершення відтворення.
-func (s *mpvSession) End() <-chan EndReason { return s.end }
-
-// Wait чекає завершення mpv. Після чистого виходу читач має коротке вікно,
-// щоб доставити вже записану в сокет подію end-file до запасного EndQuit.
-func (s *mpvSession) Wait() error {
-	if s.cmd == nil {
-		return errors.New("mpv: процес не запущено")
-	}
-	err := s.cmd.Wait()
-	if err != nil {
-		s.endOnce.Do(func() { s.end <- EndError })
-		return err
-	}
-	select {
-	case <-s.readerDone:
-	case <-time.After(100 * time.Millisecond):
-	}
-	s.endOnce.Do(func() { s.end <- EndQuit })
-	return nil
-}
-
-// Close прибирає сесію: закриває сокет, зупиняє mpv, видаляє файл сокета.
+// Close прибирає сесію: закриває сокет (це зупиняє читача), зупиняє mpv і
+// видаляє каталог сокета.
 func (s *mpvSession) Close() {
 	s.mu.Lock()
 	conn := s.conn
@@ -237,9 +253,6 @@ func (s *mpvSession) Close() {
 	if conn != nil {
 		_ = conn.Close()
 	}
-	if s.cmd != nil && s.cmd.Process != nil {
-		_ = s.cmd.Process.Kill()
-		_, _ = s.cmd.Process.Wait()
-	}
-	_ = os.Remove(s.sock)
+	s.process.Close()
+	_ = os.RemoveAll(s.dir)
 }

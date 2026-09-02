@@ -8,6 +8,8 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
+
+	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -119,6 +121,13 @@ func TestHeaderFilterValue(t *testing.T) {
 	if got := (item{title: "Улюблене", header: true}).FilterValue(); got != "\x00" {
 		t.Errorf("FilterValue заголовка = %q", got)
 	}
+	rule := item{title: i18n.TuiBlockCatalog, header: true, rule: true}
+	if got := rule.FilterValue(); got != "\x00" {
+		t.Errorf("FilterValue правила = %q", got)
+	}
+	if got := rule.key(); got != "" {
+		t.Errorf("key правила = %q, want empty", got)
+	}
 	if got := (item{title: "Фрірен"}).FilterValue(); got != "Фрірен" {
 		t.Errorf("FilterValue рядка = %q", got)
 	}
@@ -172,6 +181,58 @@ func TestRenderHeaderVeryNarrow(t *testing.T) {
 	}
 }
 
+func TestRenderRuleFitsWidth(t *testing.T) {
+	for _, width := range []int{9, 12, 20, 40, 80} {
+		t.Run(fmt.Sprintf("width=%d", width), func(t *testing.T) {
+			var buf bytes.Buffer
+			(rowDelegate{ic: themeIcons(false)}).renderHeader(&buf, item{
+				title:  i18n.TuiBlockCatalog,
+				header: true,
+				rule:   true,
+			}, width)
+
+			got := ansi.Strip(buf.String())
+			if gotWidth := lipgloss.Width(got); gotWidth > width {
+				t.Errorf("renderHeader() width = %d, want at most %d (%q)", gotWidth, width, got)
+			}
+			if strings.Contains(got, "\n") {
+				t.Errorf("renderHeader() = %q, want one line", got)
+			}
+			label := strings.ToUpper(i18n.TuiBlockCatalog)
+			wantLabel := label
+			if width == 9 {
+				wantLabel = truncate(label, width-2)
+			}
+			if !strings.Contains(got, wantLabel) {
+				t.Errorf("renderHeader() = %q, want label %q", got, wantLabel)
+			}
+			if width == 80 {
+				want := "  ── КАТАЛОГ ────────────────────────────────────────"
+				if got != want {
+					t.Errorf("renderHeader() = %q, want %q", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestRenderRuleASCII(t *testing.T) {
+	var buf bytes.Buffer
+	(rowDelegate{ic: themeIcons(true)}).renderHeader(&buf, item{
+		title:  i18n.TuiBlockCatalog,
+		header: true,
+		rule:   true,
+	}, 80)
+
+	got := ansi.Strip(buf.String())
+	if !strings.Contains(got, "--") {
+		t.Errorf("renderHeader() = %q, want ASCII rule", got)
+	}
+	if strings.Contains(got, "─") {
+		t.Errorf("renderHeader() = %q, contains Unicode rule", got)
+	}
+}
+
 func TestRenderSpacer(t *testing.T) {
 	for _, twoLine := range []bool{false, true} {
 		t.Run(fmt.Sprintf("twoLine=%v", twoLine), func(t *testing.T) {
@@ -193,21 +254,22 @@ func TestRenderSpacer(t *testing.T) {
 	}
 }
 
-func TestRenderOneLineRightAlignsMetaAndBadge(t *testing.T) {
+func TestRenderOneLineInlineMetaAndBadge(t *testing.T) {
 	const width = 40
-	it := item{icon: "▶", title: "Фрірен", meta: "епізод 12", badge: "нове"}
+	it := item{icon: "▶", title: "Серія 1", meta: "зупинився на 10:13", badge: "нове"}
 	d := rowDelegate{ic: themeIcons(false)}
 	m := list.New([]list.Item{it}, d, width, 10)
 
 	var buf bytes.Buffer
-	d.Render(&buf, m, 0, it)
+	d.Render(&buf, m, 1, it)
 	got := ansi.Strip(buf.String())
 
-	if !strings.HasSuffix(got, "епізод 12 нове") {
-		t.Errorf("Render() = %q, want right cluster at end", got)
+	want := "  " + padIcon(it.icon, iconWidth) + it.title + metaSep + it.meta + " " + it.badge
+	if got != want {
+		t.Errorf("Render() = %q, want %q", got, want)
 	}
-	if gotWidth := lipgloss.Width(got); gotWidth != width {
-		t.Errorf("Render() width = %d, want %d (%q)", gotWidth, width, got)
+	if gotWidth := lipgloss.Width(got); gotWidth > width {
+		t.Errorf("Render() width = %d, want at most %d (%q)", gotWidth, width, got)
 	}
 }
 
@@ -223,9 +285,57 @@ func TestRenderOneLineLongTitleDoesNotOverflow(t *testing.T) {
 	m := list.New([]list.Item{it}, d, width, 10)
 
 	var buf bytes.Buffer
+	d.Render(&buf, m, 1, it)
+	got := ansi.Strip(buf.String())
+	if gotWidth := lipgloss.Width(got); gotWidth > width {
+		t.Errorf("Render() width = %d, want at most %d (%q)", gotWidth, width, got)
+	}
+	if !strings.HasSuffix(got, it.badge) {
+		t.Errorf("Render() = %q, want badge %q at end", got, it.badge)
+	}
+}
+
+func TestRenderOneLineNarrowDropsMetaKeepsBadge(t *testing.T) {
+	const width = 58
+	it := item{
+		icon:  "▶",
+		title: "Переродження: Життя з нуля в іншому світі / Re: Життя в іншому світі з нуля",
+		meta:  "переглядаєш",
+		badge: "+22 нові серії",
+	}
+	d := rowDelegate{ic: themeIcons(false)}
+	m := list.New([]list.Item{it}, d, width, 10)
+
+	var buf bytes.Buffer
 	d.Render(&buf, m, 0, it)
-	if gotWidth := lipgloss.Width(buf.String()); gotWidth > width {
-		t.Errorf("Render() width = %d, want at most %d (%q)", gotWidth, width, ansi.Strip(buf.String()))
+	got := ansi.Strip(buf.String())
+
+	if !strings.Contains(got, it.badge) {
+		t.Errorf("Render() = %q, want badge %q", got, it.badge)
+	}
+	if strings.Contains(got, it.meta) {
+		t.Errorf("Render() = %q, want meta dropped", got)
+	}
+	if gotWidth := lipgloss.Width(got); gotWidth > width {
+		t.Errorf("Render() width = %d, want at most %d (%q)", gotWidth, width, got)
+	}
+	if !strings.Contains(got, ellipsis+" "+it.badge) {
+		t.Errorf("Render() = %q, want truncated title before badge", got)
+	}
+}
+
+func TestRenderOneLineNoMetaBadgeOnly(t *testing.T) {
+	const width = 40
+	it := item{icon: "▶", title: "Серія 2", badge: "переглянуто"}
+	d := rowDelegate{ic: themeIcons(false)}
+	m := list.New([]list.Item{it}, d, width, 10)
+
+	var buf bytes.Buffer
+	d.Render(&buf, m, 1, it)
+	got := ansi.Strip(buf.String())
+	want := "  " + padIcon(it.icon, iconWidth) + it.title + " " + it.badge
+	if got != want {
+		t.Errorf("Render() = %q, want %q", got, want)
 	}
 }
 
