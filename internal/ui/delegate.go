@@ -250,6 +250,16 @@ func (d rowDelegate) renderHeader(w io.Writer, it item, width int) {
 		}
 		return
 	}
+	if it.note {
+		// Довідка (адреса пульта, шлях до даних): без курсора й вибору, як
+		// заголовок, але це текст, а не назва секції — регістр не чіпаємо.
+		out := strings.Repeat(" ", rowIndent) + styleMeta.Render(truncate(it.title, max(0, width-rowIndent)))
+		if d.twoLine {
+			out += "\n"
+		}
+		fmt.Fprint(w, out) //nolint:errcheck
+		return
+	}
 	label := strings.ToUpper(it.title)
 	out := ""
 	if it.rule {

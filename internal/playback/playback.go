@@ -7,13 +7,15 @@
 // послідовно (CLI); асинхронна частина (tea.Cmd, фонові горутини) працює лише
 // з мережею, плеєром і файлом журналу. Кожен метод нижче позначений
 // «sync: торкається Lib» або «async-safe» — за цим маркуванням і треба вибирати,
-// що можна запускати з команди, а що ні.
+// що можна запускати з команди, а що ні. Live (веб-пульт) — окремий випадок:
+// усі його методи async-safe і до Lib не торкаються взагалі.
 package playback
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -38,6 +40,8 @@ type Engine struct {
 	// defaultJournalInterval. Поле, а не пакетна змінна, щоб тести інших
 	// пакетів не чекали 5 с на перший запис журналу.
 	JournalInterval time.Duration
+	// Live — вікно в поточну сесію для веб-пульта; nil, коли пульт вимкнено.
+	Live *Live
 
 	// memo джерел серії; Engine усюди використовується як покажчик
 	sourcesMu    sync.Mutex
@@ -91,7 +95,8 @@ type Resolved struct {
 	Stream      extractor.Stream
 	HostID      string
 	StartSec    float64 // resume-позиція, 0 = з початку
-	MediaTitle  string
+	Name        string  // назва тайтлу без номера серії (для пульта)
+	MediaTitle  string  // Name · Episode — заголовок вікна плеєра
 	// Candidates непорожній, коли на переможному ярусі >1 студії і піна немає:
 	// інтерфейс може спитати один раз і закріпити. Source при цьому вже
 	// детермінований — headless-режим грає без питань.
@@ -175,12 +180,16 @@ type Hints struct {
 	KindPin   provider.Kind
 	StartSec  float64 // resume-позиція, 0 = з початку
 	Name      string
+	// Prefs — знімок глобальних переваг на момент запиту. ResolveWith біжить у
+	// фоні, а Engine.Prefs може змінити екран налаштувань на Update-горутині:
+	// копія в підказках замість читання поля рушія — і гонки немає.
+	Prefs library.Prefs
 }
 
 // ResolveHints знімає з бібліотеки все, що потрібно ResolveWith.
 // sync: читає Lib.
 func (e *Engine) ResolveHints(ref provider.TitleRef, ep int) Hints {
-	h := Hints{Name: ref.Name}
+	h := Hints{Name: ref.Name, Prefs: e.Prefs}
 	title := e.Lib.TitleByRef(ref)
 	if title == nil {
 		return h
@@ -221,7 +230,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 	remaining := sources
 	var failures []error
 	for len(remaining) > 0 {
-		chosen, candidates := library.Pick(remaining, library.Pin{Studio: h.StudioPin, Kind: h.KindPin}, e.Prefs)
+		chosen, candidates := library.Pick(remaining, library.Pin{Studio: h.StudioPin, Kind: h.KindPin}, h.Prefs)
 		if chosen == nil {
 			failures = append(failures, fmt.Errorf("неможливо обрати реліз: %w", errs.ErrProvider))
 			break
@@ -261,6 +270,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			Stream:      streams[0],
 			HostID:      ex.ID(),
 			StartSec:    h.StartSec,
+			Name:        name,
 			MediaTitle:  fmt.Sprintf("%s · %d", name, ep),
 			Candidates:  e.playable(candidates),
 		}, nil
@@ -408,6 +418,42 @@ func (e *Engine) PinStudio(ref provider.TitleRef, studio string) error {
 	return e.Store.SaveLibrary(e.Lib)
 }
 
+// KnownStudios — студії, які вже траплялися: піни бібліотеки та релізи серій
+// із кешу на диску. Джерело для вибору улюбленої студії списком, без вводу тексту.
+// sync: читає Lib.
+func (e *Engine) KnownStudios() []string {
+	seen := map[string]bool{}
+	for _, entry := range e.Lib.Entries {
+		if entry.StudioPin != "" {
+			seen[entry.StudioPin] = true
+		}
+	}
+	if e.Store != nil {
+		for _, t := range e.Lib.Titles {
+			if len(t.Sources) == 0 {
+				continue
+			}
+			eps, _, found := e.Store.LoadEpisodes(t.Sources[0])
+			if !found {
+				continue
+			}
+			for _, ep := range eps {
+				for _, r := range ep.Releases {
+					if r.Studio != "" {
+						seen[r.Studio] = true
+					}
+				}
+			}
+		}
+	}
+	studios := make([]string, 0, len(seen))
+	for s := range seen {
+		studios = append(studios, s)
+	}
+	sort.Strings(studios)
+	return studios
+}
+
 // Bookmark перемикає тайтл у списку запланованого. sync: пише Lib.
 func (e *Engine) Bookmark(ref provider.TitleRef, epCount int) (library.BookmarkResult, error) {
 	title := e.Lib.EnsureTitle(ref, store.NewID)
@@ -442,6 +488,7 @@ type Result struct {
 	Completed    bool
 	PositionSec  float64
 	PinnedStudio string // студія, закріплена цим переглядом ("" — вже була)
+	Intent       Intent // чого попросив веб-пульт: none | next | stop
 }
 
 // Begin — синхронна половина запуску: тайтл, пін студії й стан watching.
@@ -476,6 +523,8 @@ func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player
 		return player.EndError, err
 	}
 	defer sess.Close()
+	e.Live.set(sess, res.Name, res.Episode)
+	defer e.Live.clear()
 
 	ticker := time.NewTicker(e.journalInterval())
 	defer ticker.Stop()
@@ -508,7 +557,8 @@ func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player
 // Finish зливає журнал у бібліотеку й підсумовує сесію. PinnedStudio заповнює
 // викликач із того, що повернув Begin. sync: читає й пише Lib.
 func (e *Engine) Finish(reason player.EndReason, titleID string, ep int) (*Result, error) {
-	out := &Result{Reason: reason}
+	// намір пульта забирається до будь-якого раннього виходу — рівно один раз
+	out := &Result{Reason: reason, Intent: e.Live.takeIntent()}
 	if _, err := e.Store.RecoverJournal(e.Lib); err != nil {
 		return out, err
 	}

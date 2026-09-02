@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -16,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/Basmanjacks/uaanime/internal/errs"
 )
 
 func TestVLCCommandWithoutStart(t *testing.T) {
@@ -121,6 +124,150 @@ func TestVLCSessionFallsBackToCachedValues(t *testing.T) {
 	dur, err := sess.Duration()
 	if err != nil || dur != 80 {
 		t.Fatalf("Duration = (%v, %v), очікував кешоване (80, nil)", dur, err)
+	}
+}
+
+func TestVLCSessionTogglePauseWritesOnceWithoutReply(t *testing.T) {
+	commands := make(chan string, 1)
+	sess, serverDone := startFakeVLCIPC(t, recordVLCCommands(commands, 1))
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- sess.TogglePause() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("TogglePause: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TogglePause завис")
+	}
+	if got := <-commands; got != "pause" {
+		t.Fatalf("команда = %q, очікував pause", got)
+	}
+}
+
+func TestVLCSessionSeekWritesRoundedRelativeCommands(t *testing.T) {
+	commands := make(chan string, 2)
+	sess, serverDone := startFakeVLCIPC(t, recordVLCCommands(commands, 2))
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		if err := sess.Seek(10); err != nil {
+			done <- err
+			return
+		}
+		done <- sess.Seek(-10)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Seek: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Seek завис")
+	}
+
+	if got := <-commands; got != "seek +10" {
+		t.Fatalf("перша команда = %q, очікував seek +10", got)
+	}
+	if got := <-commands; got != "seek -10" {
+		t.Fatalf("друга команда = %q, очікував seek -10", got)
+	}
+}
+
+func TestVLCSessionPausedReadsStatus(t *testing.T) {
+	tests := []struct {
+		name  string
+		state string
+		want  bool
+	}{
+		{name: "на паузі", state: "paused", want: true},
+		{name: "відтворюється", state: "playing", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess, serverDone := startFakeVLCIPC(t, func(conn net.Conn) {
+				scanner := bufio.NewScanner(conn)
+				for scanner.Scan() {
+					if scanner.Text() == "status" {
+						_, _ = fmt.Fprintf(conn, "> ( new input: file:///x )\r\n( audio volume: 0 )\r\n( state %s )\r\n", tt.state)
+					}
+				}
+			})
+			defer func() {
+				sess.Close()
+				<-serverDone
+			}()
+
+			paused, err := sess.Paused()
+			if err != nil || paused != tt.want {
+				t.Fatalf("Paused = (%v, %v), очікував (%v, nil)", paused, err, tt.want)
+			}
+		})
+	}
+}
+
+func TestVLCSessionPausedTimesOutWithoutState(t *testing.T) {
+	oldRequestTimeout, oldAttemptTimeout := vlcRequestTimeout, vlcAttemptTimeout
+	vlcRequestTimeout = 150 * time.Millisecond
+	vlcAttemptTimeout = 30 * time.Millisecond
+	t.Cleanup(func() {
+		vlcRequestTimeout = oldRequestTimeout
+		vlcAttemptTimeout = oldAttemptTimeout
+	})
+
+	sess, serverDone := startFakeVLCIPC(t, func(conn net.Conn) {
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			_, _ = fmt.Fprint(conn, "> ")
+		}
+	})
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	_, err := sess.Paused()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Paused error = %v, очікував context.DeadlineExceeded", err)
+	}
+}
+
+func TestVLCSessionControlsFailAfterClose(t *testing.T) {
+	sess, serverDone := startFakeVLCIPC(t, func(conn net.Conn) {
+		_, _ = io.Copy(io.Discard, conn)
+	})
+	sess.Close()
+	<-serverDone
+
+	if err := sess.TogglePause(); !errors.Is(err, errs.ErrPlayer) {
+		t.Errorf("TogglePause error = %v, очікував ErrPlayer", err)
+	}
+	if _, err := sess.Paused(); !errors.Is(err, errs.ErrPlayer) {
+		t.Errorf("Paused error = %v, очікував ErrPlayer", err)
+	}
+	if err := sess.Seek(1); !errors.Is(err, errs.ErrPlayer) {
+		t.Errorf("Seek error = %v, очікував ErrPlayer", err)
+	}
+}
+
+func recordVLCCommands(commands chan<- string, count int) func(net.Conn) {
+	return func(conn net.Conn) {
+		scanner := bufio.NewScanner(conn)
+		for i := 0; i < count && scanner.Scan(); i++ {
+			commands <- scanner.Text()
+			_, _ = fmt.Fprint(conn, "> ")
+		}
+		_, _ = io.Copy(io.Discard, conn)
 	}
 }
 

@@ -46,6 +46,7 @@ var (
 	styleRow         = lipgloss.NewStyle().Foreground(colFg)
 	styleRowSel      = lipgloss.NewStyle().Foreground(colFgBright)
 	styleMeta        = lipgloss.NewStyle().Foreground(colDim)
+	styleRemote      = lipgloss.NewStyle().Foreground(colDim).Padding(0, 0, 0, 2)
 	styleMetaSel     = lipgloss.NewStyle().Foreground(colFg)
 	styleMetaSep     = lipgloss.NewStyle().Foreground(colFaint)
 	styleMetaKey     = lipgloss.NewStyle().Foreground(colFg)
@@ -125,14 +126,15 @@ func searchInputStyles() textinput.Styles {
 // Іконки — звичайний Unicode, без Nerd Font і без емодзі: емодзі займають
 // дві комірки й ламають вирівнювання колонки. За UAANIME_ASCII=1 — чистий ASCII.
 type icons struct {
-	Play, Done, Pending, Search, Cursor, Spark, Rule string
+	Play, Done, Pending, Search, Cursor, Spark, Rule, Settings string
 }
 
+// Settings — U+2699 без VS16: із селектором емодзі це гарантовані дві комірки.
 func themeIcons(ascii bool) icons {
 	if ascii {
-		return icons{Play: ">", Done: "v", Pending: "-", Search: "+", Cursor: ">", Spark: "*", Rule: "-"}
+		return icons{Play: ">", Done: "v", Pending: "-", Search: "+", Cursor: ">", Spark: "*", Rule: "-", Settings: "*"}
 	}
-	return icons{Play: "▶", Done: "✓", Pending: "·", Search: "+", Cursor: "❯", Spark: "✳", Rule: "─"}
+	return icons{Play: "▶", Done: "✓", Pending: "·", Search: "+", Cursor: "❯", Spark: "✳", Rule: "─", Settings: "⚙"}
 }
 
 // padIcon доповнює рядок пробілами до ширини w у комірках терміналу.

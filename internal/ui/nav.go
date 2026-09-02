@@ -132,7 +132,7 @@ func (m *Model) setScreen(s screen) {
 	m.list.ResetFilter()
 	// Домівка — це секції з дій, а не однорідний список; «/» там означає
 	// «шукати нове», тому вбудований фільтр вимкнено.
-	m.list.SetFilteringEnabled(s != screenHome)
+	m.list.SetFilteringEnabled(s != screenHome && s != screenSettings && s != screenSettingValue)
 	m.relayout()
 }
 

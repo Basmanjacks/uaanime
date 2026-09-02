@@ -75,6 +75,7 @@ func (m *Model) showHome() {
 	if len(m.eng.Lib.Progress) > 0 {
 		items = append(items, item{title: i18n.TuiHistoryItem, payload: payloadHistory{}})
 	}
+	items = append(items, item{icon: m.ic.Settings, title: i18n.TuiSettingsItem, payload: payloadSettings{}})
 
 	items = append(items, m.catalogRows()...)
 

@@ -57,6 +57,38 @@ func (m Model) updateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "/":
 			// На домівці фільтрувати нічого: «/» — це той самий «Пошук нового».
 			return m.openSearch()
+		case ",":
+			m, _ = m.openSettings()
+			return m, nil
+		}
+
+	case screenSettings:
+		switch key {
+		case "esc":
+			m.back()
+			return m, nil
+		case "enter":
+			return m.openSelected()
+		case "left", "h":
+			m.cycleSetting(-1)
+			return m, nil
+		case "right", "l":
+			m.cycleSetting(1)
+			return m, nil
+		}
+
+	case screenSettingValue:
+		switch key {
+		case "esc":
+			m.back()
+			return m, nil
+		case "enter":
+			if it, ok := m.list.SelectedItem().(item); ok {
+				if p, ok := it.payload.(payloadSettingValue); ok {
+					return m.pickSettingValue(p), nil
+				}
+			}
+			return m, nil
 		}
 
 	case screenSearch:
@@ -223,6 +255,17 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 	case payloadHistory:
 		m.stack = append(m.stack, m.snapshot())
 		m.showHistory()
+		return m, nil
+	case payloadSettings:
+		m, _ = m.openSettings()
+		return m, nil
+	case payloadSetting:
+		if len(m.settingValues(p.id)) < 2 {
+			return m, nil
+		}
+		m.stack = append(m.stack, m.snapshot())
+		m.showSettingValue(p.id)
+		m.errText, m.status = "", ""
 		return m, nil
 	case payloadResume:
 		snap := m.snapshot()

@@ -48,6 +48,8 @@ type mpvSession struct {
 	readerDone chan struct{}
 }
 
+var _ Session = (*mpvSession)(nil)
+
 func startMPV(ctx context.Context, streamURL, mediaTitle string, headers map[string]string, startSec float64) (*mpvSession, error) {
 	// Сокет живе у власному каталозі 0700: у спільному /tmp будь-який локальний
 	// користувач міг би під'єднатися до IPC і надіслати mpv команду run.
@@ -242,6 +244,28 @@ func (s *mpvSession) floatProperty(name string) (float64, error) {
 
 func (s *mpvSession) TimePos() (float64, error)  { return s.floatProperty("time-pos") }
 func (s *mpvSession) Duration() (float64, error) { return s.floatProperty("duration") }
+
+func (s *mpvSession) TogglePause() error {
+	_, err := s.request("cycle", "pause")
+	return err
+}
+
+func (s *mpvSession) Paused() (bool, error) {
+	data, err := s.request("get_property", "pause")
+	if err != nil {
+		return false, err
+	}
+	var paused bool
+	if err := json.Unmarshal(data, &paused); err != nil {
+		return false, fmt.Errorf("mpv IPC: pause: %w: %w", err, errs.ErrPlayer)
+	}
+	return paused, nil
+}
+
+func (s *mpvSession) Seek(deltaSec float64) error {
+	_, err := s.request("seek", deltaSec, "relative")
+	return err
+}
 
 // Close прибирає сесію: закриває сокет (це зупиняє читача), зупиняє mpv і
 // видаляє каталог сокета.

@@ -7,6 +7,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // ---- view ----
@@ -46,6 +47,10 @@ func (m Model) View() tea.View {
 		title = i18n.TuiStudioTitle
 	case screenHistory:
 		title = i18n.TuiHistoryItem
+	case screenSettings:
+		title = i18n.TuiSettingsTitle
+	case screenSettingValue:
+		title = settingTitle(m.settingID)
 	default:
 		title = i18n.TuiAppTitle
 	}
@@ -69,7 +74,11 @@ func (m Model) View() tea.View {
 	if m.screen == screenSearch {
 		body += "  " + m.input.View() + "\n"
 	}
-	if m.screen != screenPlaying {
+	if m.screen == screenPlaying {
+		if line := m.remoteLine(); line != "" {
+			body += line + "\n"
+		}
+	} else {
 		listView := m.list.View()
 		if len(m.list.Items()) == 0 {
 			// Не даємо bubbles показати англійське «No items.» і тримаємо
@@ -85,11 +94,13 @@ func (m Model) View() tea.View {
 		}
 		return s
 	}
+	// Помилки й статуси несуть текст ззовні (шляхи, адреси, відповіді сайту):
+	// чистимо в одному місці замість кожного продюсера.
 	switch {
 	case m.errText != "":
-		body += styleErr.Render(fit(m.errText))
+		body += styleErr.Render(fit(provider.CleanText(m.errText)))
 	case m.status != "":
-		body += styleStatus.Render(fit(m.status))
+		body += styleStatus.Render(fit(provider.CleanText(m.status)))
 	default:
 		body += styleHint.Render(fit(m.hint()))
 	}
@@ -106,6 +117,25 @@ func (m Model) View() tea.View {
 	return v
 }
 
+// remoteLine — адреса пульта на екрані «Грає». Обрізаний URL гірший за
+// жоден (половина токена нікуди не веде), тому у вузькому вікні — лише
+// підказка, де адресу взяти.
+func (m Model) remoteLine() string {
+	if m.remote.URL == "" {
+		return ""
+	}
+	limit := m.w - 2
+	if m.w <= 0 {
+		limit = 0
+	}
+	for _, text := range []string{fmt.Sprintf(i18n.TuiRemote, m.remote.URL), m.remote.URL} {
+		if limit == 0 || lipgloss.Width(text) <= limit {
+			return styleRemote.Render(text)
+		}
+	}
+	return styleRemote.Render(i18n.TuiRemoteNarrow)
+}
+
 func (m Model) hint() string {
 	switch m.screen {
 	case screenSearch:
@@ -116,6 +146,10 @@ func (m Model) hint() string {
 		return i18n.TuiHintStudio
 	case screenHistory:
 		return i18n.TuiHintList
+	case screenSettings:
+		return i18n.TuiHintSettings
+	case screenSettingValue:
+		return i18n.TuiHintSettingsPick
 	default:
 		return i18n.TuiHintHome
 	}

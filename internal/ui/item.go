@@ -14,6 +14,7 @@ type item struct {
 	metaParts  []metaPart
 	badge      string // короткий статус праворуч
 	header     bool   // заголовок секції: не вибирається й не фільтрується
+	note       bool   // довідковий рядок (адреса, шлях): як header, але без UPPERCASE; завжди разом із header
 	spacer     bool   // порожній роздільник; завжди разом із header
 	rule       bool   // підписаний роздільник; завжди разом із header
 	iconAccent bool   // іконка в акцентному кольорі
@@ -50,6 +51,12 @@ func (i item) key() string {
 		return "search"
 	case payloadHistory:
 		return "history"
+	case payloadSettings:
+		return "settings"
+	case payloadSetting:
+		return "setting:" + string(payload.id)
+	case payloadSettingValue:
+		return "value:" + payload.value
 	case payloadMore:
 		return "more"
 	}
@@ -70,4 +77,11 @@ type (
 	payloadHistory struct{}
 	payloadEp      struct{ num int }
 	payloadStudio  struct{ src provider.Source }
+	// екран налаштувань: рядок домівки, рядок налаштування, рядок значення
+	payloadSettings     struct{}
+	payloadSetting      struct{ id settingID }
+	payloadSettingValue struct {
+		id    settingID
+		value string
+	}
 )

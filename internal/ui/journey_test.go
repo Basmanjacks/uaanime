@@ -90,7 +90,7 @@ func journeyModel(t *testing.T, sessions ...*playertest.Session) (Model, *player
 		Autoplay:        true,
 		JournalInterval: time.Millisecond,
 	}
-	m := New(eng)
+	m := New(eng, Options{})
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	return m, fp, st
 }
@@ -393,6 +393,8 @@ func TestJourneyFramesFitWindow(t *testing.T) {
 				playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}),
 				playertest.NewSession(player.EndQuit, []float64{30}, []float64{1440}),
 			)
+			// рядок пульта — частина кадру «Грає», перевіряється на всіх розмірах
+			m.remote.URL = testRemoteURL
 			tr := &trace{}
 			// каталог із Init — домівка з блоками
 			m = pump(t, m, m.Init(), tr)

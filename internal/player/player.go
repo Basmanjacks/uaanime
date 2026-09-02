@@ -21,6 +21,12 @@ type Player interface {
 type Session interface {
 	TimePos() (float64, error)
 	Duration() (float64, error)
+	// TogglePause перемикає паузу: у RC VLC є лише перемикач, тож обидва бекенди
+	// поводяться однаково.
+	TogglePause() error
+	Paused() (bool, error)
+	// Seek зсуває позицію відносно поточної; від'ємне — назад.
+	Seek(deltaSec float64) error
 	End() <-chan EndReason
 	Wait() error
 	Close()
