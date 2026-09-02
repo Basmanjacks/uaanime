@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -86,6 +87,28 @@ func TestMPVSessionPaused(t *testing.T) {
 	}
 	if got := <-commands; got != `["get_property","pause"]` {
 		t.Fatalf("command = %s, очікував get_property pause", got)
+	}
+}
+
+// Відповідь і EOF в одному подиху: mpv відповідає і закриває сокет, тож
+// відповідь уже в каналі, а читач уже зупинився. Обидві гілки select готові
+// разом; без пріоритету відповіді Go обирав «читач зупинився» щодругий раз.
+func TestMPVSessionAwaitPrefersDeliveredResponse(t *testing.T) {
+	sess := newMPVSession(startShell(t, "sleep 30"), t.TempDir())
+	defer sess.Close()
+	close(sess.readerDone)
+	sess.readerErr = io.EOF
+	for i := 0; i < 40; i++ {
+		response := make(chan ipcResponse, 1)
+		response <- ipcResponse{Error: "success", Data: json.RawMessage("true"), RequestID: 1}
+		data, err := sess.await(response, time.Second)
+		if err != nil || string(data) != "true" {
+			t.Fatalf("спроба %d: await = (%s, %v), очікував true", i, data, err)
+		}
+	}
+	// без відповіді — чесна помилка читача, а не тайм-аут
+	if _, err := sess.await(make(chan ipcResponse), time.Second); err == nil || !errors.Is(err, io.EOF) {
+		t.Fatalf("await без відповіді = %v, очікував помилку читача з EOF", err)
 	}
 }
 
