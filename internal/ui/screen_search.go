@@ -28,6 +28,42 @@ func (m *Model) searchRows() []item {
 	return items
 }
 
+// recentRows — секція нещодавніх запитів; показується, поки на екрані немає
+// результатів. Порожня історія не дає ані заголовка, ані порожнього рядка.
+func (m *Model) recentRows() []item {
+	if len(m.searches) == 0 {
+		return nil
+	}
+	items := make([]item, 0, len(m.searches)+1)
+	items = append(items, item{title: i18n.TuiBlockRecent, header: true})
+	for _, q := range m.searches {
+		items = append(items, item{icon: m.ic.Pending, title: q, payload: payloadQuery{q: q}})
+	}
+	return items
+}
+
+// loadSearches читає історію з диска. Синхронно на горутині Update — той самий
+// клас, що LoadEpisodes у bookmarkSelected: файл крихітний, а фонова команда
+// повернула б список уже після того, як людина почала друкувати.
+func (m *Model) loadSearches() {
+	if m.eng == nil || m.eng.Store == nil {
+		m.searches = nil
+		return
+	}
+	m.searches = m.eng.Store.LoadSearches()
+}
+
+// rememberSearch кладе успішний запит в історію. Помилка запису не має
+// перебивати результати пошуку: історія — зручність, а не дані перегляду.
+func (m *Model) rememberSearch(q string) {
+	if m.eng == nil || m.eng.Store == nil {
+		return
+	}
+	if list, err := m.eng.Store.AddSearch(q); err == nil {
+		m.searches = list
+	}
+}
+
 func (m *Model) titleStateBadge(ref provider.TitleRef) string {
 	title := m.eng.Lib.TitleByRef(ref)
 	if title == nil {
@@ -50,8 +86,11 @@ func (m *Model) applySearchPage(msg searchDoneMsg) tea.Cmd {
 			m.hasMore = false
 			m.setDelegate(false)
 			m.status = i18n.TuiNothingFound
-			return m.setItems(nil, 0)
+			// Запит без результатів не запам'ятовуємо: повторювати його немає сенсу.
+			rows := m.recentRows()
+			return m.setItems(rows, firstRow(rows))
 		}
+		m.rememberSearch(m.query)
 		m.setDelegate(true)
 		return m.setItems(m.searchRows(), 0)
 	}

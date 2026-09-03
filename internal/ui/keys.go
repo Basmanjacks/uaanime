@@ -94,35 +94,42 @@ func (m Model) updateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case screenSearch:
+		// Поле вводу і список ділять екран, тому фокус передається явно: поки
+		// поле активне, решта клавіш — це текст запиту, а не команди списку.
+		if m.input.Focused() {
+			switch key {
+			case "esc":
+				m.back()
+				return m, nil
+			case "enter":
+				return m.runSearch(m.input.Value())
+			case "down", "tab":
+				if m.selectFirstRow() {
+					m.input.Blur()
+					return m, nil
+				}
+			}
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			return m, cmd
+		}
 		switch key {
 		case "esc":
 			m.back()
 			return m, nil
 		case "enter":
-			// Enter у полі вводу — шукати; Enter на результаті — відкрити
-			if m.input.Focused() {
-				q := m.input.Value()
-				if q == "" {
-					return m, nil
-				}
-				m.input.Blur()
-				m.status = i18n.TuiSearching
-				req := m.beginNav()
-				m.query = q
-				m.page, m.hasMore = 0, false
-				return m, m.searchCmd(q, 1, req)
-			}
 			return m.openSelected()
-		default:
-			if m.input.Focused() {
-				var cmd tea.Cmd
-				m.input, cmd = m.input.Update(msg)
-				return m, cmd
-			}
-			if key == "/" {
-				m.input.SetValue("")
+		case "up":
+			// Вихід угору з першого рядка — назад у поле, зі збереженим запитом:
+			// інакше з рядка історії немає куди повернутись, окрім «/».
+			if i := m.firstRowIndex(); i < 0 || m.list.Index() <= i {
 				return m, m.input.Focus()
 			}
+		case "/":
+			m.input.SetValue("")
+			return m, m.input.Focus()
+		case "x", "X":
+			return m.forgetSelectedQuery()
 		}
 
 	case screenEpisodes, screenHistory:
@@ -271,11 +278,56 @@ func maxEpisodeNumber(episodes []provider.Episode) int {
 	return maximum
 }
 
+// runSearch — єдиний шлях запуску пошуку: Enter у полі й Enter на рядку історії
+// мусять робити те саме, включно зі станом пагінації.
+func (m Model) runSearch(q string) (tea.Model, tea.Cmd) {
+	if q == "" {
+		return m, nil
+	}
+	m.input.SetValue(q)
+	m.input.Blur()
+	m.status = i18n.TuiSearching
+	req := m.beginNav()
+	m.query = q
+	m.page, m.hasMore = 0, false
+	return m, m.searchCmd(q, 1, req)
+}
+
+// forgetSelectedQuery — «x» на рядку історії. На картці результату не робить
+// нічого: там ця мнемоніка нічому не відповідає.
+func (m Model) forgetSelectedQuery() (tea.Model, tea.Cmd) {
+	it, ok := m.list.SelectedItem().(item)
+	if !ok {
+		return m, nil
+	}
+	p, ok := it.payload.(payloadQuery)
+	if !ok {
+		return m, nil
+	}
+	rest, err := m.eng.Store.RemoveSearch(p.q)
+	if err != nil {
+		m.errText = provider.CleanText(err.Error())
+		return m, nil
+	}
+	m.searches = rest
+	rows := m.recentRows()
+	cmd := m.setItems(rows, m.list.Index())
+	if len(rows) == 0 {
+		// Списку більше немає — фокус мусить повернутись у поле, інакше клавіші
+		// нікуди не діваються.
+		return m, tea.Batch(cmd, m.input.Focus())
+	}
+	m.skipHeaders(1)
+	return m, cmd
+}
+
 // openSearch — вхід на екран пошуку; спільний для «Пошуку нового» і клавіші «/».
 func (m Model) openSearch() (tea.Model, tea.Cmd) {
 	m.stack = append(m.stack, m.snapshot())
 	m.setScreen(screenSearch)
-	_ = m.setItems(nil, 0)
+	m.loadSearches()
+	rows := m.recentRows()
+	_ = m.setItems(rows, firstRow(rows))
 	m.errText = ""
 	m.status = ""
 	m.query = ""
@@ -293,6 +345,8 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 	switch p := it.payload.(type) {
 	case payloadSearch:
 		return m.openSearch()
+	case payloadQuery:
+		return m.runSearch(p.q)
 	case payloadHistory:
 		m.stack = append(m.stack, m.snapshot())
 		m.showHistory()

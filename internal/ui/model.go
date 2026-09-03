@@ -115,6 +115,10 @@ type Model struct {
 	badges      map[string]int
 	homeSpacers bool
 
+	// searches — нещодавні запити, як їх бачить екран пошуку. Не у view: історія
+	// спільна для всіх кадрів стека, а джерело істини — файл на диску.
+	searches []string
+
 	// Стан активної сесії. titleID і pinned дає Begin на горутині Update:
 	// фонова команда не має права читати бібліотеку, щоб дізнатися їх.
 	playCancel      context.CancelFunc
