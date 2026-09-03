@@ -62,6 +62,83 @@ func TestHomeResumeAlsoAppearsInBookmarks(t *testing.T) {
 	}
 }
 
+// TestHomeContinueRows — «Продовжити» показує кілька тайтлів, найсвіжіший
+// зверху, і зупиняється на homeContinueRows.
+func TestHomeContinueRows(t *testing.T) {
+	m := newTestModel(t)
+	refs := testRefs("continue", 4)
+	seedTestLibrary(&m, refs, library.StateWatching)
+
+	// seedTestHistory дає кожному тайтлу свій час перегляду, зростаючий за
+	// індексом, тому найсвіжіший — останній.
+	want := []string{refs[3].Name, refs[2].Name, refs[1].Name}
+	rows := sectionRows(t, m, i18n.TuiBlockContinue)
+	if len(rows) != len(want) {
+		t.Fatalf("continue rows = %d, want %d", len(rows), len(want))
+	}
+	for i, row := range rows {
+		if !strings.HasPrefix(row.title, want[i]) {
+			t.Errorf("continue row %d = %q, want title %q", i, row.title, want[i])
+		}
+		p, ok := row.payload.(payloadResume)
+		if !ok {
+			t.Fatalf("continue row %d payload = %T, want payloadResume", i, row.payload)
+		}
+		if p.ep != resumeEpisodeFor(t, m, want[i]) {
+			t.Errorf("continue row %d episode = %d", i, p.ep)
+		}
+	}
+
+	// Прихований тайтл зникає з «Продовжити», звільняючи місце наступному.
+	m.eng.Lib.EntryLookup(refs[3].Slug).Hidden = true
+	m.showHome()
+	rows = sectionRows(t, m, i18n.TuiBlockContinue)
+	if len(rows) != 3 {
+		t.Fatalf("continue rows after hiding = %d, want 3", len(rows))
+	}
+	for i, name := range []string{refs[2].Name, refs[1].Name, refs[0].Name} {
+		if !strings.HasPrefix(rows[i].title, name) {
+			t.Errorf("continue row %d after hiding = %q, want title %q", i, rows[i].title, name)
+		}
+	}
+
+	// Прогрес без тайтлу — це запис, для якого немає що продовжувати.
+	m.eng.Lib.Progress = append(m.eng.Lib.Progress, &library.Progress{
+		TitleID:   "ghost",
+		Episode:   7,
+		WatchedAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
+	m.showHome()
+	rows = sectionRows(t, m, i18n.TuiBlockContinue)
+	if len(rows) != 3 {
+		t.Fatalf("continue rows with a title-less progress = %d, want 3", len(rows))
+	}
+	for _, row := range rows {
+		if strings.Contains(row.title, "ghost") {
+			t.Errorf("continue row %q built from a title-less progress record", row.title)
+		}
+	}
+}
+
+// resumeEpisodeFor — яку серію бібліотека пропонує продовжити для тайтлу з
+// такою назвою; тест звіряє з ним номер у рядку.
+func resumeEpisodeFor(t *testing.T, m Model, name string) int {
+	t.Helper()
+
+	for _, title := range m.eng.Lib.Titles {
+		if title.Name != name {
+			continue
+		}
+		ep, _, ok := m.eng.Lib.Resume(title.ID)
+		if !ok {
+			t.Fatalf("library has no resume point for %q", name)
+		}
+		return ep
+	}
+	t.Fatalf("title %q not found", name)
+	return 0
+}
+
 func TestHomeSectionsPresent(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("section", 2)
