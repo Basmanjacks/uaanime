@@ -282,6 +282,81 @@ func TestHomeRouletteEmpty(t *testing.T) {
 	}
 }
 
+func typeTestRunes(t *testing.T, m Model, s string) (Model, tea.Cmd) {
+	t.Helper()
+
+	var cmd tea.Cmd
+	for _, r := range s {
+		m, cmd = pressTestKey(t, m, r, string(r))
+	}
+	return m, cmd
+}
+
+// TestHomeNyaEasterEgg — «ня» на домівці вдягає банер котячим орнаментом, а
+// nyaOffMsg повертає сезонний. Обидві розкладки, бо набирають тією, яка є.
+func TestHomeNyaEasterEgg(t *testing.T) {
+	for _, seq := range []string{"nya", "ня", "NYA"} {
+		t.Run(seq, func(t *testing.T) {
+			m := newTestModel(t)
+			m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+			cat := brandCatOrnament.unicode
+			if strings.Contains(ansi.Strip(m.View().Content), cat) {
+				t.Fatal("home banner shows the cat ornament before the sequence")
+			}
+
+			m, _ = typeTestRunes(t, m, seq)
+			if !m.nya {
+				t.Fatalf("typing %q did not arm the easter egg", seq)
+			}
+			if m.screen != screenHome {
+				t.Fatalf("screen after %q = %d, want home %d", seq, m.screen, screenHome)
+			}
+			if !strings.Contains(ansi.Strip(m.View().Content), cat) {
+				t.Error("home banner does not show the cat ornament")
+			}
+
+			m, _ = updateTestModel(t, m, nyaOffMsg{})
+			if m.nya {
+				t.Error("nyaOffMsg did not disarm the easter egg")
+			}
+			if strings.Contains(ansi.Strip(m.View().Content), cat) {
+				t.Error("home banner still shows the cat ornament after nyaOffMsg")
+			}
+		})
+	}
+}
+
+// TestHomeNyaDoesNotStealKeys — пасхалка лише слухає: клавіші домівки роблять
+// те саме, що робили.
+func TestHomeNyaDoesNotStealKeys(t *testing.T) {
+	m := newTestModel(t)
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	m, _ = typeTestRunes(t, m, "ny")
+	m, _ = pressTestKey(t, m, ',', ",")
+	if m.screen != screenSettings {
+		t.Fatalf("screen after «,» = %d, want settings %d", m.screen, screenSettings)
+	}
+	// Буфер накопичується лише на домівці: «a» з екрана налаштувань не
+	// добудовує послідовність.
+	m, _ = typeTestRunes(t, m, "a")
+	if m.nya {
+		t.Error("easter egg armed from the settings screen")
+	}
+}
+
+// TestEpisodesScreenHasNoEasterEgg — послідовність працює лише на домівці.
+func TestEpisodesScreenHasNoEasterEgg(t *testing.T) {
+	m := newTestModel(t)
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	m.setScreen(screenEpisodes)
+
+	m, _ = typeTestRunes(t, m, "nya")
+	if m.nya || m.easter != "" {
+		t.Errorf("episodes screen recorded the sequence: nya = %t, buffer = %q", m.nya, m.easter)
+	}
+}
+
 func TestHomeSectionsPresent(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("section", 2)

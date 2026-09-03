@@ -3,6 +3,9 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"strings"
+	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -13,9 +16,51 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
+// nyaSequences — на що реагує пасхалка; обидві розкладки, бо «ня» набирають
+// тією, яка зараз увімкнена.
+var nyaSequences = []string{"nya", "ня"}
+
+const (
+	// easterMaxRunes — скільки останніх рун тримаємо. Буфер існує лише щоб
+	// впізнати суфікс, тому росте не далі за найдовшу послідовність із запасом.
+	easterMaxRunes = 8
+	nyaDuration    = 2 * time.Second
+)
+
 func (m Model) updateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
+	// Пасхалка нічого не перехоплює: клавіша лише запам'ятовується й далі йде
+	// звичайним шляхом, інакше «n» на домівці перестало б гортати список.
+	easter := m.noteEaster(key)
+	if easter != nil {
+		model, cmd := m.handleKey(msg, key)
+		return model, tea.Batch(cmd, easter)
+	}
+	return m.handleKey(msg, key)
+}
+
+// noteEaster дописує одно-рунну клавішу з домівки в буфер і повертає команду,
+// яка погасить кота, — або nil, якщо гасити нема чого. Перевіряємо суфікс, а
+// не рівність: послідовність набирають посеред іншого тицяння по списку.
+func (m *Model) noteEaster(key string) tea.Cmd {
+	if m.screen != screenHome || utf8.RuneCountInString(key) != 1 {
+		return nil
+	}
+	m.easter += strings.ToLower(key)
+	if runes := []rune(m.easter); len(runes) > easterMaxRunes {
+		m.easter = string(runes[len(runes)-easterMaxRunes:])
+	}
+	for _, seq := range nyaSequences {
+		if strings.HasSuffix(m.easter, seq) {
+			m.nya = true
+			return tea.Tick(nyaDuration, func(time.Time) tea.Msg { return nyaOffMsg{} })
+		}
+	}
+	return nil
+}
+
+func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m.requestQuit()
 	}
