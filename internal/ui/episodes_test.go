@@ -92,3 +92,21 @@ func TestEpisodesDoneOfflineUsesCacheStatus(t *testing.T) {
 		t.Fatalf("status = %q, want %q", m.status, i18n.MsgOfflineCache)
 	}
 }
+
+// Підказка екрана серій має влазити в мінімальні 80 колонок цілою: обрізане
+// «Esc Назад» — це втрачений вихід із екрана.
+func TestEpisodesHintFitsMinimumWidth(t *testing.T) {
+	m := newTestModel(t)
+	m.ref = testRefs("episodes-hint", 1)[0]
+	m.episodes = testEpisodes(3)
+	m.showEpisodes()
+	m.status, m.errText = "", ""
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+
+	if !strings.Contains(i18n.TuiHintEpisodes, "X ") {
+		t.Fatal("підказка не згадує клавішу x")
+	}
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, i18n.TuiHintEpisodes) {
+		t.Fatalf("підказку обрізано у вікні 80 колонок:\n%s", view)
+	}
+}

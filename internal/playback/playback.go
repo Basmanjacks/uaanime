@@ -472,6 +472,24 @@ func (e *Engine) MarkSeen(ref provider.TitleRef, maxEp int) error {
 	return e.Store.SaveLibrary(e.Lib)
 }
 
+// SetWatched ставить або знімає ручну позначку «переглянуто». sync: пише Lib.
+//
+// Не за зразком MarkSeen: той мовчки нічого не робить без локального тайтлу, а
+// екран серій відкривається з пошуку чи каталогу — тобто ще до того, як тайтл
+// з'явився в бібліотеці. Позначка має працювати з першого разу, тому тайтл
+// створюється так само, як у Begin і Bookmark. Зняття позначки нічого не
+// створює: знімати нема з чого.
+func (e *Engine) SetWatched(ref provider.TitleRef, ep int, watched bool) error {
+	var title *library.LocalTitle
+	if watched {
+		title = e.Lib.EnsureTitle(ref, store.NewID)
+	} else if title = e.Lib.TitleByRef(ref); title == nil {
+		return nil
+	}
+	e.Lib.SetWatched(title.ID, ep, watched, time.Now())
+	return e.Store.SaveLibrary(e.Lib)
+}
+
 // ReconcileKnown зберігає уточнення, лише коли очікувана базова лінія не змінилась.
 // sync: пише Lib.
 func (e *Engine) ReconcileKnown(ref provider.TitleRef, provisional, actual int) error {
