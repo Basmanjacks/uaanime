@@ -1,7 +1,10 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -14,6 +17,7 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/playertest"
+	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
 // playInBackground виконує команду startPlayback (пакет «сесія плеєра + знімок
@@ -196,5 +200,82 @@ func TestPlayingLineShowsVolume(t *testing.T) {
 	}})
 	if plain := ansi.Strip(m.View().Content); strings.Contains(plain, want) {
 		t.Fatalf("невідома гучність не має показуватись:\n%s", plain)
+	}
+}
+
+// «Досидіти й зупинитись» уриває автоплей рівно на одній серії: наступну
+// людина запускає сама, а налаштування лишається недоторканим.
+func TestJourneyStopAfterEndsChainWithoutTouchingConfig(t *testing.T) {
+	dir := t.TempDir()
+	held := playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440})
+	held.Hold = true
+	m, fp, st := journeyModelIn(t, dir,
+		held,
+		playertest.NewSession(player.EndQuit, []float64{30}, []float64{1440}),
+	)
+	m.eng.Live = &playback.Live{}
+	if !m.eng.Autoplay {
+		t.Fatal("сценарій має сенс лише з увімкненим автоплеєм")
+	}
+	// Конфіг на диску — щоб було що звіряти байт-у-байт.
+	if err := st.SaveConfig(store.DefaultConfig()); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	configPath := filepath.Join(dir, "config.json")
+	before, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("config.json: %v", err)
+	}
+	tr := &trace{}
+
+	m, done := startJourneyPlayback(t, m, tr, held)
+	m, _ = updateTestModel(t, m, tea.KeyPressMsg{Code: '.', Text: "."})
+	if m.status != i18n.TuiStopAfterOn {
+		t.Fatalf("статус = %q, want %q", m.status, i18n.TuiStopAfterOn)
+	}
+	if !m.eng.Live.StopAfter() {
+		t.Fatal("«.» не поставила прапорець у Live")
+	}
+	held.Release()
+
+	select {
+	case msg := <-done:
+		m = deliver(t, m, msg, tr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("сесія не завершилась")
+	}
+	mustScreen(t, m, screenEpisodes)
+	if n := len(fp.Starts()); n != 1 {
+		t.Fatalf("запусків плеєра = %d, want 1 (автоплей мав зупинитися)", n)
+	}
+
+	after, err := os.ReadFile(configPath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("config.json змінився (%v):\n%s\n%s", err, before, after)
+	}
+
+	// Ланцюжок зупинено, але не заборонено: Enter стартує наступну серію.
+	selectTestItem(t, &m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 2 })
+	m = press(t, m, tr, tea.KeyEnter, "")
+	mustScreen(t, m, screenEpisodes)
+	starts := fp.Starts()
+	if len(starts) != 2 || !strings.HasSuffix(starts[1].MediaTitle, " · 2") {
+		t.Fatalf("запуски плеєра = %+v, want ручний старт серії 2", starts)
+	}
+}
+
+// Прапорець стосується однієї серії: повторне натискання знімає його.
+func TestStopAfterKeyToggles(t *testing.T) {
+	m := newTestModel(t)
+	m.eng.Live = &playback.Live{}
+	m.screen = screenPlaying
+
+	m, _ = updateTestModel(t, m, tea.KeyPressMsg{Code: '.', Text: "."})
+	if !m.eng.Live.StopAfter() || m.status != i18n.TuiStopAfterOn {
+		t.Fatalf("перше натискання: stopAfter=%v status=%q", m.eng.Live.StopAfter(), m.status)
+	}
+	m, _ = updateTestModel(t, m, tea.KeyPressMsg{Code: '.', Text: "."})
+	if m.eng.Live.StopAfter() || m.status != i18n.TuiStopAfterOff {
+		t.Fatalf("друге натискання: stopAfter=%v status=%q", m.eng.Live.StopAfter(), m.status)
 	}
 }

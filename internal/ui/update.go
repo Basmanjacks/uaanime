@@ -179,13 +179,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
 		// без автоплею, «стоп» уриває ланцюжок навіть з ним
-		chain := false
+		chain, requested := false, 0
 		switch {
 		case m.quitting || err != nil || result.Intent == playback.IntentStop:
+		case result.Intent == playback.IntentPlay:
+			// Адресний запит: ціль названа явно, тому наступну серію не рахуємо.
+			// Ref звіряємо, бо між публікацією списку і запитом ми могли піти на
+			// інший тайтл, і номер серії сам по собі вже нічого не означає.
+			if result.Requested.Ref.Same(m.ref) {
+				requested = result.Requested.Episode
+			}
 		case result.Intent == playback.IntentNext:
 			chain = true
+		case result.StopAfter:
+			// «досидіти й зупинитись» сильніше за автоплей — і тільки за нього
 		case result.Reason == player.EndEOF && m.eng.Autoplay:
 			chain = true
+		}
+		if requested > 0 {
+			req := m.nextReq()
+			m.pendingEp = requested
+			m.status = i18n.TuiResolving
+			return m, m.resolveCmd(m.ref, requested, req, m.eng.ResolveHints(m.ref, requested))
 		}
 		if chain {
 			if next, ok := playback.NextEpisodeNumber(m.episodes, m.pendingEp); ok {

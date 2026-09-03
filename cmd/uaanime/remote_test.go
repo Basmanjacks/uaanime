@@ -565,3 +565,55 @@ func TestStartRemoteIdentitySaveWarning(t *testing.T) {
 	}
 	_ = ln.Close()
 }
+
+// «Досидіти й зупинитись» діє й у headless: прапорець ставить пульт зі своєї
+// горутини, а цикл play не йде за автоплеєм далі.
+// Маршрут пульта з'явиться пізніше — тут його роль грає той самий Live.
+func TestJourneyStopAfterEndsHeadlessChain(t *testing.T) {
+	held := playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440})
+	held.Hold = true
+	dir, _, fp := journeyEnv(t, held, playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}))
+	writeConfig(t, dir, `{"autoplay":"always","remote":"off"}`)
+
+	live := make(chan *playback.Live, 1)
+	saved := newLive
+	newLive = func() *playback.Live {
+		l := &playback.Live{}
+		live <- l
+		return l
+	}
+	t.Cleanup(func() { newLive = saved })
+
+	done := make(chan error, 1)
+	go func() {
+		l := <-live
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			snap, err := l.Snapshot()
+			if err != nil {
+				done <- err
+				return
+			}
+			if snap.Playing {
+				l.SetStopAfter(true)
+				held.Release()
+				done <- nil
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		done <- errors.New("сесія так і не заграла")
+	}()
+
+	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")
+	mustExit(t, 0, code, out, errOut)
+	if err := <-done; err != nil {
+		t.Fatalf("пульт: %v", err)
+	}
+	if n := len(fp.Starts()); n != 1 {
+		t.Fatalf("запусків плеєра = %d, want 1 (ланцюжок мав зупинитися)", n)
+	}
+	if strings.Contains(out, fmt.Sprintf(i18n.MsgResolving, 2)) {
+		t.Fatalf("цикл пішов за наступною серією:\n%s", out)
+	}
+}

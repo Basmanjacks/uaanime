@@ -72,7 +72,14 @@ func journeyProvider() providertest.Stub {
 // фейковим плеєром; вікно 80×24 — мінімальний розмір із брифу.
 func journeyModel(t *testing.T, sessions ...*playertest.Session) (Model, *playertest.Player, *store.Store) {
 	t.Helper()
-	st, err := store.Open(t.TempDir())
+	return journeyModelIn(t, t.TempDir(), sessions...)
+}
+
+// journeyModelIn — те саме, але в заданому каталозі: сценарій, який перевіряє
+// файли на диску, мусить знати, куди дивитися.
+func journeyModelIn(t *testing.T, dir string, sessions ...*playertest.Session) (Model, *playertest.Player, *store.Store) {
+	t.Helper()
+	st, err := store.Open(dir)
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}

@@ -193,6 +193,18 @@ func (m Model) playingKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	live := m.eng.Live
+	if key == "." {
+		// Прапорець живе в Live — спільне джерело істини для TUI і пульта.
+		// Конфіг не чіпаємо: це бажання на цю серію, а не налаштування.
+		on := !live.StopAfter()
+		live.SetStopAfter(on)
+		m.errText = ""
+		m.status = i18n.TuiStopAfterOff
+		if on {
+			m.status = i18n.TuiStopAfterOn
+		}
+		return m, m.liveSnapshotCmd(m.liveGen)
+	}
 	var err error
 	switch key {
 	case "space":
