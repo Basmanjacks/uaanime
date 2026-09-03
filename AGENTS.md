@@ -62,6 +62,7 @@ internal/ui/          bubbletea models and views
 internal/remote/      web remote for the phone: OUR OWN embedded page, not scraping
 internal/i18n/        all user-facing strings
 internal/httpx/       shared HTTP client identity + fixture transport plumbing
+internal/qr/          QR encoder for the remote address (stdlib, byte mode, ECC L, v1–6)
 tools/record/         manual fixture recorder (never in CI)
 docs/               product spec, architecture notes
 ```
