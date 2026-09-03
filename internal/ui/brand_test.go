@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -24,14 +25,74 @@ func TestThemeIcons(t *testing.T) {
 	}
 }
 
+// TestBrandBannerUniformWidth — геометрія банера не залежить ні від сезону, ні
+// від набору символів: brandWidth() вирішує, показувати банер чи fallback, і
+// варіант, ширший за нього, зсунув би рамку всього екрана.
 func TestBrandBannerUniformWidth(t *testing.T) {
-	if len(brandBanner) != 4 {
-		t.Fatalf("brandBanner lines = %d, want 4", len(brandBanner))
+	if len(brandTemplate) != 4 {
+		t.Fatalf("brandTemplate lines = %d, want 4", len(brandTemplate))
 	}
-	w := lipgloss.Width(brandBanner[0])
-	for i, line := range brandBanner[1:] {
-		if got := lipgloss.Width(line); got != w {
-			t.Errorf("brandBanner line %d width = %d, want %d", i+1, got, w)
+	for s := seasonWinter; s <= seasonAutumn; s++ {
+		for _, ascii := range []bool{false, true} {
+			lines := brandVariant(brandOrnaments[s], ascii)
+			if len(lines) != len(brandTemplate) {
+				t.Fatalf("season %d ascii=%t lines = %d, want %d", s, ascii, len(lines), len(brandTemplate))
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(line); got != brandBannerWidth {
+					t.Errorf("season %d ascii=%t line %d width = %d, want %d", s, ascii, i, got, brandBannerWidth)
+				}
+			}
+			if strings.Contains(strings.Join(lines, ""), brandOrnamentMark) {
+				t.Errorf("season %d ascii=%t left an unsubstituted ornament mark", s, ascii)
+			}
+		}
+	}
+}
+
+// TestSeasonFor — межі метеорологічних сезонів; банер міняється разом із ними.
+func TestSeasonFor(t *testing.T) {
+	tests := []struct {
+		date time.Time
+		want season
+	}{
+		{time.Date(2026, time.January, 15, 0, 0, 0, 0, time.UTC), seasonWinter},
+		{time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC), seasonSpring},
+		{time.Date(2026, time.July, 20, 0, 0, 0, 0, time.UTC), seasonSummer},
+		{time.Date(2026, time.October, 31, 0, 0, 0, 0, time.UTC), seasonAutumn},
+		// Грудень — уже зима, вересень — уже осінь.
+		{time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC), seasonWinter},
+		{time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC), seasonAutumn},
+	}
+	for _, tt := range tests {
+		if got := seasonFor(tt.date); got != tt.want {
+			t.Errorf("seasonFor(%s) = %d, want %d", tt.date.Format("2006-01-02"), got, tt.want)
+		}
+	}
+}
+
+// TestBrandBannerSeasonalOrnament — банер бере руну сезону, а в ASCII-режимі
+// не показує Unicode взагалі.
+func TestBrandBannerSeasonalOrnament(t *testing.T) {
+	brandNow = func() time.Time { return time.Date(2026, time.January, 5, 0, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { brandNow = time.Now })
+
+	m := newTestModel(t)
+	top := m.brandBanner()[0]
+	if !strings.Contains(top, brandOrnaments[seasonWinter].unicode) {
+		t.Errorf("winter banner top line = %q, want the winter ornament", top)
+	}
+
+	m.ic = themeIcons(true)
+	top = m.brandBanner()[0]
+	if !strings.Contains(top, brandOrnaments[seasonWinter].ascii) {
+		t.Errorf("ASCII winter banner top line = %q, want the ASCII ornament", top)
+	}
+	for _, line := range m.brandBanner() {
+		for _, r := range line {
+			if r > 127 {
+				t.Fatalf("ASCII banner contains a non-ASCII rune %q in %q", r, line)
+			}
 		}
 	}
 }
@@ -49,7 +110,7 @@ func TestBrandBannerUsesTwoColors(t *testing.T) {
 		t.Fatalf("brand SGR styles = %q and %q, want distinct non-empty sequences", uaSGR, restSGR)
 	}
 
-	for i, want := range brandBanner {
+	for i, want := range m.brandBanner() {
 		if got := strings.TrimPrefix(ansi.Strip(lines[i]), "  "); got != want {
 			t.Errorf("banner line %d text = %q, want %q", i, got, want)
 		}
@@ -107,7 +168,7 @@ func TestHomeBannerRendered(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, brandBanner[2]) {
+	if !strings.Contains(view, m.brandBanner()[2]) {
 		t.Error("home view does not contain brand banner")
 	}
 	if !strings.Contains(view, strings.ToUpper(i18n.TuiTagline)) {
@@ -123,7 +184,7 @@ func TestHomeBannerFallbackNarrow(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 40, Height: 24})
 
 	view := ansi.Strip(m.View().Content)
-	if strings.Contains(view, brandBanner[2]) {
+	if strings.Contains(view, m.brandBanner()[2]) {
 		t.Error("narrow home view contains brand banner")
 	}
 	if !strings.Contains(view, strings.ToUpper(i18n.TuiTaglineShort)) {
@@ -139,7 +200,7 @@ func TestHomeBannerFallbackShort(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 14})
 
 	view := ansi.Strip(m.View().Content)
-	if strings.Contains(view, brandBanner[2]) {
+	if strings.Contains(view, m.brandBanner()[2]) {
 		t.Error("short home view contains brand banner")
 	}
 	if !strings.Contains(view, strings.ToUpper(i18n.TuiTaglineShort)) {
@@ -155,7 +216,7 @@ func TestSearchScreenHasNoBanner(t *testing.T) {
 	m.screen = screenSearch
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	if strings.Contains(ansi.Strip(m.View().Content), brandBanner[2]) {
+	if strings.Contains(ansi.Strip(m.View().Content), m.brandBanner()[2]) {
 		t.Error("search view contains brand banner")
 	}
 }

@@ -431,7 +431,7 @@ func TestJourneyFramesFitWindow(t *testing.T) {
 			check("home")
 			plain := ansi.Strip(m.View().Content)
 			wantBanner := size.w >= brandWidth()+4 && size.h >= brandChromeHeight+brandMinListRows
-			if hasBanner := strings.Contains(plain, strings.TrimSpace(brandBanner[2])); hasBanner != wantBanner {
+			if hasBanner := strings.Contains(plain, strings.TrimSpace(m.brandBanner()[2])); hasBanner != wantBanner {
 				t.Errorf("home: банер=%v, want %v", hasBanner, wantBanner)
 			}
 			if !wantBanner && !strings.Contains(plain, i18n.TuiAppTitle) {

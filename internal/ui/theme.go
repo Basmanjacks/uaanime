@@ -128,12 +128,16 @@ func searchInputStyles() textinput.Styles {
 // дві комірки й ламають вирівнювання колонки. За UAANIME_ASCII=1 — чистий ASCII.
 type icons struct {
 	Play, Done, Pending, Search, Cursor, Spark, Rule, Settings string
+	// ASCII — чи це чистий ASCII-набір. Прапорець потрібен тим, хто малює
+	// власні символи поза цією структурою (орнамент банера): вгадувати режим
+	// за виглядом окремої іконки — це другий, розсинхронізований, детектор.
+	ASCII bool
 }
 
 // Settings — U+2699 без VS16: із селектором емодзі це гарантовані дві комірки.
 func themeIcons(ascii bool) icons {
 	if ascii {
-		return icons{Play: ">", Done: "v", Pending: "-", Search: "+", Cursor: ">", Spark: "*", Rule: "-", Settings: "*"}
+		return icons{Play: ">", Done: "v", Pending: "-", Search: "+", Cursor: ">", Spark: "*", Rule: "-", Settings: "*", ASCII: true}
 	}
 	return icons{Play: "▶", Done: "✓", Pending: "·", Search: "+", Cursor: "❯", Spark: "✳", Rule: "─", Settings: "⚙"}
 }
