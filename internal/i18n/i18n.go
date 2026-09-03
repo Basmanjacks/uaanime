@@ -186,6 +186,7 @@ const (
 	RemoteBack       = "−10 с"
 	RemoteForward    = "+10 с"
 	RemoteNext       = "Наступна серія"
+	RemoteStopAfter  = "Зупинити після цієї"
 	RemoteStop       = "Зупинити"
 	RemoteOffline    = "Немає зв'язку з uaanime"
 )

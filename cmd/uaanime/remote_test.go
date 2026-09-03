@@ -566,43 +566,28 @@ func TestStartRemoteIdentitySaveWarning(t *testing.T) {
 	_ = ln.Close()
 }
 
-// «Досидіти й зупинитись» діє й у headless: прапорець ставить пульт зі своєї
-// горутини, а цикл play не йде за автоплеєм далі.
-// Маршрут пульта з'явиться пізніше — тут його роль грає той самий Live.
+// «Досидіти й зупинитись» діє й у headless: кнопку тисне справжній пульт по
+// HTTP зі своєї горутини, а цикл play після EOF не йде за автоплеєм далі.
 func TestJourneyStopAfterEndsHeadlessChain(t *testing.T) {
+	remoteEnv(t)
 	held := playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440})
 	held.Hold = true
 	dir, _, fp := journeyEnv(t, held, playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}))
-	writeConfig(t, dir, `{"autoplay":"always","remote":"off"}`)
-
-	live := make(chan *playback.Live, 1)
-	saved := newLive
-	newLive = func() *playback.Live {
-		l := &playback.Live{}
-		live <- l
-		return l
-	}
-	t.Cleanup(func() { newLive = saved })
+	writeConfig(t, dir, `{"autoplay":"always","remote":"on"}`)
 
 	done := make(chan error, 1)
 	go func() {
-		l := <-live
-		deadline := time.Now().Add(5 * time.Second)
-		for time.Now().Before(deadline) {
-			snap, err := l.Snapshot()
-			if err != nil {
-				done <- err
-				return
-			}
-			if snap.Playing {
-				l.SetStopAfter(true)
-				held.Release()
-				done <- nil
-				return
-			}
-			time.Sleep(2 * time.Millisecond)
+		st, code, err := remoteCommand(dir, remoteBase(remoteIdentity(t, dir)), "stopafter")
+		// серія має дограти до кінця — інакше перевірятиметься не той сценарій
+		held.Release()
+		switch {
+		case err != nil:
+			done <- err
+		case code != http.StatusOK || !st.StopAfter:
+			done <- fmt.Errorf("POST stopafter = %d %+v", code, st)
+		default:
+			done <- nil
 		}
-		done <- errors.New("сесія так і не заграла")
 	}()
 
 	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")

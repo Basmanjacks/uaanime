@@ -48,6 +48,15 @@ func (c remoteControl) AddVolume(delta float64) error {
 	return mapRemoteErr(c.live.AddVolume(delta))
 }
 
+// ToggleStopAfter перемикає «досидіти цю серію й зупинитись». Прапорець живе в
+// Live, тому TUI і пульт бачать один стан; помилки тут немає навіть коли нічого
+// не грає — Live скидає прапорець на старті наступної сесії, а свіжий Status в
+// ехо-відповіді й так покаже пультові справжній стан.
+func (c remoteControl) ToggleStopAfter() error {
+	c.live.SetStopAfter(!c.live.StopAfter())
+	return nil
+}
+
 func mapRemoteErr(err error) error {
 	if errors.Is(err, playback.ErrNotPlaying) {
 		return fmt.Errorf("%w", remote.ErrNotPlaying)

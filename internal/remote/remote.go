@@ -83,6 +83,9 @@ type Controller interface {
 	Seek(deltaSec float64) error
 	SeekTo(posSec float64) error
 	AddVolume(delta float64) error
+	// ToggleStopAfter — перемикач без аргументу: сторінка не надсилає бажаний
+	// стан, бо між опитуванням і тапом його міг змінити TUI.
+	ToggleStopAfter() error
 	Next() error
 	Stop() error
 }
@@ -253,6 +256,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.onPost(w, r, func() error { return h.ctrl.AddVolume(volumeStep) })
 	case "voldown":
 		h.onPost(w, r, func() error { return h.ctrl.AddVolume(-volumeStep) })
+	case "stopafter":
+		h.onPost(w, r, h.ctrl.ToggleStopAfter)
 	case "next":
 		h.onPost(w, r, h.ctrl.Next)
 	case "stop":
