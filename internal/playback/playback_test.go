@@ -119,6 +119,7 @@ type fakeSession struct {
 	posIndex  int
 	durIndex  int
 	paused    bool
+	volume    float64
 	calls     []sessionCall
 }
 
@@ -162,6 +163,14 @@ func (s *fakeSession) Seek(deltaSec float64) error {
 
 func (s *fakeSession) SeekTo(posSec float64) error {
 	s.calls = append(s.calls, sessionCall{op: "seekto", value: posSec})
+	return nil
+}
+
+func (s *fakeSession) Volume() (float64, error) { return s.volume, nil }
+
+func (s *fakeSession) SetVolume(pct float64) error {
+	s.calls = append(s.calls, sessionCall{op: "volume", value: pct})
+	s.volume = pct
 	return nil
 }
 
@@ -1012,6 +1021,8 @@ func (s *constantSession) Paused() (bool, error) {
 }
 func (s *constantSession) Seek(float64) error           { return nil }
 func (s *constantSession) SeekTo(float64) error         { return nil }
+func (s *constantSession) Volume() (float64, error)     { return 50, nil }
+func (s *constantSession) SetVolume(float64) error      { return nil }
 func (s *constantSession) End() <-chan player.EndReason { return s.end }
 func (s *constantSession) Wait() error                  { return nil }
 func (s *constantSession) Close()                       {}

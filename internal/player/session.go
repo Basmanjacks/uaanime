@@ -289,6 +289,14 @@ func (s *mpvSession) SeekTo(posSec float64) error {
 	return err
 }
 
+// Властивість volume у mpv уже у відсотках, тож перерахунку не треба.
+func (s *mpvSession) Volume() (float64, error) { return s.floatProperty("volume") }
+
+func (s *mpvSession) SetVolume(pct float64) error {
+	_, err := s.request("set_property", "volume", pct)
+	return err
+}
+
 // Close прибирає сесію: закриває сокет (це зупиняє читача), зупиняє mpv і
 // видаляє каталог сокета.
 func (s *mpvSession) Close() {

@@ -31,6 +31,13 @@ type Session interface {
 	// координату, а не зсув, тож перерахунок через Seek дав би зайвий
 	// round-trip і гонку з відтворенням.
 	SeekTo(posSec float64) error
+	// Volume і SetVolume працюють у відсотках 0..100. Відносний крок навмисно
+	// живе вище (playback.Live.AddVolume): у RC VLC "volup N" — це N фіксованих
+	// кроків (≈12.8 із 256), куди відсотки не мапляться, а mpv "add volume" не
+	// тримає стелю сам. Volume може віддати >100: обидва плеєри дозволяють
+	// підсилення понад 100 %.
+	Volume() (float64, error)
+	SetVolume(pct float64) error
 	End() <-chan EndReason
 	Wait() error
 	Close()

@@ -37,6 +37,11 @@ func TestMPVSessionPlaybackControls(t *testing.T) {
 			call:        func(sess *mpvSession) error { return sess.SeekTo(42) },
 			wantCommand: `["seek",42,"absolute"]`,
 		},
+		{
+			name:        "ставить гучність",
+			call:        func(sess *mpvSession) error { return sess.SetVolume(65) },
+			wantCommand: `["set_property","volume",65]`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -92,6 +97,33 @@ func TestMPVSessionPaused(t *testing.T) {
 	}
 	if got := <-commands; got != `["get_property","pause"]` {
 		t.Fatalf("command = %s, очікував get_property pause", got)
+	}
+}
+
+func TestMPVSessionVolume(t *testing.T) {
+	commands := make(chan string, 1)
+	sess, serverDone := startFakeIPC(t, func(conn net.Conn) {
+		var request struct {
+			Command   json.RawMessage `json:"command"`
+			RequestID int             `json:"request_id"`
+		}
+		if err := json.NewDecoder(conn).Decode(&request); err != nil {
+			return
+		}
+		commands <- string(request.Command)
+		_, _ = fmt.Fprintf(conn, `{"data":65,"request_id":%d,"error":"success"}`+"\n", request.RequestID)
+	})
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	volume, err := sess.Volume()
+	if err != nil || volume != 65 {
+		t.Fatalf("Volume = (%v, %v), очікував (65, nil)", volume, err)
+	}
+	if got := <-commands; got != `["get_property","volume"]` {
+		t.Fatalf("command = %s, очікував get_property volume", got)
 	}
 }
 
