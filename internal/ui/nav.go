@@ -218,3 +218,25 @@ func (m *Model) relayout() {
 		m.input.SetWidth(max(1, min(m.w-3-lipgloss.Width(m.input.Prompt), contentCap-2)))
 	}
 }
+
+// firstRowIndex — індекс першого рядка списку, який можна вибрати; −1, якщо
+// вибирати нічого. Разом із selectFirstRow це вся механіка передачі фокуса між
+// полем пошуку і списком.
+func (m *Model) firstRowIndex() int {
+	items := m.list.Items()
+	for i := range items {
+		if !isHeaderAt(items, i) {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *Model) selectFirstRow() bool {
+	i := m.firstRowIndex()
+	if i < 0 {
+		return false
+	}
+	m.list.Select(i)
+	return true
+}

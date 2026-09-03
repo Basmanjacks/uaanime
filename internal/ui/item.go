@@ -49,6 +49,8 @@ func (i item) key() string {
 		}
 	case payloadSearch:
 		return "search"
+	case payloadQuery:
+		return "query:" + payload.q
 	case payloadHistory:
 		return "history"
 	case payloadSettings:
@@ -72,8 +74,10 @@ type (
 		ref     provider.TitleRef
 		epAired int
 	}
-	payloadMore    struct{} // «показати ще» — наступна сторінка результатів
-	payloadSearch  struct{}
+	payloadMore   struct{} // «показати ще» — наступна сторінка результатів
+	payloadSearch struct{}
+	// payloadQuery — рядок нещодавнього запиту на екрані пошуку.
+	payloadQuery   struct{ q string }
 	payloadHistory struct{}
 	payloadEp      struct{ num int }
 	payloadStudio  struct{ src provider.Source }
