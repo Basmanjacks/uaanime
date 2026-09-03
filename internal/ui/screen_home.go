@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"sort"
+	"time"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
@@ -18,22 +20,11 @@ func (m *Model) showHome() {
 	var items []item
 	own := 0 // рядки з власними тайтлами: за ними судимо, чи бібліотека порожня
 
-	// «Продовжити» — тайтл з найсвіжішим прогресом
-	if t, ep, pos := m.latestWatched(); t != nil {
-		at := ""
-		if pos > 0 {
-			at = fmt.Sprintf(i18n.TuiEpAt, int(pos)/60, int(pos)%60)
-		}
-		items = append(items,
-			item{header: true, title: i18n.TuiBlockContinue},
-			item{
-				icon:       m.ic.Play,
-				title:      fmt.Sprintf(i18n.TuiContinuePfx, titleName(t), ep),
-				meta:       at,
-				iconAccent: true,
-				payload:    payloadResume{ref: t.Sources[0], ep: ep},
-			})
-		own++
+	// «Продовжити» — тайтли з найсвіжішим прогресом
+	if rows := m.continueRows(homeContinueRows); len(rows) > 0 {
+		items = append(items, item{header: true, title: i18n.TuiBlockContinue})
+		items = append(items, rows...)
+		own += len(rows)
 	}
 
 	var lib []item
@@ -97,30 +88,66 @@ func sectionGap(items []item, n int, enabled bool) []item {
 	return items
 }
 
-func (m *Model) latestWatched() (*library.LocalTitle, int, float64) {
-	var best *library.Progress
+// watchedAtByTitle — коли кожен тайтл дивилися востаннє. Один прохід журналом
+// на побудову домівки: за цим часом сортуються і «Продовжити», і закладки.
+func (m *Model) watchedAtByTitle() map[string]time.Time {
+	at := make(map[string]time.Time, len(m.eng.Lib.Progress))
 	for _, p := range m.eng.Lib.Progress {
+		if p.WatchedAt.After(at[p.TitleID]) {
+			at[p.TitleID] = p.WatchedAt
+		}
+	}
+	return at
+}
+
+// continueRows — до limit тайтлів, які дивилися найсвіжіше, по одному рядку на
+// тайтл: у «Продовжити» цікава наступна серія, а не історія переглядів.
+func (m *Model) continueRows(limit int) []item {
+	watchedAt := m.watchedAtByTitle()
+	ids := make([]string, 0, len(watchedAt))
+	for id := range watchedAt {
 		// Прибраний із бібліотеки тайтл не висить у «Продовжити»:
 		// прогрес лишається в журналі й повернеться разом із тайтлом.
-		if e := m.eng.Lib.EntryLookup(p.TitleID); e != nil && e.Hidden {
+		if e := m.eng.Lib.EntryLookup(id); e != nil && e.Hidden {
 			continue
 		}
-		if best == nil || p.WatchedAt.After(best.WatchedAt) {
-			best = p
+		ids = append(ids, id)
+	}
+	// ID як другий ключ: обхід мапи випадковий, і без нього тайтли з однаковою
+	// міткою часу мінялися б місцями між кадрами.
+	sort.Slice(ids, func(i, j int) bool {
+		if !watchedAt[ids[i]].Equal(watchedAt[ids[j]]) {
+			return watchedAt[ids[i]].After(watchedAt[ids[j]])
 		}
+		return ids[i] < ids[j]
+	})
+
+	var rows []item
+	for _, id := range ids {
+		if len(rows) == limit {
+			break
+		}
+		t := m.titleByID(id)
+		if t == nil || len(t.Sources) == 0 {
+			continue
+		}
+		ep, pos, ok := m.eng.Lib.Resume(id)
+		if !ok {
+			continue
+		}
+		at := ""
+		if pos > 0 {
+			at = fmt.Sprintf(i18n.TuiEpAt, int(pos)/60, int(pos)%60)
+		}
+		rows = append(rows, item{
+			icon:       m.ic.Play,
+			title:      fmt.Sprintf(i18n.TuiContinuePfx, titleName(t), ep),
+			meta:       at,
+			iconAccent: true,
+			payload:    payloadResume{ref: t.Sources[0], ep: ep},
+		})
 	}
-	if best == nil {
-		return nil, 0, 0
-	}
-	t := m.titleByID(best.TitleID)
-	if t == nil {
-		return nil, 0, 0
-	}
-	ep, pos, ok := m.eng.Lib.Resume(best.TitleID)
-	if !ok {
-		return nil, 0, 0
-	}
-	return t, ep, pos
+	return rows
 }
 
 // catalogRows — блоки каталогу як хвіст домівки: спершу те, що вже дивишся,
