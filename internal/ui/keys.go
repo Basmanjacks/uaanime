@@ -405,6 +405,18 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 	return m, m.input.Focus()
 }
 
+// openTitle — перехід на екран серій тайтлу. Спільний для картки й рулетки:
+// звідки взявся ref, далі вже не має значення.
+func (m Model) openTitle(ref provider.TitleRef) (tea.Model, tea.Cmd) {
+	snap := m.snapshot()
+	req := m.beginNav()
+	m.pending = &snap
+	m.pendingReq = req
+	m.ref = ref
+	m.status = i18n.TuiSearching
+	return m, m.episodesCmd(ref, req, true)
+}
+
 func (m Model) openSelected() (tea.Model, tea.Cmd) {
 	it, ok := m.list.SelectedItem().(item)
 	if !ok || it.header {
@@ -444,13 +456,14 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 			m.resolveCmd(p.ref, p.ep, req, m.eng.ResolveHints(p.ref, p.ep)),
 			m.episodesCmd(p.ref, req, false))
 	case payloadTitle:
-		snap := m.snapshot()
-		req := m.beginNav()
-		m.pending = &snap
-		m.pendingReq = req
-		m.ref = p.ref
-		m.status = i18n.TuiSearching
-		return m, m.episodesCmd(p.ref, req, true)
+		return m.openTitle(p.ref)
+	case payloadRoulette:
+		refs := m.rouletteCandidates()
+		if len(refs) == 0 {
+			m.status = i18n.TuiRouletteEmpty
+			return m, nil
+		}
+		return m.openTitle(refs[m.randN(len(refs))])
 	case payloadMore:
 		// Довантаження — теж навігаційна дія: свій req, старі відповіді летять у смітник.
 		req := m.beginNav()

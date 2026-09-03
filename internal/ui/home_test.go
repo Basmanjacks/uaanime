@@ -173,6 +173,115 @@ func TestHomeBookmarkOrder(t *testing.T) {
 	}
 }
 
+// pressTestRoulette — «Що подивитись?» з домівки: рядок обирається за payload,
+// бо його позиція в секції «Ще» залежить від наявності історії.
+func pressTestRoulette(t *testing.T, m Model) Model {
+	t.Helper()
+
+	selectTestItem(t, &m, func(it item) bool {
+		_, ok := it.payload.(payloadRoulette)
+		return ok
+	})
+	m, _ = pressTestKey(t, m, tea.KeyEnter, "")
+	return m
+}
+
+// TestHomeRouletteRowPlacement — рулетка стоїть одразу за «Пошуком нового»:
+// це той самий жест «не знаю, що далі», лише без набору запиту.
+func TestHomeRouletteRowPlacement(t *testing.T) {
+	m := newTestModel(t)
+	rows := sectionRows(t, m, i18n.TuiBlockMore)
+	if len(rows) < 2 {
+		t.Fatalf("«%s» rows = %d, want at least 2", i18n.TuiBlockMore, len(rows))
+	}
+	if _, ok := rows[0].payload.(payloadSearch); !ok {
+		t.Fatalf("first row payload = %T, want payloadSearch", rows[0].payload)
+	}
+	if _, ok := rows[1].payload.(payloadRoulette); !ok {
+		t.Fatalf("second row payload = %T, want payloadRoulette", rows[1].payload)
+	}
+	if rows[1].title != i18n.TuiRouletteItem {
+		t.Errorf("roulette row title = %q, want %q", rows[1].title, i18n.TuiRouletteItem)
+	}
+}
+
+// TestHomeRoulettePicksPlanned — кандидати рулетки: тільки «у планах» і тільки
+// видимі; вибір іде через шов randN, інакше перевіряти нічого.
+func TestHomeRoulettePicksPlanned(t *testing.T) {
+	m := newTestModel(t)
+	refs := testRefs("roulette", 3)
+	seedTestLibrary(&m, refs, library.StatePlanned)
+	// Прибраний із бібліотеки план рулетці не пропонується.
+	m.eng.Lib.Entries[0].Hidden = true
+	// Каталог є, але поки живі плани — він не потрібен.
+	m.catalog[provider.CatalogTopSeason] = testCards("roulette-cat", 2)
+	m.showHome()
+
+	size := 0
+	m.randN = func(n int) int {
+		size = n
+		return 1
+	}
+	m = pressTestRoulette(t, m)
+
+	if size != 2 {
+		t.Errorf("randN argument = %d, want 2 visible planned titles", size)
+	}
+	if m.ref != refs[2] {
+		t.Errorf("roulette ref = %+v, want %+v", m.ref, refs[2])
+	}
+	if m.status != i18n.TuiSearching {
+		t.Errorf("status = %q, want %q", m.status, i18n.TuiSearching)
+	}
+	if m.pending == nil {
+		t.Error("roulette did not push a stack frame: Esc would have nowhere to return")
+	}
+}
+
+// TestHomeRouletteFallsBackToCatalog — без планів рулетка бере з каталогу:
+// «нема з чого обирати» на порожній бібліотеці — правда, але марна.
+func TestHomeRouletteFallsBackToCatalog(t *testing.T) {
+	m := newTestModel(t)
+	cards := testCards("roulette-fresh", 3)
+	m.catalog[provider.CatalogFresh] = cards
+	m.showHome()
+
+	size := 0
+	m.randN = func(n int) int {
+		size = n
+		return 2
+	}
+	m = pressTestRoulette(t, m)
+
+	if size != len(cards) {
+		t.Errorf("randN argument = %d, want %d catalog cards", size, len(cards))
+	}
+	if m.ref != cards[2].TitleRef {
+		t.Errorf("roulette ref = %+v, want %+v", m.ref, cards[2].TitleRef)
+	}
+}
+
+// TestHomeRouletteEmpty — ні планів, ні каталогу: рядок лишається, але
+// відповідає статусом, а не переходом у нікуди.
+func TestHomeRouletteEmpty(t *testing.T) {
+	m := newTestModel(t)
+	m.randN = func(int) int {
+		t.Fatal("roulette rolled a die with no candidates")
+		return 0
+	}
+	m = pressTestRoulette(t, m)
+
+	if m.status != i18n.TuiRouletteEmpty {
+		t.Errorf("status = %q, want %q", m.status, i18n.TuiRouletteEmpty)
+	}
+	if m.screen != screenHome {
+		t.Errorf("screen = %d, want home %d", m.screen, screenHome)
+	}
+	if m.pending != nil {
+		t.Error("empty roulette pushed a stack frame")
+	}
+}
+
 func TestHomeSectionsPresent(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("section", 2)

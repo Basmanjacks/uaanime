@@ -49,6 +49,8 @@ func (i item) key() string {
 		}
 	case payloadSearch:
 		return "search"
+	case payloadRoulette:
+		return "roulette"
 	case payloadQuery:
 		return "query:" + payload.q
 	case payloadHistory:
@@ -76,6 +78,10 @@ type (
 	}
 	payloadMore   struct{} // «показати ще» — наступна сторінка результатів
 	payloadSearch struct{}
+	// payloadRoulette — «Що подивитись?»: тайтл обирається в момент натискання,
+	// а не при побудові рядка, інакше «випадковий» вибір застигав би до
+	// наступного перемальовування домівки.
+	payloadRoulette struct{}
 	// payloadQuery — рядок нещодавнього запиту на екрані пошуку.
 	payloadQuery   struct{ q string }
 	payloadHistory struct{}

@@ -4,6 +4,7 @@ package ui
 
 import (
 	"context"
+	"math/rand/v2"
 	"os"
 	"slices"
 	"time"
@@ -138,6 +139,9 @@ type Model struct {
 	liveRetries int
 	// now — шов для тестів оцінки часу завершення серії.
 	now func() time.Time
+	// randN — вибір рулетки; шов для тестів, бо інакше «випадково» перевірити
+	// нічого не можна.
+	randN func(n int) int
 	// Налаштування та пульт: cfg — той самий покажчик, що в cmd; remote —
 	// поточна адреса для екрана «Грає» та «Налаштування» ("" = вимкнено).
 	cfg    *store.Config
@@ -198,6 +202,7 @@ func New(eng *playback.Engine, opts Options) Model {
 		remote:  opts.Remote,
 		opts:    opts,
 		now:     time.Now,
+		randN:   rand.IntN,
 	}
 	m.loadCachedCatalog()
 	m.showHome()
