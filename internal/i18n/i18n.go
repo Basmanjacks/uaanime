@@ -72,9 +72,11 @@ const (
 	TuiHintSearch      = "Enter Шукати/відкрити · M Закладка · Esc Назад"
 	// Підказка мусить влазити в 80 колонок цілою: обрізане «Esc Назад» гірше
 	// за незгадану клавішу фільтра, яку список підказує сам.
-	TuiHintEpisodes   = "↑↓ Вибір · Enter Грати · X Переглянуто · S Озвучка · M Закладка · Esc Назад"
-	TuiHintStudio     = "↑↓ Вибір · Enter Закріпити й грати · Esc Назад"
-	TuiStudioPinned   = "озвучка: %s"
+	TuiHintEpisodes = "↑↓ Вибір · Enter Грати · X Переглянуто · S Озвучка · M Закладка · Esc Назад"
+	TuiHintStudio   = "↑↓ Вибір · Enter Закріпити й грати · Esc Назад"
+	TuiStudioPinned = "озвучка: %s"
+	// TuiStudioCoverage — скільки серій тайтлу озвучила студія: «3/12».
+	TuiStudioCoverage = "%d/%d"
 	TuiStudioAuto     = "авто"
 	TuiStudioFallback = "озвучка %s недоступна — грає %s"
 	TuiEmptyLibrary   = "Закладок ще немає — почни з пошуку"
