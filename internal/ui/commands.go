@@ -150,6 +150,49 @@ func (m *Model) badgesCmd() tea.Cmd {
 	}
 }
 
+const (
+	// liveTickInterval — крок оновлення рядка «закінчиться о». Це вже третій
+	// споживач RC-каналу VLC поруч із журналом і пультом, а хвилина на екрані
+	// змінюється рідше, ніж раз на п'ять секунд.
+	liveTickInterval = 5 * time.Second
+	// liveStartRetry / liveStartTries — Live.set стається в Engine.Run уже
+	// ПІСЛЯ Player.Start, тому перший знімок може застати idle. Перепитуємо,
+	// але скінченну кількість разів: плеєр міг і не піднятися.
+	liveStartRetry = time.Second
+	liveStartTries = 10
+)
+
+// liveCmd — знімок сесії для екрана «Грає». Snapshot async-safe і Lib не
+// торкається (правило 10). gen несе покоління сесії: відповідь, що приїхала
+// вже після зміни серії, Update відкидає цілком.
+func (m *Model) liveCmd(gen int, delay time.Duration, periodic bool) tea.Cmd {
+	eng := m.eng
+	// Без вікна в сесію знімок завжди буде порожній: не запускаємо ні цикл,
+	// ні повтори — просто немає рядка.
+	if eng == nil || eng.Live == nil {
+		return nil
+	}
+	take := func() tea.Msg {
+		snap, err := eng.Live.Snapshot()
+		return liveMsg{periodic: periodic, gen: gen, snap: snap, err: err}
+	}
+	if delay == 0 {
+		return take
+	}
+	return tea.Tick(delay, func(time.Time) tea.Msg { return take() })
+}
+
+// liveSnapshotCmd — знімок без затримки: старт сесії й кожна клавіша керування
+// мусять оновити рядок одразу, а не за п'ять секунд.
+func (m *Model) liveSnapshotCmd(gen int) tea.Cmd { return m.liveCmd(gen, 0, false) }
+
+// liveTickCmd — черговий крок періодичного циклу; переозброюється лише з
+// відповіді на попередній тік, тому паралельних циклів не буває.
+func (m *Model) liveTickCmd(gen int) tea.Cmd { return m.liveCmd(gen, liveTickInterval, true) }
+
+// liveRetryCmd — повтор для сесії, якої ще немає (див. liveStartRetry).
+func (m *Model) liveRetryCmd(gen int) tea.Cmd { return m.liveCmd(gen, liveStartRetry, false) }
+
 func (m *Model) playCmd(res *playback.Resolved, titleID string) (tea.Cmd, context.CancelFunc) {
 	eng := m.eng
 	ctx, cancel := context.WithCancel(context.Background())

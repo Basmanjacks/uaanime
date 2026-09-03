@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -66,6 +67,12 @@ func (m Model) View() tea.View {
 		body += "  " + m.input.View() + "\n"
 	}
 	if m.screen == screenPlaying {
+		if line := m.etaLine(); line != "" {
+			if m.w > 0 {
+				line = truncate(line, m.w-2)
+			}
+			body += styleEta.Render(line) + "\n"
+		}
 		if line := m.remoteLine(); line != "" {
 			body += line + "\n"
 		}
@@ -142,6 +149,22 @@ func metaTail(parts []string) string {
 		b.WriteString(styleMeta.Render(part))
 	}
 	return b.String()
+}
+
+// etaLine — коли серія закінчиться при поточній позиції. Без відомої
+// тривалості рядка немає: «закінчиться колись» — не інформація. На паузі час
+// усе одно показується (він перераховується на кожному тіку), але з позначкою,
+// інакше застигла оцінка виглядала б як зависання.
+func (m Model) etaLine() string {
+	if !m.live.Playing || m.live.DurationSec <= 0 {
+		return ""
+	}
+	left := max(m.live.DurationSec-m.live.PositionSec, 0)
+	at := m.now().Add(time.Duration(left * float64(time.Second))).Format("15:04")
+	if m.live.Paused {
+		return fmt.Sprintf(i18n.TuiFinishAtPaused, at)
+	}
+	return fmt.Sprintf(i18n.TuiFinishAt, at)
 }
 
 // remoteLine — адреса пульта на екрані «Грає». Обрізаний URL гірший за

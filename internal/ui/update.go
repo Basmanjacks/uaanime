@@ -168,6 +168,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingBaseline = nil
 		}
 		m.playCancel = nil
+		m.resetLive()
 		// Finish синхронний: журнал зливається в бібліотеку тут, на горутині
 		// Update, а не у фоновій команді.
 		result, err := m.eng.Finish(msg.reason, m.playTitleID, m.pendingEp)
@@ -216,6 +217,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case liveMsg:
+		return m.updateLive(msg)
+
 	case signalMsg:
 		return m.requestQuit()
 	}
@@ -223,6 +227,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// updateLive — єдиний власник періодичного циклу знімків. Правила циклу:
+// відповідь чужого покоління не застосовується взагалі (Snapshot під VLC може
+// висіти секунди, і відповідь попередньої серії переписала б стан нової);
+// цикл переозброюється лише з відповіді тіка, а знімки від клавіш нічого не
+// озброюють — інакше кожне натискання додавало б паралельний цикл.
+func (m Model) updateLive(msg liveMsg) (tea.Model, tea.Cmd) {
+	if msg.gen != m.liveGen {
+		return m, nil
+	}
+	if msg.err == nil {
+		m.live = msg.snap
+	}
+	// Поза сесією нічого не переозброюємо: цикл живе рівно стільки, скільки гра.
+	if m.playCancel == nil {
+		return m, nil
+	}
+	if msg.periodic {
+		return m, m.liveTickCmd(msg.gen)
+	}
+	if msg.err == nil && msg.snap.Playing {
+		if m.liveTicking {
+			return m, nil
+		}
+		m.liveTicking = true
+		return m, m.liveTickCmd(msg.gen)
+	}
+	// Сесії ще немає: Live.set стається після Player.Start. Перепитуємо, поки
+	// вона не з'явиться, але не нескінченно.
+	if m.liveTicking || m.liveRetries >= liveStartTries {
+		return m, nil
+	}
+	m.liveRetries++
+	return m, m.liveRetryCmd(msg.gen)
+}
+
+// resetLive відкриває нове покоління вікна в сесію: усі відповіді Snapshot, що
+// ще летять від попередньої, стають недійсними, а рядок оцінки зникає, поки
+// нова сесія не відповість.
+func (m *Model) resetLive() int {
+	m.liveGen++
+	m.live = playback.Snapshot{}
+	m.liveTicking, m.liveRetries = false, 0
+	return m.liveGen
 }
 
 func (m *Model) applyBookmarkBaseline(msg bookmarkBaselineMsg) {
@@ -260,7 +309,9 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	}
 	cmd, cancel := m.playCmd(res, titleID)
 	m.playCancel = cancel
-	return m, cmd
+	// Знімок замовляється разом із сесією: перша відповідь запускає цикл, а до
+	// неї рядок оцінки просто відсутній.
+	return m, tea.Batch(cmd, m.liveSnapshotCmd(m.resetLive()))
 }
 
 // requestQuit — двофазний вихід. Під час відтворення Ctrl+C і сигнал лише
