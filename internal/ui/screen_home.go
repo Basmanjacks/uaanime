@@ -42,7 +42,8 @@ func (m *Model) showHome() {
 	}
 	items = append(items,
 		item{header: true, title: i18n.TuiBlockMore},
-		item{icon: m.ic.Search, title: i18n.TuiSearchItem, payload: payloadSearch{}})
+		item{icon: m.ic.Search, title: i18n.TuiSearchItem, payload: payloadSearch{}},
+		item{icon: m.ic.Spark, title: i18n.TuiRouletteItem, payload: payloadRoulette{}})
 	if len(m.eng.Lib.Progress) > 0 {
 		items = append(items, item{title: i18n.TuiHistoryItem, payload: payloadHistory{}})
 	}
@@ -184,6 +185,35 @@ func (m *Model) continueRows(limit int) []item {
 		})
 	}
 	return rows
+}
+
+// rouletteCandidates — з чого рулетка тягне тайтл. Спершу «у планах»: це те,
+// що людина відклала собі сама, і саме там вибір найболючіший. Планів немає —
+// беремо картки каталогу, бо «нема з чого обирати» на порожній бібліотеці
+// технічно правда, але як відповідь марна.
+func (m *Model) rouletteCandidates() []provider.TitleRef {
+	var refs []provider.TitleRef
+	for _, e := range m.eng.Lib.Entries {
+		if e.Hidden || e.State != library.StatePlanned {
+			continue
+		}
+		t := m.titleByID(e.TitleID)
+		if t == nil || len(t.Sources) == 0 {
+			continue
+		}
+		refs = append(refs, t.Sources[0])
+	}
+	if len(refs) > 0 {
+		return refs
+	}
+	// Порядок обходу — catalogKinds, а не мапа: випадковість має бути в
+	// randN, а не в порядку ключів, інакше однаковий n давав би різні тайтли.
+	for _, kind := range catalogKinds {
+		for _, c := range m.catalog[kind] {
+			refs = append(refs, c.TitleRef)
+		}
+	}
+	return refs
 }
 
 // catalogRows — блоки каталогу як хвіст домівки: спершу те, що вже дивишся,

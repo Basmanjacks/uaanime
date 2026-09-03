@@ -47,13 +47,17 @@ const (
 	MsgDoctorNever         = "ще ніколи"
 
 	// TUI
-	TuiAppTitle        = "uaanime"
-	TuiTagline         = "Аніме українською · дубляж і субтитри"
-	TuiTaglineShort    = "Аніме українською"
-	TuiSearchTitle     = "Пошук"
-	TuiStudioTitle     = "Хто озвучує? (закріпиться за тайтлом)"
-	TuiContinuePfx     = "%s · серія %d"
-	TuiSearchItem      = "Пошук нового"
+	TuiAppTitle     = "uaanime"
+	TuiTagline      = "Аніме українською · дубляж і субтитри"
+	TuiTaglineShort = "Аніме українською"
+	TuiSearchTitle  = "Пошук"
+	TuiStudioTitle  = "Хто озвучує? (закріпиться за тайтлом)"
+	TuiContinuePfx  = "%s · серія %d"
+	TuiSearchItem   = "Пошук нового"
+	// Рулетка: вибір за людину, коли обирати самому вже несила. Порожній стан
+	// каже, що робити далі, — «нема з чого» без поради читається як поломка.
+	TuiRouletteItem    = "Що подивитись?"
+	TuiRouletteEmpty   = "Немає з чого обирати — додай щось у плани"
 	TuiSearchPrompt    = "назва українською… "
 	TuiEpisodeNo       = "Серія %d"
 	TuiEpDone          = "переглянуто"
