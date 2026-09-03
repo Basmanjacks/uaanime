@@ -24,11 +24,13 @@ const testToken = "0123456789abcdef0123456789abcdef"
 // fakeCtl записує виклики й дає задати помилку. Кожна успішна команда рухає
 // позицію — так тест доводить, що ехо у відповіді свіже, а не з кеша.
 type fakeCtl struct {
-	st     Status
-	stErr  error
-	cmdErr error
-	calls  []string
-	seeks  []float64
+	st      Status
+	stErr   error
+	cmdErr  error
+	calls   []string
+	seeks   []float64
+	seekTos []float64
+	volumes []float64
 }
 
 func (f *fakeCtl) Status() (Status, error) {
@@ -47,6 +49,16 @@ func (f *fakeCtl) Seek(delta float64) error {
 	return f.record("seek")
 }
 
+func (f *fakeCtl) SeekTo(pos float64) error {
+	f.seekTos = append(f.seekTos, pos)
+	return f.record("seekto")
+}
+
+func (f *fakeCtl) AddVolume(delta float64) error {
+	f.volumes = append(f.volumes, delta)
+	return f.record("volume")
+}
+
 func (f *fakeCtl) record(name string) error {
 	f.calls = append(f.calls, name)
 	if f.cmdErr != nil {
@@ -57,7 +69,7 @@ func (f *fakeCtl) record(name string) error {
 }
 
 func playingCtl() *fakeCtl {
-	return &fakeCtl{st: Status{Playing: true, Title: "Фрірен", Episode: 3, PositionSec: 42, DurationSec: 1440}}
+	return &fakeCtl{st: Status{Playing: true, Title: "Фрірен", Episode: 3, PositionSec: 42, DurationSec: 1440, VolumePct: 60}}
 }
 
 func newTestHandler(t *testing.T, c Controller) http.Handler {
@@ -261,7 +273,7 @@ func TestBaseWithTrailingSlashServesPage(t *testing.T) {
 
 func TestGetOnCommandPathIs405(t *testing.T) {
 	h := newTestHandler(t, playingCtl())
-	for _, cmd := range []string{"pause", "back", "forward", "next", "stop"} {
+	for _, cmd := range []string{"pause", "back", "forward", "back30", "forward30", "volup", "voldown", "next", "stop", "seek/42"} {
 		rec := do(t, h, http.MethodGet, base(cmd))
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("GET %s: код %d, очікував 405", cmd, rec.Code)
@@ -290,6 +302,11 @@ func TestEachCommandCallsControllerOnceAndEchoesFreshStatus(t *testing.T) {
 		{"pause", "pause"},
 		{"back", "seek"},
 		{"forward", "seek"},
+		{"back30", "seek"},
+		{"forward30", "seek"},
+		{"volup", "volume"},
+		{"voldown", "volume"},
+		{"seek/42", "seekto"},
 		{"next", "next"},
 		{"stop", "stop"},
 	}
@@ -321,11 +338,111 @@ func TestEachCommandCallsControllerOnceAndEchoesFreshStatus(t *testing.T) {
 func TestSeekDirections(t *testing.T) {
 	c := playingCtl()
 	h := newTestHandler(t, c)
-	do(t, h, http.MethodPost, base("back"))
-	do(t, h, http.MethodPost, base("forward"))
-	want := []float64{-seekStep, seekStep}
-	if len(c.seeks) != len(want) || c.seeks[0] != want[0] || c.seeks[1] != want[1] {
+	for _, cmd := range []string{"back", "forward", "back30", "forward30"} {
+		do(t, h, http.MethodPost, base(cmd))
+	}
+	want := []float64{-seekStep, seekStep, -seekStepLong, seekStepLong}
+	if !sameFloats(c.seeks, want) {
 		t.Fatalf("seeks = %v, очікував %v", c.seeks, want)
+	}
+}
+
+func TestVolumeDirections(t *testing.T) {
+	c := playingCtl()
+	h := newTestHandler(t, c)
+	do(t, h, http.MethodPost, base("volup"))
+	do(t, h, http.MethodPost, base("voldown"))
+	want := []float64{volumeStep, -volumeStep}
+	if !sameFloats(c.volumes, want) {
+		t.Fatalf("volumes = %v, очікував %v", c.volumes, want)
+	}
+}
+
+// Тап по смузі прогресу — єдине число, яке пульт бере з мережі.
+func TestSeekToParsesOnlyDigits(t *testing.T) {
+	c := playingCtl()
+	h := newTestHandler(t, c)
+	for _, tc := range []struct {
+		path string
+		want float64
+	}{
+		{"seek/42", 42},
+		{"seek/0", 0},
+		{"seek/999999", 999999},
+	} {
+		c.seekTos = nil
+		rec := do(t, h, http.MethodPost, base(tc.path))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("POST %s: код %d", tc.path, rec.Code)
+		}
+		if !sameFloats(c.seekTos, []float64{tc.want}) {
+			t.Fatalf("POST %s: seekTos = %v, очікував [%v]", tc.path, c.seekTos, tc.want)
+		}
+	}
+
+	c.seekTos = nil
+	bad := []string{
+		"seek/abc", "seek/1234567", "seek/-30", "seek/+30", "seek/4.2",
+		"seek/", "seek", "seek/42/x", "seek/%2042", "seek/1e3",
+	}
+	for _, p := range bad {
+		rec := do(t, h, http.MethodPost, base(p))
+		if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 {
+			t.Errorf("POST %s: %d %q, очікував 404 без тіла", p, rec.Code, rec.Body.String())
+		}
+	}
+	if len(c.seekTos) != 0 {
+		t.Fatalf("сміття дійшло до контролера: %v", c.seekTos)
+	}
+}
+
+func sameFloats(got, want []float64) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Новий маршрут без захисту від CSRF — це той самий чужий сайт, що керує плеєром.
+func TestCrossOriginPostIsForbiddenOnNewPaths(t *testing.T) {
+	for _, cmd := range []string{"back30", "forward30", "volup", "voldown", "seek/42"} {
+		c := playingCtl()
+		h := newTestHandler(t, c)
+		rec := doReq(t, h, http.MethodPost, base(cmd), lanHost, map[string]string{"Sec-Fetch-Site": "cross-site"})
+		if rec.Code != http.StatusForbidden || rec.Body.Len() != 0 {
+			t.Errorf("POST %s: %d %q, очікував 403 без тіла", cmd, rec.Code, rec.Body.String())
+		}
+		if len(c.calls) != 0 {
+			t.Errorf("POST %s: контролер викликано з чужого origin: %v", cmd, c.calls)
+		}
+	}
+}
+
+// Сторінка розбирає JSON за іменами полів: перейменування чи зникнення поля —
+// це мовчазна поломка пульта, а не помилка компіляції.
+func TestStatusJSONFields(t *testing.T) {
+	h := newTestHandler(t, playingCtl())
+	rec := do(t, h, http.MethodGet, base("status"))
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("розбір: %v (%q)", err, rec.Body.String())
+	}
+	want := []string{
+		"playing", "title", "episode", "position_sec", "duration_sec", "paused",
+		"volume_pct", "stop_after", "playlist_gen",
+	}
+	for _, k := range want {
+		if _, ok := got[k]; !ok {
+			t.Errorf("у Status немає поля %q: %s", k, rec.Body.String())
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("полів %d, очікував %d: %s", len(got), len(want), rec.Body.String())
 	}
 }
 

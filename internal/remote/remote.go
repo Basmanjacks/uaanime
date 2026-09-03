@@ -53,7 +53,19 @@ type Status struct {
 	PositionSec float64 `json:"position_sec"`
 	DurationSec float64 `json:"duration_sec"`
 	Paused      bool    `json:"paused"`
+	// VolumePct — 0..100; VolumeUnknown, коли плеєр не назвав гучність
+	// (нічого не грає або доріжки немає) — 0 там означало б тишу.
+	VolumePct float64 `json:"volume_pct"`
+	StopAfter bool    `json:"stop_after"`
+	// PlaylistGen — покоління списку серій; 0 = списку немає. Сторінка стежить
+	// саме за ним, а не за Episode: поза грою Episode нульовий, а список серій
+	// уже може бути іншим. Наповнює його S19 — поки контролер віддає 0.
+	PlaylistGen int `json:"playlist_gen"`
 }
+
+// VolumeUnknown — гучність недоступна. Дзеркалить playback.VolumeUnknown:
+// remote не імпортує playback, тому константа мусить жити й тут.
+const VolumeUnknown = -1.0
 
 // ErrNotPlaying — команда, коли нічого не грає → 409. Перехідник у cmd/uaanime
 // мапить сюди помилку рушія; remote не імпортує playback.
@@ -69,13 +81,25 @@ type Controller interface {
 	Status() (Status, error) // помилка → 500; idle — не помилка, а Playing:false
 	TogglePause() error
 	Seek(deltaSec float64) error
+	SeekTo(posSec float64) error
+	AddVolume(delta float64) error
 	Next() error
 	Stop() error
 }
 
-// seekStep — секунд. На екрані рівно дві кнопки перемотки, тому крок фіксований
-// і зашитий у шляхи: нуль парсингу вводу з мережі.
-const seekStep = 10
+// Кроки в секундах і відсотках. Кнопкові кроки зашиті у шляхи: нуль парсингу
+// вводу з мережі. Число з мережі приймає лише seek/<секунди> — тап по смузі
+// прогресу інакше не виразити.
+const (
+	seekStep     = 10
+	seekStepLong = 30
+	volumeStep   = 5
+)
+
+// maxSeekDigits — стеля довжини числа в seek/<секунди>. Шість цифр — це 11 діб
+// відео; довше приймати нема сенсу, а обмеження довжини відсікає сміття ще до
+// арифметики.
+const maxSeekDigits = 6
 
 // pathPrefix — усе, що не починається з нього, невидиме для пульта.
 const pathPrefix = "/r/"
@@ -192,7 +216,7 @@ func validToken(t string) bool {
 	return true
 }
 
-// ServeHTTP — свій диспетчер замість ServeMux: маршрутів сім, а ServeMux із
+// ServeHTTP — свій диспетчер замість ServeMux: маршрутів жменя, а ServeMux із
 // методами в шаблонах віддавав би 405 і на невідомий токен, тобто підтверджував
 // би його існування.
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -221,13 +245,46 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.onPost(w, r, func() error { return h.ctrl.Seek(-seekStep) })
 	case "forward":
 		h.onPost(w, r, func() error { return h.ctrl.Seek(seekStep) })
+	case "back30":
+		h.onPost(w, r, func() error { return h.ctrl.Seek(-seekStepLong) })
+	case "forward30":
+		h.onPost(w, r, func() error { return h.ctrl.Seek(seekStepLong) })
+	case "volup":
+		h.onPost(w, r, func() error { return h.ctrl.AddVolume(volumeStep) })
+	case "voldown":
+		h.onPost(w, r, func() error { return h.ctrl.AddVolume(-volumeStep) })
 	case "next":
 		h.onPost(w, r, h.ctrl.Next)
 	case "stop":
 		h.onPost(w, r, h.ctrl.Stop)
 	default:
-		notFound(w)
+		sec, ok := parseSeekTo(suffix)
+		if !ok {
+			notFound(w)
+			return
+		}
+		h.onPost(w, r, func() error { return h.ctrl.SeekTo(sec) })
 	}
+}
+
+// parseSeekTo розбирає суфікс "seek/<секунди>". Парсер власний, а не strconv:
+// той приймає "+42", "-42" і пробіли, а тут має пройти рівно [0-9]{1,6}. Будь-що
+// інше — невідомий шлях, тобто 404, а не 400: 400 підтвердив би сторонньому, що
+// токен угадано і помилка лише в аргументі.
+func parseSeekTo(suffix string) (posSec float64, ok bool) {
+	digits, ok := strings.CutPrefix(suffix, "seek/")
+	if !ok || digits == "" || len(digits) > maxSeekDigits {
+		return 0, false
+	}
+	sec := 0
+	for i := 0; i < len(digits); i++ {
+		c := digits[i]
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		sec = sec*10 + int(c-'0')
+	}
+	return float64(sec), true
 }
 
 // route зводить шлях до суфікса команди: "" — сторінка, "status", "pause"...

@@ -30,13 +30,23 @@ func (c remoteControl) Status() (remote.Status, error) {
 		PositionSec: snap.PositionSec,
 		DurationSec: snap.DurationSec,
 		Paused:      snap.Paused,
+		VolumePct:   snap.VolumePct,
+		StopAfter:   snap.StopAfter,
+		// PlaylistGen лишається нулем («списку немає»), поки плейлист не
+		// з'явиться в Live.
+		PlaylistGen: 0,
 	}, nil
 }
 
 func (c remoteControl) TogglePause() error          { return mapRemoteErr(c.live.TogglePause()) }
 func (c remoteControl) Seek(deltaSec float64) error { return mapRemoteErr(c.live.Seek(deltaSec)) }
+func (c remoteControl) SeekTo(posSec float64) error { return mapRemoteErr(c.live.SeekTo(posSec)) }
 func (c remoteControl) Next() error                 { return mapRemoteErr(c.live.Next()) }
 func (c remoteControl) Stop() error                 { return mapRemoteErr(c.live.Stop()) }
+
+func (c remoteControl) AddVolume(delta float64) error {
+	return mapRemoteErr(c.live.AddVolume(delta))
+}
 
 func mapRemoteErr(err error) error {
 	if errors.Is(err, playback.ErrNotPlaying) {
