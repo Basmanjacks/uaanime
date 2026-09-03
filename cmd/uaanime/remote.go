@@ -9,6 +9,7 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/playback"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 	"github.com/Basmanjacks/uaanime/internal/remote"
 	"github.com/Basmanjacks/uaanime/internal/store"
 	"github.com/Basmanjacks/uaanime/internal/ui"
@@ -56,6 +57,43 @@ func (c remoteControl) ToggleStopAfter() error {
 	c.live.SetStopAfter(!c.live.StopAfter())
 	return nil
 }
+
+// publishPlaylist готує список серій для пульта перед запуском серії. Живе в
+// headless-циклі, який виконується послідовно, тому читання бібліотеки тут
+// безпечне; у Live летять лише значення (правило 10). Список береться з кешу
+// метаданих — мережа тут не привід не заграти серію.
+func publishPlaylist(ctx context.Context, eng *playback.Engine, ref provider.TitleRef, current int) {
+	if eng.Live == nil {
+		return
+	}
+	episodesCtx, cancel := context.WithTimeout(ctx, playlistTimeout)
+	episodes, _, err := eng.EpisodesCached(episodesCtx, ref)
+	cancel()
+	if err != nil || len(episodes) == 0 {
+		eng.Live.ClearPlaylist()
+		return
+	}
+	title := eng.Lib.TitleByRef(ref)
+	name := ref.Name
+	if title != nil && title.Name != "" {
+		name = title.Name
+	}
+	rows := make([]playback.EpisodeInfo, 0, len(episodes))
+	for _, ep := range episodes {
+		row := playback.EpisodeInfo{Number: ep.Number, Current: ep.Number == current}
+		if title != nil {
+			if p := eng.Lib.ProgressFor(title.ID, ep.Number); p != nil {
+				row.Watched, row.PositionSec = p.Completed, p.PositionSec
+			}
+		}
+		rows = append(rows, row)
+	}
+	eng.Live.SetPlaylist(ref, name, rows)
+}
+
+// playlistTimeout — стеля на підтягування списку серій для пульта: список — це
+// зручність, а не умова перегляду.
+const playlistTimeout = 30 * time.Second
 
 func mapRemoteErr(err error) error {
 	if errors.Is(err, playback.ErrNotPlaying) {

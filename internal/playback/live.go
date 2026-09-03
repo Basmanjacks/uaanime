@@ -3,6 +3,7 @@ package playback
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/Basmanjacks/uaanime/internal/player"
@@ -30,6 +31,30 @@ type PlayRequest struct {
 	Gen     int
 	Episode int
 }
+
+// EpisodeInfo — один рядок плейлиста для пульта. Лише значення: пульт не має
+// права ні читати бібліотеку, ні тримати покажчик на її пам'ять (правило 10).
+type EpisodeInfo struct {
+	Number      int
+	Watched     bool
+	PositionSec float64
+	// Current — серія, що зараз грає (або яку щойно запустили).
+	Current bool
+}
+
+// Playlist — опублікований список серій одного тайтлу. Gen 0 означає «списку
+// немає»: пульт не має що показувати, а будь-який запит із таким поколінням
+// застарілий за визначенням.
+type Playlist struct {
+	Gen      int
+	Ref      provider.TitleRef
+	Title    string
+	Episodes []EpisodeInfo
+}
+
+// ErrStalePlaylist — запит із покоління списку, якого вже немає: людина тапнула
+// по списку, що встиг застаріти (тайтл змінився або ми пішли з екрана серій).
+var ErrStalePlaylist = errors.New("список серій застарів")
 
 // VolumeUnknown — гучність недоступна (плеєр не відповів або нічого не грає).
 // Окреме значення, бо 0 — це легітимна тиша.
@@ -63,6 +88,16 @@ type Live struct {
 	intent    Intent
 	requested PlayRequest
 	stopAfter bool
+
+	// playlist — те, що пульт показує списком серій; playlistSeq монотонний і
+	// НЕ скидається при очищенні: інакше наступна публікація віддала б
+	// покоління, яким уже користувався застарілий список у браузері.
+	playlist    Playlist
+	playlistSeq int
+	// requests — поштова скринька на час простою: пульт кладе туди адресний
+	// запит, а забирає його горутина Update. Буфер 1, нове витісняє старе:
+	// значення має лише останній тап.
+	requests chan PlayRequest
 }
 
 // Snapshot читає позицію з сесії ПОЗА м'ютексом: RC-обмін VLC може тривати
@@ -242,6 +277,128 @@ func (l *Live) takeIntent() (Intent, PlayRequest) {
 	intent, requested := l.intent, l.requested
 	l.intent, l.requested = IntentNone, PlayRequest{}
 	return intent, requested
+}
+
+// SetPlaylist публікує список серій для пульта й повертає його покоління.
+// Викликається ЛИШЕ з горутини-власника Lib (Update у TUI, послідовний цикл у
+// CLI): сюди приходять уже зняті значення, тож HTTP-горутини бібліотеки не
+// торкаються. Кожна публікація — нове покоління, починаючи з 1.
+func (l *Live) SetPlaylist(ref provider.TitleRef, title string, episodes []EpisodeInfo) int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.playlistSeq++
+	l.playlist = Playlist{
+		Gen:   l.playlistSeq,
+		Ref:   ref,
+		Title: title,
+		// Копія: слайс лишається в моделі UI і може бути перебудований на місці.
+		Episodes: slices.Clone(episodes),
+	}
+	return l.playlist.Gen
+}
+
+// ClearPlaylist прибирає список: показувати серії тайтлу, з якого користувач
+// уже пішов, гірше, ніж не показувати нічого.
+func (l *Live) ClearPlaylist() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.playlist = Playlist{}
+	l.mu.Unlock()
+}
+
+// Playlist віддає копію поточного списку. async-safe.
+func (l *Live) Playlist() Playlist {
+	if l == nil {
+		return Playlist{}
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	pl := l.playlist
+	pl.Episodes = slices.Clone(pl.Episodes)
+	return pl
+}
+
+// CurrentGen — покоління опублікованого списку; 0, якщо списку немає.
+func (l *Live) CurrentGen() int {
+	if l == nil {
+		return 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.playlist.Gen
+}
+
+// RequestPlay — адресний запит «грай серію n зі списку покоління gen». Сам
+// нічого не запускає: під час гри закриває сесію з наміром IntentPlay (далі
+// спрацьовує звичайний ланцюжок Finish → Result.Requested), а в простої кладе
+// запит у скриньку, звідки його забере горутина Update. async-safe.
+func (l *Live) RequestPlay(gen, n int) error {
+	if l == nil {
+		return ErrStalePlaylist
+	}
+	l.mu.Lock()
+	// gen 0 не збігається ніколи: це «списку немає», а не покоління.
+	if gen == 0 || gen != l.playlist.Gen {
+		l.mu.Unlock()
+		return ErrStalePlaylist
+	}
+	req := PlayRequest{Ref: l.playlist.Ref, Gen: gen, Episode: n}
+	sess := l.sess
+	if sess == nil {
+		ch := l.requestChan()
+		l.mu.Unlock()
+		pushRequest(ch, req)
+		return nil
+	}
+	// Та сама послідовність, що в end: від'єднуємо сесію під м'ютексом, а
+	// закриваємо поза ним, щоб HTTP відповів одразу.
+	l.sess = nil
+	l.intent, l.requested = IntentPlay, req
+	l.mu.Unlock()
+	sess.Close()
+	return nil
+}
+
+// Requests — скринька адресних запитів, що прийшли, поки нічого не грало.
+// Канал ніколи не закривається: його читає довгоживуча команда TUI.
+func (l *Live) Requests() <-chan PlayRequest {
+	if l == nil {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.requestChan()
+}
+
+// requestChan створює скриньку на першу потребу; викликач тримає м'ютекс.
+func (l *Live) requestChan() chan PlayRequest {
+	if l.requests == nil {
+		l.requests = make(chan PlayRequest, 1)
+	}
+	return l.requests
+}
+
+// pushRequest кладе запит, витісняючи попередній: якщо ніхто не встиг забрати
+// старий тап, значення має лише новий. Ніколи не блокує — інакше HTTP-горутина
+// чекала б на горутину Update.
+func pushRequest(ch chan PlayRequest, req PlayRequest) {
+	select {
+	case ch <- req:
+	default:
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- req:
+		default:
+		}
+	}
 }
 
 // takeStopAfter віддає прапорець рівно один раз: він стосується сесії, що

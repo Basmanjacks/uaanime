@@ -128,6 +128,12 @@ func (m *Model) setDelegate(twoLine bool) {
 // екрана. Інакше налаштування протікають між екранами: список один на всіх.
 func (m *Model) setScreen(s screen) {
 	m.screen = s
+	// Плейлист пульта належить тайтлу, а не сесії: тільки ці три екрани ним
+	// володіють. Чистимо саме тут, бо back() відновлює пошук чи історію в обхід
+	// showHome, і список тайтлу лишився б на телефоні після виходу з нього.
+	if s != screenEpisodes && s != screenStudio && s != screenPlaying {
+		m.clearPlaylist()
+	}
 	m.setDelegate(false)
 	m.list.ResetFilter()
 	// Домівка — це секції з дій, а не однорідний список; «/» там означає

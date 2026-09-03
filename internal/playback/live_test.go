@@ -261,6 +261,141 @@ func TestLiveEndPlaySurfacesRequest(t *testing.T) {
 	}
 }
 
+// Плейлист: покоління рахується з одиниці, очищення повертає «списку немає», а
+// лічильник не відкочується — інакше нове покоління збіглося б зі старим,
+// відкритим у браузері.
+func TestLivePlaylistGenerations(t *testing.T) {
+	live := &Live{}
+	ref := provider.TitleRef{Provider: "test", Slug: "a"}
+	if live.CurrentGen() != 0 || live.Playlist().Gen != 0 {
+		t.Fatalf("порожній Live має покоління 0: %+v", live.Playlist())
+	}
+	rows := []EpisodeInfo{{Number: 1, Watched: true}, {Number: 2, Current: true}}
+	if gen := live.SetPlaylist(ref, "A", rows); gen != 1 {
+		t.Fatalf("перша публікація = %d, want 1", gen)
+	}
+	// Копія, а не покажчик: модель UI перебудовує свій слайс на місці.
+	rows[0].Watched = false
+	pl := live.Playlist()
+	if pl.Gen != 1 || pl.Title != "A" || !pl.Ref.Same(ref) || len(pl.Episodes) != 2 || !pl.Episodes[0].Watched {
+		t.Fatalf("Playlist = %+v", pl)
+	}
+	if gen := live.SetPlaylist(ref, "A", rows); gen != 2 || live.CurrentGen() != 2 {
+		t.Fatalf("друга публікація = %d (CurrentGen %d), want 2", gen, live.CurrentGen())
+	}
+	live.ClearPlaylist()
+	if live.CurrentGen() != 0 {
+		t.Fatalf("після ClearPlaylist CurrentGen = %d, want 0", live.CurrentGen())
+	}
+	if gen := live.SetPlaylist(ref, "A", rows); gen != 3 {
+		t.Fatalf("публікація після очищення = %d, want 3 (лічильник не відкочується)", gen)
+	}
+}
+
+// Запит із чужим поколінням не має ні закривати сесію, ні лягати у скриньку.
+func TestLiveRequestPlayRejectsStaleGen(t *testing.T) {
+	live := &Live{}
+	ref := provider.TitleRef{Provider: "test", Slug: "a"}
+	gen := live.SetPlaylist(ref, "A", []EpisodeInfo{{Number: 1}})
+	for name, arg := range map[string]int{"нуль": 0, "старе": gen - 1, "майбутнє": gen + 1} {
+		if err := live.RequestPlay(arg, 2); !errors.Is(err, ErrStalePlaylist) {
+			t.Errorf("RequestPlay(%s=%d) = %v, want ErrStalePlaylist", name, arg, err)
+		}
+	}
+	live.ClearPlaylist()
+	if err := live.RequestPlay(gen, 2); !errors.Is(err, ErrStalePlaylist) {
+		t.Errorf("RequestPlay після очищення = %v, want ErrStalePlaylist", err)
+	}
+	select {
+	case req := <-live.Requests():
+		t.Fatalf("застарілий запит потрапив у скриньку: %+v", req)
+	default:
+	}
+}
+
+// Під час гри адресний запит закриває сесію з наміром IntentPlay: далі працює
+// звичайний ланцюжок Finish → Result.Requested, спільний для TUI і headless.
+func TestLiveRequestPlayEndsSessionWithIntent(t *testing.T) {
+	eng, _, res, _ := liveEngine(t)
+	titleID, _, err := eng.Begin(res)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	gen := eng.Live.SetPlaylist(res.Ref, "Title", []EpisodeInfo{{Number: 1, Current: true}, {Number: 3}})
+	done := make(chan player.EndReason, 1)
+	go func() {
+		reason, err := eng.Run(context.Background(), res, titleID)
+		if err != nil {
+			t.Errorf("Run: %v", err)
+		}
+		done <- reason
+	}()
+	waitPlaying(t, eng.Live)
+
+	if err := eng.Live.RequestPlay(gen, 3); err != nil {
+		t.Fatalf("RequestPlay: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("RequestPlay не закрив сесію")
+	}
+	result, err := eng.Finish(player.EndQuit, titleID, 1)
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	want := PlayRequest{Ref: res.Ref, Gen: gen, Episode: 3}
+	if result.Intent != IntentPlay || result.Requested != want {
+		t.Fatalf("Result = %+v, want IntentPlay із %+v", result, want)
+	}
+	// Під час гри скринька не використовується: запит пішов через сесію.
+	select {
+	case req := <-eng.Live.Requests():
+		t.Fatalf("запит продубльовано у скриньку: %+v", req)
+	default:
+	}
+}
+
+// У простої запит лягає у скриньку, і переповнення її не блокує: значення має
+// лише останній тап.
+func TestLiveRequestPlayMailboxKeepsLatest(t *testing.T) {
+	live := &Live{}
+	ref := provider.TitleRef{Provider: "test", Slug: "a"}
+	gen := live.SetPlaylist(ref, "A", []EpisodeInfo{{Number: 1}})
+	for _, ep := range []int{2, 5, 7} {
+		if err := live.RequestPlay(gen, ep); err != nil {
+			t.Fatalf("RequestPlay(%d): %v", ep, err)
+		}
+	}
+	select {
+	case req := <-live.Requests():
+		if req != (PlayRequest{Ref: ref, Gen: gen, Episode: 7}) {
+			t.Fatalf("зі скриньки = %+v, want останній тап (серія 7)", req)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("скринька порожня")
+	}
+	select {
+	case req := <-live.Requests():
+		t.Fatalf("у скриньці лишився ще один запит: %+v", req)
+	default:
+	}
+}
+
+func TestLivePlaylistNilIsSafe(t *testing.T) {
+	var live *Live
+	live.ClearPlaylist()
+	if live.CurrentGen() != 0 || live.Playlist().Gen != 0 || live.SetPlaylist(provider.TitleRef{}, "", nil) != 0 {
+		t.Fatal("nil-Live має поводитися як порожній")
+	}
+	if err := live.RequestPlay(1, 1); !errors.Is(err, ErrStalePlaylist) {
+		t.Fatalf("RequestPlay(nil) = %v, want ErrStalePlaylist", err)
+	}
+	if live.Requests() != nil {
+		t.Fatal("Requests(nil) має бути nil-каналом")
+	}
+}
+
 // Гучність: крок читає поточну й ставить абсолютну, обрізану до 0..100.
 func TestLiveAddVolumeClamps(t *testing.T) {
 	for _, tt := range []struct {

@@ -264,6 +264,9 @@ func (m Model) Init() tea.Cmd {
 	if cmd := m.badgesCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
+	if cmd := m.remoteRequestCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if len(cmds) == 0 {
 		return nil
 	}
