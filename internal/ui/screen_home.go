@@ -27,27 +27,7 @@ func (m *Model) showHome() {
 		own += len(rows)
 	}
 
-	var lib []item
-	for _, e := range m.eng.Lib.Entries {
-		if e.Hidden {
-			continue
-		}
-		t := m.titleByID(e.TitleID)
-		if t == nil || len(t.Sources) == 0 {
-			continue
-		}
-		badge := ""
-		if n := m.newEpisodes(t, e); n > 0 {
-			badge = i18n.NewEpisodes(n)
-		}
-		lib = append(lib, item{
-			title:   titleName(t),
-			meta:    stateLabel(e.State),
-			badge:   badge,
-			role:    "lib",
-			payload: payloadTitle{ref: t.Sources[0]},
-		})
-	}
+	lib := m.bookmarkRows()
 	if len(lib) > 0 {
 		if len(items) > 0 {
 			items = sectionGap(items, 1, m.homeSpacers)
@@ -84,6 +64,62 @@ func sectionGap(items []item, n int, enabled bool) []item {
 	}
 	for range n {
 		items = append(items, item{header: true, spacer: true})
+	}
+	return items
+}
+
+// bookmarkRows — секція «Закладки» в порядку корисності: спершу те, де вийшли
+// нові серії, далі — те, що дивилися найсвіжіше. Порядок додавання в закладки
+// нікому нічого не каже, а от «є що подивитись» — це те, заради чого сюди
+// заходять.
+func (m *Model) bookmarkRows() []item {
+	type row struct {
+		it        item
+		fresh     bool
+		watchedAt time.Time
+	}
+	watchedAt := m.watchedAtByTitle()
+
+	var rows []row
+	for _, e := range m.eng.Lib.Entries {
+		if e.Hidden {
+			continue
+		}
+		t := m.titleByID(e.TitleID)
+		if t == nil || len(t.Sources) == 0 {
+			continue
+		}
+		badge := ""
+		n := m.newEpisodes(t, e)
+		if n > 0 {
+			badge = i18n.NewEpisodes(n)
+		}
+		rows = append(rows, row{
+			it: item{
+				title:   titleName(t),
+				meta:    stateLabel(e.State),
+				badge:   badge,
+				role:    "lib",
+				payload: payloadTitle{ref: t.Sources[0]},
+			},
+			fresh:     n > 0,
+			watchedAt: watchedAt[e.TitleID],
+		})
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if a.fresh != b.fresh {
+			return a.fresh
+		}
+		if !a.watchedAt.Equal(b.watchedAt) {
+			return a.watchedAt.After(b.watchedAt)
+		}
+		return a.it.title < b.it.title
+	})
+
+	items := make([]item, len(rows))
+	for i, r := range rows {
+		items[i] = r.it
 	}
 	return items
 }

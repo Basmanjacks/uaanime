@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -137,6 +138,39 @@ func resumeEpisodeFor(t *testing.T, m Model, name string) int {
 	}
 	t.Fatalf("title %q not found", name)
 	return 0
+}
+
+// TestHomeBookmarkOrder — закладки сортуються за користю: спершу тайтли з
+// новими серіями, далі — за свіжістю перегляду.
+func TestHomeBookmarkOrder(t *testing.T) {
+	m := newTestModel(t)
+	refs := testRefs("order", 3)
+	seedTestLibrary(&m, refs, library.StateWatching)
+
+	names := func() []string {
+		t.Helper()
+		var out []string
+		for _, row := range sectionRows(t, m, i18n.TuiBlockLibrary) {
+			out = append(out, row.title)
+		}
+		return out
+	}
+
+	// seedTestHistory робить останній тайтл найсвіжішим.
+	want := []string{refs[2].Name, refs[1].Name, refs[0].Name}
+	if got := names(); !slices.Equal(got, want) {
+		t.Fatalf("bookmarks by recency = %v, want %v", got, want)
+	}
+
+	// Нові серії в найстарішого — і він піднімається над усіма.
+	m, _ = updateTestModel(t, m, badgesMsg{counts: map[string]int{refs[0].Slug: 2}})
+	want = []string{refs[0].Name, refs[2].Name, refs[1].Name}
+	if got := names(); !slices.Equal(got, want) {
+		t.Fatalf("bookmarks after badges = %v, want %v", got, want)
+	}
+	if got := libraryRow(t, m, refs[0].Name).badge; got != i18n.NewEpisodes(2) {
+		t.Errorf("badge = %q, want %q", got, i18n.NewEpisodes(2))
+	}
 }
 
 func TestHomeSectionsPresent(t *testing.T) {
