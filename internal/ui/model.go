@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"slices"
+	"time"
 
 	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/textinput"
@@ -126,6 +127,17 @@ type Model struct {
 	playPinned      string
 	quitting        bool
 	pendingBaseline *bookmarkBaselineMsg
+
+	// Вікно в сесію, що грає: останній знімок Live і покоління, яким
+	// відсікаються відповіді попередньої сесії (Snapshot під VLC може висіти
+	// секунди). liveTicking — чи вже крутиться періодичний цикл; liveRetries —
+	// скільки разів ми перепитували сесію, яка ще не встигла з'явитися.
+	live        playback.Snapshot
+	liveGen     int
+	liveTicking bool
+	liveRetries int
+	// now — шов для тестів оцінки часу завершення серії.
+	now func() time.Time
 	// Налаштування та пульт: cfg — той самий покажчик, що в cmd; remote —
 	// поточна адреса для екрана «Грає» та «Налаштування» ("" = вимкнено).
 	cfg    *store.Config
@@ -185,6 +197,7 @@ func New(eng *playback.Engine, opts Options) Model {
 		cfg:     opts.Cfg,
 		remote:  opts.Remote,
 		opts:    opts,
+		now:     time.Now,
 	}
 	m.loadCachedCatalog()
 	m.showHome()

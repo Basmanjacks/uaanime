@@ -47,6 +47,7 @@ var (
 	styleRowSel      = lipgloss.NewStyle().Foreground(colFgBright)
 	styleMeta        = lipgloss.NewStyle().Foreground(colDim)
 	styleRemote      = lipgloss.NewStyle().Foreground(colDim).Padding(0, 0, 0, 2)
+	styleEta         = lipgloss.NewStyle().Foreground(colDim).Padding(0, 0, 0, 2)
 	styleMetaSel     = lipgloss.NewStyle().Foreground(colFg)
 	styleMetaSep     = lipgloss.NewStyle().Foreground(colFaint)
 	styleMetaKey     = lipgloss.NewStyle().Foreground(colFg)
