@@ -343,8 +343,9 @@ func TestJourneyInterruptDuringPlaybackFlushesProgress(t *testing.T) {
 	}
 	m, playCmd := updateTestModel(t, m, resolved)
 	mustScreen(t, m, screenPlaying)
-	if m.status != i18n.TuiPlaying {
-		t.Errorf("статус = %q", m.status)
+	// Екран «Грає» керований: унизу підказка з клавішами, а не статус.
+	if plain := ansi.Strip(m.View().Content); !strings.Contains(plain, i18n.TuiHintPlaying) {
+		t.Errorf("підказки клавіш немає (статус %q):\n%s", m.status, plain)
 	}
 
 	done := make(chan tea.Msg, 1)

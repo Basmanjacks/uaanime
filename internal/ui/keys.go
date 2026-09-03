@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 
 	"charm.land/bubbles/v2/list"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
+	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -160,10 +162,7 @@ func (m Model) updateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case screenPlaying:
-		if key == "esc" && m.playCancel != nil {
-			m.playCancel()
-		}
-		return m, nil
+		return m.playingKey(key)
 	}
 
 	var cmd tea.Cmd
@@ -172,6 +171,61 @@ func (m Model) updateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// тож зупинка на ньому виглядає як зависання списку.
 	m.skipHeaders(navDirection(key))
 	return m, cmd
+}
+
+// Кроки керування плеєром. Десять секунд — «прослухав репліку», тридцять —
+// «пропустив опенінг»; гучність рухається п'ятірками, бо менший крок на слух
+// не відрізняється.
+const (
+	seekStep    = 10.0
+	seekStepBig = 30.0
+	volumeStep  = 5.0
+)
+
+// playingKey — керування плеєром з екрана «Грає». Усі команди йдуть через
+// Live: воно async-safe і бібліотеки не торкається (правило 10). Esc, як і
+// раніше, лише скасовує сесію — вихід робить playDoneMsg після Finish.
+func (m Model) playingKey(key string) (tea.Model, tea.Cmd) {
+	if key == "esc" {
+		if m.playCancel != nil {
+			m.playCancel()
+		}
+		return m, nil
+	}
+	live := m.eng.Live
+	var err error
+	switch key {
+	case "space":
+		err = live.TogglePause()
+	case "left":
+		err = live.Seek(-seekStep)
+	case "right":
+		err = live.Seek(seekStep)
+	case "shift+left":
+		err = live.Seek(-seekStepBig)
+	case "shift+right":
+		err = live.Seek(seekStepBig)
+	case "n", "N":
+		err = live.Next()
+	case "+", "=":
+		err = live.AddVolume(volumeStep)
+	case "-":
+		err = live.AddVolume(-volumeStep)
+	default:
+		return m, nil
+	}
+	if err != nil {
+		if errors.Is(err, playback.ErrNotPlaying) {
+			m.errText = i18n.TuiNotPlaying
+		} else {
+			m.errText = i18n.ErrorText(err)
+		}
+		return m, nil
+	}
+	m.errText = ""
+	// Знімок без затримки: рядок стану має відповісти на клавішу одразу, а не
+	// на наступному тіку.
+	return m, m.liveSnapshotCmd(m.liveGen)
 }
 
 func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
