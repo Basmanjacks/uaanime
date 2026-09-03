@@ -95,6 +95,9 @@ func fixtureTransport() httpx.MultiTransport {
 var (
 	detectPlayer    = player.Detect
 	journalInterval time.Duration
+	// newLive — той самий шов для вікна в сесію: наскрізний сценарій має
+	// дотягнутися до Live рівно так, як це робить пульт зі своєї горутини.
+	newLive = func() *playback.Live { return &playback.Live{} }
 )
 
 // newAppWith збирає застосунок поверх заданого транспорту (nil — мережа).
@@ -523,7 +526,7 @@ func (a *app) engine() *playback.Engine {
 	eng.JournalInterval = journalInterval
 	// Live є завжди: без пульта воно нічого не коштує, а екран налаштувань
 	// має куди дивитися, коли пульт вмикають із «вимкнено».
-	eng.Live = &playback.Live{}
+	eng.Live = newLive()
 	return eng
 }
 
@@ -621,7 +624,15 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		switch {
 		case result.Intent == playback.IntentStop:
 			return 0
+		case result.Intent == playback.IntentPlay && result.Requested.Episode > 0:
+			// адресний запит із пульта: серія названа явно, список не потрібен
+			ep = result.Requested.Episode
+			continue
 		case result.Intent == playback.IntentNext:
+		case result.StopAfter:
+			// «досидіти й зупинитись» уриває ланцюжок так само, як «стоп»,
+			// але вже після того, як серія догралася
+			return 0
 		case result.Reason == player.EndEOF && eng.Autoplay:
 		default:
 			return 0
