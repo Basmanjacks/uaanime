@@ -59,6 +59,15 @@ func (f *fakeCtl) AddVolume(delta float64) error {
 	return f.record("volume")
 }
 
+// Перемикач, як і справжній контролер: стан живе в моделі, а не в запиті.
+func (f *fakeCtl) ToggleStopAfter() error {
+	if err := f.record("stopafter"); err != nil {
+		return err
+	}
+	f.st.StopAfter = !f.st.StopAfter
+	return nil
+}
+
 func (f *fakeCtl) record(name string) error {
 	f.calls = append(f.calls, name)
 	if f.cmdErr != nil {
@@ -273,7 +282,7 @@ func TestBaseWithTrailingSlashServesPage(t *testing.T) {
 
 func TestGetOnCommandPathIs405(t *testing.T) {
 	h := newTestHandler(t, playingCtl())
-	for _, cmd := range []string{"pause", "back", "forward", "back30", "forward30", "volup", "voldown", "next", "stop", "seek/42"} {
+	for _, cmd := range []string{"pause", "back", "forward", "back30", "forward30", "volup", "voldown", "stopafter", "next", "stop", "seek/42"} {
 		rec := do(t, h, http.MethodGet, base(cmd))
 		if rec.Code != http.StatusMethodNotAllowed {
 			t.Errorf("GET %s: код %d, очікував 405", cmd, rec.Code)
@@ -307,6 +316,7 @@ func TestEachCommandCallsControllerOnceAndEchoesFreshStatus(t *testing.T) {
 		{"volup", "volume"},
 		{"voldown", "volume"},
 		{"seek/42", "seekto"},
+		{"stopafter", "stopafter"},
 		{"next", "next"},
 		{"stop", "stop"},
 	}
@@ -408,9 +418,28 @@ func sameFloats(got, want []float64) bool {
 	return true
 }
 
+// «Досидіти й зупинитись» — перемикач: сторінка малює його стан із ехо-статусу,
+// тому другий тап мусить вимикати те, що ввімкнув перший.
+func TestStopAfterTogglesBothWays(t *testing.T) {
+	c := playingCtl()
+	h := newTestHandler(t, c)
+	for i, want := range []bool{true, false} {
+		rec := do(t, h, http.MethodPost, base("stopafter"))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("тап %d: код %d, тіло %q", i+1, rec.Code, rec.Body.String())
+		}
+		if got := decodeStatus(t, rec).StopAfter; got != want {
+			t.Fatalf("тап %d: stop_after = %v, очікував %v", i+1, got, want)
+		}
+	}
+	if len(c.calls) != 2 {
+		t.Fatalf("виклики контролера = %v, очікував два перемикання", c.calls)
+	}
+}
+
 // Новий маршрут без захисту від CSRF — це той самий чужий сайт, що керує плеєром.
 func TestCrossOriginPostIsForbiddenOnNewPaths(t *testing.T) {
-	for _, cmd := range []string{"back30", "forward30", "volup", "voldown", "seek/42"} {
+	for _, cmd := range []string{"back30", "forward30", "volup", "voldown", "stopafter", "seek/42"} {
 		c := playingCtl()
 		h := newTestHandler(t, c)
 		rec := doReq(t, h, http.MethodPost, base(cmd), lanHost, map[string]string{"Sec-Fetch-Site": "cross-site"})
