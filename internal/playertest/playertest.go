@@ -188,6 +188,13 @@ func (s *Session) Seek(deltaSec float64) error {
 	return nil
 }
 
+func (s *Session) SeekTo(posSec float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, Call{Op: "seekto", Delta: posSec})
+	return nil
+}
+
 // Calls повертає копію, щоб асинхронний рушій не міг змінити зріз під час
 // перевірки тестом.
 func (s *Session) Calls() []Call {

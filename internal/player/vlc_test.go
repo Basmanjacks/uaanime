@@ -183,6 +183,41 @@ func TestVLCSessionSeekWritesRoundedRelativeCommands(t *testing.T) {
 	}
 }
 
+// Знак у RC означає відносний seek, тож абсолютна ціль мусить іти без нього:
+// "seek +42" перемотало б на 42 с ВПЕРЕД замість позиції 42.
+func TestVLCSessionSeekToWritesAbsoluteCommand(t *testing.T) {
+	commands := make(chan string, 2)
+	sess, serverDone := startFakeVLCIPC(t, recordVLCCommands(commands, 2))
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		if err := sess.SeekTo(42.4); err != nil {
+			done <- err
+			return
+		}
+		done <- sess.Seek(30)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SeekTo: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SeekTo завис")
+	}
+
+	if got := <-commands; got != "seek 42" {
+		t.Fatalf("перша команда = %q, очікував seek 42", got)
+	}
+	if got := <-commands; got != "seek +30" {
+		t.Fatalf("друга команда = %q, очікував seek +30", got)
+	}
+}
+
 func TestVLCSessionPausedReadsStatus(t *testing.T) {
 	tests := []struct {
 		name  string
