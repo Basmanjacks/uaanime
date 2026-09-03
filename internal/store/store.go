@@ -198,13 +198,14 @@ func (s *Store) SaveLibrary(lib *library.Library) error {
 }
 
 // Config — користувацькі налаштування. Ціль брифу: ≤ 8 налаштувань.
+// Невідомі ключі (як мертвий `providers` зі старих версій) encoding/json
+// ігнорує, тому старий config.json читається; ключ зникає при першому SaveConfig.
 type Config struct {
-	FavoriteStudio string   `json:"favorite_studio,omitempty"`
-	PreferKind     string   `json:"prefer_kind,omitempty"` // dub | voiceover | sub
-	Player         string   `json:"player,omitempty"`      // vlc | mpv
-	Autoplay       string   `json:"autoplay,omitempty"`    // always | never
-	Remote         string   `json:"remote,omitempty"`      // on | open | off
-	Providers      []string `json:"providers,omitempty"`
+	FavoriteStudio string `json:"favorite_studio,omitempty"`
+	PreferKind     string `json:"prefer_kind,omitempty"` // dub | voiceover | sub
+	Player         string `json:"player,omitempty"`      // vlc | mpv
+	Autoplay       string `json:"autoplay,omitempty"`    // always | never
+	Remote         string `json:"remote,omitempty"`      // on | open | off
 }
 
 func (s *Store) LoadConfig() (*Config, error) {
