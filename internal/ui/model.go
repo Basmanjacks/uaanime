@@ -63,9 +63,13 @@ type Options struct {
 // поле й забути скопіювати його назад тут неможливо.
 type view struct {
 	// контекст поточного тайтлу
-	ref      provider.TitleRef
-	episodes []provider.Episode
-	status   string
+	ref provider.TitleRef
+	// episodesRef — чиї серії лежать в episodes. Перехід на інший тайтл не
+	// чистить episodes, а resolvedMsg може випередити episodesDoneMsg, тож без
+	// цієї мітки список попереднього тайтлу зійшов би за поточний.
+	episodesRef provider.TitleRef
+	episodes    []provider.Episode
+	status      string
 
 	// стан екрана пошуку
 	query string

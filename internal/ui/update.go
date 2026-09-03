@@ -87,7 +87,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.ref = msg.ref
-		m.episodes = msg.eps
+		m.episodes, m.episodesRef = msg.eps, msg.ref
 		if !msg.navigate {
 			if msg.offline {
 				m.status = i18n.MsgOfflineCache

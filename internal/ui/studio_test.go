@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -60,6 +62,131 @@ func TestStudioKeyOpensChoicesAndMarksPinnedStudio(t *testing.T) {
 		} else if it.icon != "" || it.iconAccent {
 			t.Errorf("unpinned studio marker = (%q, %t), want default", it.icon, it.iconAccent)
 		}
+	}
+}
+
+// coverageEpisodes — total серій, у яких студія покриває перші counts[studio].
+func coverageEpisodes(total int, counts map[string]int) []provider.Episode {
+	eps := make([]provider.Episode, total)
+	for i := range eps {
+		eps[i] = provider.Episode{Number: i + 1}
+		for _, studio := range slices.Sorted(maps.Keys(counts)) {
+			if i < counts[studio] {
+				eps[i].Releases = append(eps[i].Releases,
+					provider.Release{Studio: studio, Kind: provider.KindDub})
+			}
+		}
+	}
+	return eps
+}
+
+func studioMeta(t *testing.T, m Model, studio string) string {
+	t.Helper()
+
+	for _, listItem := range m.list.Items() {
+		it, ok := listItem.(item)
+		if ok && it.title == studio {
+			return it.meta
+		}
+	}
+	t.Fatalf("studio row %q not found", studio)
+	return ""
+}
+
+// TestStudioCoverage — вибір озвучки показує, скільки серій має студія: різниця
+// між «є всі» і «є три з дванадцяти» вирішує вибір.
+func TestStudioCoverage(t *testing.T) {
+	ref := testRefs("coverage", 1)[0]
+	candidates := []provider.Source{
+		{Studio: "Alpha", Kind: provider.KindDub, Episode: 1},
+		{Studio: "Beta", Kind: provider.KindDub, Episode: 1},
+	}
+	episodes := coverageEpisodes(3, map[string]int{"Alpha": 3, "Beta": 1})
+	dub := i18n.KindLabel(provider.KindDub)
+
+	t.Run("from the model", func(t *testing.T) {
+		m := newTestModel(t)
+		m.ref, m.episodes, m.episodesRef = ref, episodes, ref
+		m.showStudioChoice(candidates)
+
+		if got, want := studioMeta(t, m, "Alpha"), dub+metaSep+"3/3"; got != want {
+			t.Errorf("Alpha meta = %q, want %q", got, want)
+		}
+		if got, want := studioMeta(t, m, "Beta"), dub+metaSep+"1/3"; got != want {
+			t.Errorf("Beta meta = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("from the disk cache", func(t *testing.T) {
+		m := newTestModel(t)
+		if err := m.eng.Store.SaveEpisodes(ref, episodes); err != nil {
+			t.Fatalf("save episodes: %v", err)
+		}
+		m.ref = ref
+		m.showStudioChoice(candidates)
+
+		if got, want := studioMeta(t, m, "Alpha"), dub+metaSep+"3/3"; got != want {
+			t.Errorf("Alpha meta = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("without any episode list", func(t *testing.T) {
+		m := newTestModel(t)
+		m.ref = ref
+		m.showStudioChoice(candidates)
+
+		if got := studioMeta(t, m, "Alpha"); got != dub {
+			t.Errorf("Alpha meta without episodes = %q, want %q", got, dub)
+		}
+	})
+}
+
+// TestStudioCoverageIgnoresPreviousTitle — «Продовжити» шле resolve і episodes
+// паралельно, тож вибір озвучки може відкритися, поки в моделі ще лежать серії
+// попереднього тайтлу. Показати їх покриття означало б збрехати.
+func TestStudioCoverageIgnoresPreviousTitle(t *testing.T) {
+	m := newTestModel(t)
+	refs := testRefs("coverage-nav", 2)
+	previous, current := refs[0], refs[1]
+	seedTestLibrary(&m, refs, library.StateWatching)
+
+	m.ref = previous
+	m, _ = updateTestModel(t, m, episodesDoneMsg{
+		req:      m.reqID,
+		ref:      previous,
+		eps:      coverageEpisodes(3, map[string]int{"Alpha": 3}),
+		navigate: true,
+	})
+	if m.screen != screenEpisodes {
+		t.Fatalf("screen after episodes = %d, want episodes %d", m.screen, screenEpisodes)
+	}
+
+	m.showHome()
+	selectTestItem(t, &m, func(it item) bool {
+		p, ok := it.payload.(payloadResume)
+		return ok && p.ref == current
+	})
+	m, _ = pressTestKey(t, m, tea.KeyEnter, "")
+	if m.ref != current {
+		t.Fatalf("ref after continue = %+v, want %+v", m.ref, current)
+	}
+
+	// resolvedMsg випередив episodesDoneMsg нового тайтлу.
+	candidates := []provider.Source{
+		{Studio: "Alpha", Kind: provider.KindDub, Episode: 1},
+		{Studio: "Beta", Kind: provider.KindDub, Episode: 1},
+	}
+	m, _ = updateTestModel(t, m, resolvedMsg{req: m.reqID, res: &playback.Resolved{
+		Ref:        current,
+		Episode:    1,
+		Source:     candidates[0],
+		Candidates: candidates,
+	}})
+	if m.screen != screenStudio {
+		t.Fatalf("screen = %d, want studio %d", m.screen, screenStudio)
+	}
+	if got := studioMeta(t, m, "Alpha"); got != i18n.KindLabel(provider.KindDub) {
+		t.Errorf("Alpha meta = %q, want no coverage from the previous title", got)
 	}
 }
 
