@@ -82,6 +82,35 @@ func TestLoadConfigNormalizesPlayerAndAutoplay(t *testing.T) {
 	}
 }
 
+// Мертве налаштування `providers` прибрано: старий файл має читатися, а ключ —
+// зникнути при першому ж записі.
+func TestLoadConfigIgnoresLegacyProviders(t *testing.T) {
+	s := openTemp(t)
+	raw := `{"player":"mpv","autoplay":"never","providers":["anitube"]}`
+	if err := os.WriteFile(s.configPath(), []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := s.LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Player != "mpv" || cfg.Autoplay != "never" {
+		t.Fatalf("конфіг не прочитався: %+v", cfg)
+	}
+
+	if err := s.SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	saved, err := os.ReadFile(s.configPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(saved), "providers") {
+		t.Errorf("providers лишився на диску: %s", saved)
+	}
+}
+
 func TestJournalRecovery(t *testing.T) {
 	s := openTemp(t)
 	lib, _ := s.LoadLibrary()
