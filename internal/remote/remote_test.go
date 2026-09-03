@@ -613,8 +613,8 @@ func TestPageIsSelfContained(t *testing.T) {
 		t.Fatalf("немає %q у сторінці", want)
 	}
 	// Жодної нерозгорнутої дії шаблону: телефон отримує готовий HTML.
-	if strings.Contains(body, "{{") {
-		t.Errorf("на сторінці лишився шаблон: %q", body[strings.Index(body, "{{"):])
+	if i := strings.Index(body, "{{"); i >= 0 {
+		t.Errorf("на сторінці лишився шаблон: %q", body[i:])
 	}
 
 	// Усі підписи приходять із i18n. Порівнюємо з розекранованим тілом: html/template
