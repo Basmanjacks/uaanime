@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -67,7 +68,7 @@ func (m Model) View() tea.View {
 		body += "  " + m.input.View() + "\n"
 	}
 	if m.screen == screenPlaying {
-		if line := m.etaLine(); line != "" {
+		if line := m.liveLine(); line != "" {
 			if m.w > 0 {
 				line = truncate(line, m.w-2)
 			}
@@ -151,6 +152,20 @@ func metaTail(parts []string) string {
 	return b.String()
 }
 
+// liveLine — усе, що екран «Грає» знає про сесію: коли вона закінчиться і на
+// якій гучності грає. Гучність показується завжди, коли плеєр її повідомив:
+// це єдине підтвердження, що клавіші «+»/«−» справді дійшли.
+func (m Model) liveLine() string {
+	parts := make([]string, 0, 2)
+	if eta := m.etaLine(); eta != "" {
+		parts = append(parts, eta)
+	}
+	if m.live.Playing && m.live.VolumePct >= 0 {
+		parts = append(parts, fmt.Sprintf(i18n.TuiVolume, int(math.Round(m.live.VolumePct))))
+	}
+	return strings.Join(parts, metaSep)
+}
+
 // etaLine — коли серія закінчиться при поточній позиції. Без відомої
 // тривалості рядка немає: «закінчиться колись» — не інформація. На паузі час
 // усе одно показується (він перераховується на кожному тіку), але з позначкою,
@@ -186,10 +201,19 @@ func (m Model) remoteLine() string {
 	return styleRemote.Render(i18n.TuiRemoteNarrow)
 }
 
+// hintPlayingNarrow — ширина, нижче якої повна підказка «Грає» вже не влазить
+// і починає обрізатися на півслові.
+const hintPlayingNarrow = 76
+
 func (m Model) hint() string {
 	switch m.screen {
 	case screenSearch:
 		return i18n.TuiHintSearch
+	case screenPlaying:
+		if m.w > 0 && m.w < hintPlayingNarrow {
+			return i18n.TuiHintPlayingNarrow
+		}
+		return i18n.TuiHintPlaying
 	case screenEpisodes:
 		return i18n.TuiHintEpisodes
 	case screenStudio:

@@ -302,10 +302,11 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	m.pendingEp = res.Episode
 	m.playTitleID, m.playPinned = titleID, pinned
 	m.setScreen(screenPlaying)
+	// Статус лишається порожнім навмисно: екран «Грає» тепер керований, і
+	// внизу корисніша підказка з клавішами, ніж «плеєр запущено».
+	m.status = ""
 	if res.PinFallback {
 		m.status = fmt.Sprintf(i18n.TuiStudioFallback, m.studioPin(), res.Source.Studio)
-	} else {
-		m.status = i18n.TuiPlaying
 	}
 	cmd, cancel := m.playCmd(res, titleID)
 	m.playCancel = cancel

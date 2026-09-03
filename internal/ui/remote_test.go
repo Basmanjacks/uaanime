@@ -94,7 +94,6 @@ func TestPlayingFrameShowsRemoteURL(t *testing.T) {
 			m := newTestModel(t)
 			m.remote.URL = testRemoteURL
 			m.screen = screenPlaying
-			m.status = i18n.TuiPlaying
 			m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: tt.w, Height: tt.h})
 
 			content := m.View().Content
@@ -121,7 +120,6 @@ func TestPlayingFrameShowsRemoteURL(t *testing.T) {
 func TestPlayingFrameWithoutRemote(t *testing.T) {
 	m := newTestModel(t)
 	m.screen = screenPlaying
-	m.status = i18n.TuiPlaying
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	if plain := ansi.Strip(m.View().Content); strings.Contains(plain, i18n.TuiRemoteNarrow) || strings.Contains(plain, "/r/") {
 		t.Errorf("без пульта рядка бути не має:\n%s", plain)
