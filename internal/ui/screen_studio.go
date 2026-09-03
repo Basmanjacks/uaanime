@@ -67,7 +67,7 @@ func (m *Model) studioCoverage() (map[string]int, int) {
 // попереднього, поки не прийде episodesDoneMsg, тож без збігу ref беремо кеш
 // із диска (як bookmarkSelected), а не чужий список.
 func (m *Model) currentEpisodes() ([]provider.Episode, bool) {
-	if len(m.episodes) > 0 && m.episodesRef == m.ref {
+	if len(m.episodes) > 0 && m.episodesRef.Same(m.ref) {
 		return m.episodes, true
 	}
 	if m.eng == nil || m.eng.Store == nil {

@@ -32,6 +32,13 @@ type TitleRef struct {
 	URL      string `json:"url"`
 }
 
+// Same — та сама ідентичність тайтлу: провайдер і слаг. Name та URL — це
+// супровід, який у різних джерелах (картка, бібліотека після Normalize)
+// відрізняється, тож порівнювати структуру цілком не можна.
+func (r TitleRef) Same(o TitleRef) bool {
+	return r.Provider == o.Provider && r.Slug == o.Slug
+}
+
 // TitleCard — картка тайтлу зі сторінки пошуку/каталогу. Вбудовує TitleRef
 // (ідентичність), решта полів — метадані для відображення; вони НЕ персистяться.
 type TitleCard struct {
