@@ -603,78 +603,72 @@ func TestJourneyStopAfterEndsHeadlessChain(t *testing.T) {
 	}
 }
 
-// liveSeam підміняє шов newLive і віддає вікно в сесію, яке дістанеться
-// застосунку: тест грає роль пульта зі своєї горутини, як справжній HTTP.
-func liveSeam(t *testing.T) <-chan *playback.Live {
-	t.Helper()
-	ch := make(chan *playback.Live, 1)
-	saved := newLive
-	newLive = func() *playback.Live {
-		live := saved()
-		select {
-		case ch <- live:
-		default:
-		}
-		return live
-	}
-	t.Cleanup(func() { newLive = saved })
-	return ch
-}
-
-// awaitPlaying чекає на вікно в сесію й на перший запис журналу: пульт закриває
-// сесію без додаткового семплу, тож збережена позиція залежить від тіка Run.
-func awaitPlaying(dir string, seam <-chan *playback.Live) (*playback.Live, error) {
-	var live *playback.Live
-	select {
-	case live = <-seam:
-	case <-time.After(5 * time.Second):
-		return nil, errors.New("рушій так і не створив Live")
-	}
+// remotePlaylistTap грає роль телефона: дочікується сесії, читає список серій
+// звичайним GET episodes і тапає по рядку — усе через справжній HTTP-хендлер.
+func remotePlaylistTap(dir, base string, n int) error {
+	client := &http.Client{Timeout: 2 * time.Second}
 	journal := filepath.Join(dir, "state", "current.json")
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(journal); err == nil {
-			snap, err := live.Snapshot()
-			if err != nil {
-				return nil, err
-			}
-			if snap.Playing {
-				return live, nil
-			}
+		// журнал уже має позицію: тап закриває сесію без додаткового семплу
+		if _, err := os.Stat(journal); err != nil {
+			time.Sleep(5 * time.Millisecond)
+			continue
 		}
-		time.Sleep(5 * time.Millisecond)
+		var st remote.Status
+		if err := getJSON(client, base+"status", &st); err != nil || !st.Playing {
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		var pl remote.Playlist
+		if err := getJSON(client, base+"episodes", &pl); err != nil {
+			return err
+		}
+		switch {
+		case pl.Gen == 0 || pl.Gen != st.PlaylistGen:
+			return fmt.Errorf("список серій = %+v, а статус каже про покоління %d", pl, st.PlaylistGen)
+		case len(pl.Episodes) == 0:
+			return fmt.Errorf("список серій порожній: %+v", pl)
+		case !pl.Episodes[0].Current:
+			return fmt.Errorf("серія, що грає, не позначена: %+v", pl.Episodes[0])
+		}
+		resp, err := client.Post(fmt.Sprintf("%splay/%d/%d", base, pl.Gen, n), "", nil)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("POST play/%d/%d = %d", pl.Gen, n, resp.StatusCode)
+		}
+		return nil
 	}
-	return nil, errors.New("сесія так і не заграла")
+	return errors.New("сесія так і не заграла")
 }
 
-// Плейлист публікується й у headless: цикл play віддає пультові список серій
-// перед кожним запуском, а адресний запит переводить ланцюжок на названу серію
-// (а не на наступну — автоплей тут вимкнено).
+func getJSON(client *http.Client, url string, v any) error {
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("GET %s = %d", url, resp.StatusCode)
+	}
+	return json.NewDecoder(resp.Body).Decode(v)
+}
+
+// Плейлист працює й у headless: цикл play публікує список серій перед кожним
+// запуском, пульт читає його по HTTP, а тап по рядку переводить ланцюжок на
+// названу серію (а не на наступну — автоплей тут вимкнено).
 func TestJourneyRemotePlaylistSwitchesHeadlessEpisode(t *testing.T) {
 	remoteEnv(t)
-	seam := liveSeam(t)
 	held := playertest.NewSession(player.EndQuit, []float64{40}, []float64{1440})
 	held.Hold = true
 	dir, _, fp := journeyEnv(t, held, playertest.NewSession(player.EndQuit, []float64{30}, []float64{1440}))
 	writeConfig(t, dir, `{"autoplay":"never","remote":"on"}`)
 
 	done := make(chan error, 1)
-	go func() {
-		live, err := awaitPlaying(dir, seam)
-		if err != nil {
-			done <- err
-			return
-		}
-		pl := live.Playlist()
-		switch {
-		case pl.Gen == 0 || len(pl.Episodes) == 0:
-			done <- fmt.Errorf("плейлист порожній: %+v", pl)
-		case !pl.Episodes[0].Current:
-			done <- fmt.Errorf("серія, що грає, не позначена: %+v", pl.Episodes[0])
-		default:
-			done <- live.RequestPlay(pl.Gen, 3)
-		}
-	}()
+	go func() { done <- remotePlaylistTap(dir, remoteBase(remoteIdentity(t, dir)), 3) }()
 
 	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")
 	mustExit(t, 0, code, out, errOut)

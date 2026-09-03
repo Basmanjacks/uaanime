@@ -33,11 +33,29 @@ func (c remoteControl) Status() (remote.Status, error) {
 		Paused:      snap.Paused,
 		VolumePct:   snap.VolumePct,
 		StopAfter:   snap.StopAfter,
-		// PlaylistGen лишається нулем («списку немає»), поки плейлист не
-		// з'явиться в Live.
-		PlaylistGen: 0,
+		PlaylistGen: c.live.CurrentGen(),
 	}, nil
 }
+
+// Episodes віддає список серій таким, яким його опублікувала горутина-власник
+// бібліотеки: пульт лише перекладає значення в JSON (правило 10).
+func (c remoteControl) Episodes() (remote.Playlist, error) {
+	pl := c.live.Playlist()
+	out := remote.Playlist{Gen: pl.Gen, Title: pl.Title, Episodes: make([]remote.Episode, len(pl.Episodes))}
+	for i, ep := range pl.Episodes {
+		out.Episodes[i] = remote.Episode{
+			Number:      ep.Number,
+			Watched:     ep.Watched,
+			PositionSec: ep.PositionSec,
+			Current:     ep.Current,
+		}
+	}
+	return out, nil
+}
+
+// Play нічого не запускає сам: запит лягає в Live, а відтворення почне той, хто
+// володіє бібліотекою — TUI на горутині Update або headless-цикл play.
+func (c remoteControl) Play(gen, n int) error { return mapRemoteErr(c.live.RequestPlay(gen, n)) }
 
 func (c remoteControl) TogglePause() error          { return mapRemoteErr(c.live.TogglePause()) }
 func (c remoteControl) Seek(deltaSec float64) error { return mapRemoteErr(c.live.Seek(deltaSec)) }
@@ -98,6 +116,9 @@ const playlistTimeout = 30 * time.Second
 func mapRemoteErr(err error) error {
 	if errors.Is(err, playback.ErrNotPlaying) {
 		return fmt.Errorf("%w", remote.ErrNotPlaying)
+	}
+	if errors.Is(err, playback.ErrStalePlaylist) {
+		return fmt.Errorf("%w", remote.ErrStalePlaylist)
 	}
 	return err
 }
