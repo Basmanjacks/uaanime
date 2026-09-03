@@ -329,6 +329,9 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 	} else {
 		m.status = fmt.Sprintf(i18n.TuiEpUnmarked, p.num)
 	}
+	// Пульт показує ті самі позначки, що й список: нова публікація — щоб
+	// телефон не лишився з попереднім станом серії.
+	m.publishPlaylist()
 	// Index(), не GlobalIndex(): рядки перебудовуються ті самі й у тому ж
 	// порядку, тож видима позиція під фільтром не змінюється.
 	return m, m.setItems(m.episodeRows(), m.list.Index())

@@ -88,6 +88,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.ref = msg.ref
 		m.episodes, m.episodesRef = msg.eps, msg.ref
+		// Список приїхав — пульт має його побачити навіть тоді, коли на екран
+		// серій ми не заходимо («Продовжити» йде з navigate:false).
+		m.publishPlaylist()
 		if !msg.navigate {
 			if msg.offline {
 				m.status = i18n.MsgOfflineCache
@@ -174,6 +177,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		result, err := m.eng.Finish(msg.reason, m.playTitleID, m.pendingEp)
 		result.PinnedStudio = m.playPinned
 		m.playTitleID, m.playPinned = "", ""
+		// Журнал уже злитий у бібліотеку — публікуємо список із новою позначкою
+		// «переглянуто» і без підсвіченої серії.
+		m.publishPlaylist()
 		if msg.err != nil {
 			err = msg.err
 		}
@@ -232,6 +238,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case remotePlayMsg:
+		return m.updateRemotePlay(msg)
+
 	case liveMsg:
 		return m.updateLive(msg)
 
@@ -242,6 +251,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+// updateRemotePlay — тап по рядку списку серій на телефоні, що прийшов у
+// простої. Скринька переозброюється завжди, а сам запит виконується, лише якщо
+// він і досі про цей тайтл: між постановкою в канал і цим кадром TUI міг
+// опублікувати інший список або взагалі піти з екрана серій. Застарілий запит
+// відкидаємо мовчки — людина вже дивиться на інше, і рядок помилки лише
+// смикнув би екран.
+func (m Model) updateRemotePlay(msg remotePlayMsg) (tea.Model, tea.Cmd) {
+	rearm := m.remoteRequestCmd()
+	if m.eng.Live == nil || msg.req.Gen != m.eng.Live.CurrentGen() || !msg.req.Ref.Same(m.ref) {
+		return m, rearm
+	}
+	// Під час гри адресний запит іде через закриття сесії й повертається в
+	// playDoneMsg; сюди він потрапляє лише тоді, коли плеєра немає.
+	if m.playCancel != nil {
+		return m, rearm
+	}
+	req := m.beginNav()
+	m.pendingEp = msg.req.Episode
+	m.errText = ""
+	m.status = i18n.TuiResolving
+	return m, tea.Batch(rearm,
+		m.resolveCmd(m.ref, msg.req.Episode, req, m.eng.ResolveHints(m.ref, msg.req.Episode)))
 }
 
 // updateLive — єдиний власник періодичного циклу знімків. Правила циклу:
@@ -325,6 +358,9 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	}
 	cmd, cancel := m.playCmd(res, titleID)
 	m.playCancel = cancel
+	// Серія, що грає, підсвічується в списку на телефоні — тому публікуємо вже
+	// з виставленим playCancel.
+	m.publishPlaylist()
 	// Знімок замовляється разом із сесією: перша відповідь запускає цикл, а до
 	// неї рядок оцінки просто відсутній.
 	return m, tea.Batch(cmd, m.liveSnapshotCmd(m.resetLive()))

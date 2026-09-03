@@ -602,3 +602,93 @@ func TestJourneyStopAfterEndsHeadlessChain(t *testing.T) {
 		t.Fatalf("цикл пішов за наступною серією:\n%s", out)
 	}
 }
+
+// liveSeam підміняє шов newLive і віддає вікно в сесію, яке дістанеться
+// застосунку: тест грає роль пульта зі своєї горутини, як справжній HTTP.
+func liveSeam(t *testing.T) <-chan *playback.Live {
+	t.Helper()
+	ch := make(chan *playback.Live, 1)
+	saved := newLive
+	newLive = func() *playback.Live {
+		live := saved()
+		select {
+		case ch <- live:
+		default:
+		}
+		return live
+	}
+	t.Cleanup(func() { newLive = saved })
+	return ch
+}
+
+// awaitPlaying чекає на вікно в сесію й на перший запис журналу: пульт закриває
+// сесію без додаткового семплу, тож збережена позиція залежить від тіка Run.
+func awaitPlaying(dir string, seam <-chan *playback.Live) (*playback.Live, error) {
+	var live *playback.Live
+	select {
+	case live = <-seam:
+	case <-time.After(5 * time.Second):
+		return nil, errors.New("рушій так і не створив Live")
+	}
+	journal := filepath.Join(dir, "state", "current.json")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(journal); err == nil {
+			snap, err := live.Snapshot()
+			if err != nil {
+				return nil, err
+			}
+			if snap.Playing {
+				return live, nil
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil, errors.New("сесія так і не заграла")
+}
+
+// Плейлист публікується й у headless: цикл play віддає пультові список серій
+// перед кожним запуском, а адресний запит переводить ланцюжок на названу серію
+// (а не на наступну — автоплей тут вимкнено).
+func TestJourneyRemotePlaylistSwitchesHeadlessEpisode(t *testing.T) {
+	remoteEnv(t)
+	seam := liveSeam(t)
+	held := playertest.NewSession(player.EndQuit, []float64{40}, []float64{1440})
+	held.Hold = true
+	dir, _, fp := journeyEnv(t, held, playertest.NewSession(player.EndQuit, []float64{30}, []float64{1440}))
+	writeConfig(t, dir, `{"autoplay":"never","remote":"on"}`)
+
+	done := make(chan error, 1)
+	go func() {
+		live, err := awaitPlaying(dir, seam)
+		if err != nil {
+			done <- err
+			return
+		}
+		pl := live.Playlist()
+		switch {
+		case pl.Gen == 0 || len(pl.Episodes) == 0:
+			done <- fmt.Errorf("плейлист порожній: %+v", pl)
+		case !pl.Episodes[0].Current:
+			done <- fmt.Errorf("серія, що грає, не позначена: %+v", pl.Episodes[0])
+		default:
+			done <- live.RequestPlay(pl.Gen, 3)
+		}
+	}()
+
+	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")
+	mustExit(t, 0, code, out, errOut)
+	if err := <-done; err != nil {
+		t.Fatalf("пульт: %v", err)
+	}
+	mustContain(t, "stdout", out, fmt.Sprintf(i18n.MsgResolving, 3))
+	starts := fp.Starts()
+	if len(starts) != 2 || !strings.HasSuffix(starts[1].MediaTitle, " · 3") {
+		t.Fatalf("запуски плеєра = %+v, want другу серію 3", starts)
+	}
+	lib := loadLibrary(t, dir)
+	title := lib.TitleByRef(fixtureRef(t))
+	if p := lib.ProgressFor(title.ID, 1); p == nil || p.PositionSec != 40 {
+		t.Errorf("серія 1 = %+v, want 40 с", p)
+	}
+}

@@ -193,6 +193,17 @@ func (m *Model) liveTickCmd(gen int) tea.Cmd { return m.liveCmd(gen, liveTickInt
 // liveRetryCmd — повтор для сесії, якої ще немає (див. liveStartRetry).
 func (m *Model) liveRetryCmd(gen int) tea.Cmd { return m.liveCmd(gen, liveStartRetry, false) }
 
+// remoteRequestCmd чекає на адресний запит пульта, що прийшов у простої. Команда
+// блокується на каналі, як і всякий підписник у bubbletea, і переозброюється
+// після кожного remotePlayMsg — так одночасно живе рівно один читач скриньки.
+func (m *Model) remoteRequestCmd() tea.Cmd {
+	if m.eng == nil || m.eng.Live == nil {
+		return nil
+	}
+	requests := m.eng.Live.Requests()
+	return func() tea.Msg { return remotePlayMsg{req: <-requests} }
+}
+
 func (m *Model) playCmd(res *playback.Resolved, titleID string) (tea.Cmd, context.CancelFunc) {
 	eng := m.eng
 	ctx, cancel := context.WithCancel(context.Background())

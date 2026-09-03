@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -78,6 +79,52 @@ func (m *Model) currentEpisodes() ([]provider.Episode, bool) {
 		return nil, false
 	}
 	return episodes, true
+}
+
+// publishPlaylist віддає пультові список серій поточного тайтлу. Викликається
+// лише з горутини Update: усе, що треба з бібліотеки, знімається тут і летить у
+// Live копією значень (правило 10). Без списку серій публікувати нічого —
+// краще порожньо, ніж серії тайтлу, з якого ми вже пішли.
+func (m *Model) publishPlaylist() {
+	if m.eng == nil || m.eng.Live == nil {
+		return
+	}
+	live := m.eng.Live
+	episodes, ok := m.currentEpisodes()
+	if !ok {
+		live.ClearPlaylist()
+		return
+	}
+	// Поточна серія є лише поки триває сесія: після playDoneMsg у списку не
+	// підсвічується нічого.
+	current := 0
+	if m.playCancel != nil {
+		current = m.pendingEp
+	}
+	title := m.eng.Lib.TitleByRef(m.ref)
+	name := m.ref.Name
+	if title != nil && title.Name != "" {
+		name = title.Name
+	}
+	rows := make([]playback.EpisodeInfo, 0, len(episodes))
+	for _, ep := range episodes {
+		row := playback.EpisodeInfo{Number: ep.Number, Current: ep.Number == current}
+		if title != nil {
+			if p := m.eng.Lib.ProgressFor(title.ID, ep.Number); p != nil {
+				row.Watched, row.PositionSec = p.Completed, p.PositionSec
+			}
+		}
+		rows = append(rows, row)
+	}
+	live.SetPlaylist(m.ref, name, rows)
+}
+
+// clearPlaylist — пульт більше не показує серій: ми пішли з екрана, що володіє
+// тайтлом (див. setScreen).
+func (m *Model) clearPlaylist() {
+	if m.eng != nil {
+		m.eng.Live.ClearPlaylist()
+	}
 }
 
 func (m Model) studioPin() string {

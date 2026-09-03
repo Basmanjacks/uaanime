@@ -597,6 +597,9 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 			outf(i18n.MsgPlayerFallback+"\n", eng.Player.ID())
 		}
 		outln(i18n.MsgLaunchingPlayer)
+		// Пульт має бачити список серій і в headless: цикл послідовний, тож
+		// читання бібліотеки тут не порушує правила 10.
+		publishPlaylist(sigCtx, eng, ref, ep)
 		result, err := eng.Play(sigCtx, res)
 		if errors.Is(err, errs.ErrNoPlayer) {
 			errln(i18n.MsgNoPlayer)
