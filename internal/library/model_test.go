@@ -180,6 +180,74 @@ func TestMarkSeenIsMonotonic(t *testing.T) {
 	}
 }
 
+func TestSetWatchedMarksAndUnmarks(t *testing.T) {
+	lib := &Library{}
+	now := time.Now()
+
+	lib.SetWatched("title", 2, true, now)
+	p := lib.ProgressFor("title", 2)
+	if p == nil || !p.Completed || !p.WatchedAt.Equal(now) {
+		t.Fatalf("прогрес після позначки: %+v", p)
+	}
+	if ep, pos, ok := lib.Resume("title"); !ok || ep != 3 || pos != 0 {
+		t.Fatalf("Resume = (%d, %v, %v), очікував серію 3", ep, pos, ok)
+	}
+	if got := lib.EntryFor("title").LastEpisode; got != 2 {
+		t.Fatalf("LastEpisode = %d, очікував 2", got)
+	}
+
+	// раніша серія не понижує LastEpisode
+	lib.SetWatched("title", 1, true, now.Add(time.Minute))
+	if got := lib.EntryFor("title").LastEpisode; got != 2 {
+		t.Fatalf("LastEpisode = %d після позначки серії 1", got)
+	}
+
+	lib.SetWatched("title", 2, false, now.Add(2*time.Minute))
+	if p := lib.ProgressFor("title", 2); p != nil {
+		t.Fatalf("прогрес серії 2 не зник: %+v", p)
+	}
+	if got := lib.EntryFor("title").LastEpisode; got != 1 {
+		t.Fatalf("LastEpisode = %d, очікував падіння до 1", got)
+	}
+	if got := lib.ProgressFor("title", 1); got == nil {
+		t.Fatal("зняття позначки прибрало чужий прогрес")
+	}
+}
+
+func TestSetWatchedKeepsDurationAndKnownEpisodes(t *testing.T) {
+	lib := &Library{Entries: []*Entry{{TitleID: "title", State: StateWatching, KnownEpisodes: 12}}}
+	now := time.Now()
+	lib.RecordPosition("title", 4, 100, 1440, now)
+
+	lib.SetWatched("title", 4, true, now.Add(time.Minute))
+	p := lib.ProgressFor("title", 4)
+	if p.PositionSec != 1440 || p.DurationSec != 1440 {
+		t.Fatalf("позиція не в кінці: %+v", p)
+	}
+
+	lib.SetWatched("title", 4, false, now.Add(2*time.Minute))
+	if got := lib.EntryLookup("title").KnownEpisodes; got != 12 {
+		t.Fatalf("KnownEpisodes = %d, очікував 12", got)
+	}
+}
+
+func TestSetWatchedUnmarkMissingIsNoop(t *testing.T) {
+	lib := &Library{Entries: []*Entry{{TitleID: "title", State: StateWatching, LastEpisode: 5}}}
+
+	lib.SetWatched("title", 7, false, time.Now())
+	if len(lib.Progress) != 0 {
+		t.Fatalf("Progress = %+v", lib.Progress)
+	}
+	if got := lib.EntryLookup("title").LastEpisode; got != 5 {
+		t.Fatalf("LastEpisode = %d, очікував 5", got)
+	}
+
+	lib.SetWatched("missing", 1, false, time.Now())
+	if len(lib.Entries) != 1 {
+		t.Fatalf("зняття позначки створило запис: %+v", lib.Entries)
+	}
+}
+
 func TestReconcileKnown(t *testing.T) {
 	t.Run("lowers matching provisional value", func(t *testing.T) {
 		lib := &Library{Entries: []*Entry{{TitleID: "title", State: StatePlanned, KnownEpisodes: 12}}}
