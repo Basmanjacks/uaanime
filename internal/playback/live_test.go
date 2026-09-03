@@ -19,12 +19,14 @@ import (
 func TestLiveNilIsSafe(t *testing.T) {
 	var live *Live
 	snap, err := live.Snapshot()
-	if err != nil || snap != (Snapshot{}) {
-		t.Fatalf("Snapshot(nil) = %+v, %v; очікував нуль без помилки", snap, err)
+	if err != nil || snap != idleSnapshot() {
+		t.Fatalf("Snapshot(nil) = %+v, %v; очікував простій без помилки", snap, err)
 	}
 	for name, call := range map[string]func() error{
 		"TogglePause": live.TogglePause,
 		"Seek":        func() error { return live.Seek(10) },
+		"SeekTo":      func() error { return live.SeekTo(10) },
+		"AddVolume":   func() error { return live.AddVolume(5) },
 		"Next":        live.Next,
 		"Stop":        live.Stop,
 	} {
@@ -34,8 +36,12 @@ func TestLiveNilIsSafe(t *testing.T) {
 	}
 	live.set(nil, "", 0)
 	live.clear()
-	if got := live.takeIntent(); got != IntentNone {
-		t.Fatalf("takeIntent(nil) = %v", got)
+	live.SetStopAfter(true)
+	if live.StopAfter() || live.takeStopAfter() {
+		t.Fatal("StopAfter(nil) = true, очікував false")
+	}
+	if intent, req := live.takeIntent(); intent != IntentNone || req != (PlayRequest{}) {
+		t.Fatalf("takeIntent(nil) = (%v, %+v)", intent, req)
 	}
 }
 
@@ -183,12 +189,127 @@ func TestLiveControlsAndIntent(t *testing.T) {
 }
 
 func TestLiveSetResetsLeftoverIntent(t *testing.T) {
-	live := &Live{intent: IntentNext}
+	live := &Live{intent: IntentNext, stopAfter: true, requested: PlayRequest{Gen: 1, Episode: 3}}
 	live.set(playertest.NewSession(player.EndQuit, nil, nil), "T", 2)
-	if got := live.takeIntent(); got != IntentNone {
-		t.Fatalf("залишковий намір протік у нову сесію: %v", got)
+	if got, req := live.takeIntent(); got != IntentNone || req != (PlayRequest{}) {
+		t.Fatalf("залишковий намір протік у нову сесію: %v %+v", got, req)
+	}
+	if live.StopAfter() {
+		t.Fatal("залишковий StopAfter протік у нову сесію")
 	}
 }
+
+// Прапорець «досидіти й зупинитись» стосується однієї серії: Finish забирає
+// його рівно раз, інакше автоплей мовчки помер би й на наступній.
+func TestLiveStopAfterIsConsumedOnce(t *testing.T) {
+	eng, _, res, _ := liveEngine(t)
+	titleID, _, err := eng.Begin(res)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	eng.Live.SetStopAfter(true)
+	if !eng.Live.StopAfter() {
+		t.Fatal("StopAfter = false одразу після SetStopAfter(true)")
+	}
+
+	result, err := eng.Finish(player.EndEOF, titleID, 1)
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if !result.StopAfter {
+		t.Fatalf("Result = %+v, очікував StopAfter", result)
+	}
+	again, err := eng.Finish(player.EndEOF, titleID, 1)
+	if err != nil {
+		t.Fatalf("Finish x2: %v", err)
+	}
+	if again.StopAfter {
+		t.Fatalf("StopAfter спожито двічі: %+v", again)
+	}
+}
+
+// IntentPlay без цілі нічого не означає: намір і Requested мусять дійти до
+// Result разом.
+func TestLiveEndPlaySurfacesRequest(t *testing.T) {
+	eng, _, res, _ := liveEngine(t)
+	titleID, _, err := eng.Begin(res)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	want := PlayRequest{Ref: res.Ref, Gen: 2, Episode: 3}
+	eng.Live.set(playertest.NewSession(player.EndQuit, nil, nil), "Title", 1)
+	eng.Live.mu.Lock()
+	eng.Live.requested = want
+	eng.Live.mu.Unlock()
+	if err := eng.Live.end(IntentPlay); err != nil {
+		t.Fatalf("end(IntentPlay): %v", err)
+	}
+
+	result, err := eng.Finish(player.EndQuit, titleID, 1)
+	if err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+	if result.Intent != IntentPlay || result.Requested != want {
+		t.Fatalf("Result = %+v, очікував IntentPlay із %+v", result, want)
+	}
+	again, err := eng.Finish(player.EndQuit, titleID, 1)
+	if err != nil {
+		t.Fatalf("Finish x2: %v", err)
+	}
+	if again.Intent != IntentNone || again.Requested != (PlayRequest{}) {
+		t.Fatalf("ціль спожито двічі: %+v", again)
+	}
+}
+
+// Гучність: крок читає поточну й ставить абсолютну, обрізану до 0..100.
+func TestLiveAddVolumeClamps(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		start float64
+		delta float64
+		want  float64
+	}{
+		{name: "звичайний крок", start: 60, delta: 5, want: 65},
+		{name: "стеля", start: 98, delta: 5, want: 100},
+		{name: "підлога", start: 3, delta: -5, want: 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sess := playertest.NewSession(player.EndQuit, nil, nil)
+			sess.VolumePct = tt.start
+			live := &Live{}
+			live.set(sess, "T", 1)
+
+			if err := live.AddVolume(tt.delta); err != nil {
+				t.Fatalf("AddVolume: %v", err)
+			}
+			want := []playertest.Call{{Op: "volume", Delta: tt.want}}
+			if got := sess.Calls(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("Calls = %+v, очікував %+v", got, want)
+			}
+		})
+	}
+}
+
+// Помилка гучності не має валити снапшот: пульт без повзунка кращий за пульт
+// без позиції та кнопок.
+func TestSnapshotSurvivesVolumeError(t *testing.T) {
+	live := &Live{}
+	live.set(mutedSession{playertest.NewSession(player.EndQuit, []float64{12}, []float64{100})}, "T", 1)
+	live.SetStopAfter(true)
+
+	snap, err := live.Snapshot()
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	if snap.VolumePct != VolumeUnknown || !snap.StopAfter || snap.PositionSec != 12 {
+		t.Fatalf("Snapshot = %+v, очікував невідому гучність і StopAfter", snap)
+	}
+}
+
+// mutedSession — сесія, у якої зламана лише гучність.
+type mutedSession struct{ *playertest.Session }
+
+func (mutedSession) Volume() (float64, error) { return 0, errBroken }
 
 func TestSnapshotSurfacesSessionError(t *testing.T) {
 	live := &Live{}

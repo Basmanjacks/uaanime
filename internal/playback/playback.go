@@ -506,7 +506,12 @@ type Result struct {
 	Completed    bool
 	PositionSec  float64
 	PinnedStudio string // студія, закріплена цим переглядом ("" — вже була)
-	Intent       Intent // чого попросив веб-пульт: none | next | stop
+	Intent       Intent // чого попросив користувач: none | next | stop | play
+	// Requested заповнене лише при IntentPlay: яку саме серію просять.
+	Requested PlayRequest
+	// StopAfter — «досидіти й зупинитись» було увімкнене на цій серії, тож
+	// ланцюжок автоплею далі не йде.
+	StopAfter bool
 }
 
 // Begin — синхронна половина запуску: тайтл, пін студії й стан watching.
@@ -575,8 +580,10 @@ func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player
 // Finish зливає журнал у бібліотеку й підсумовує сесію. PinnedStudio заповнює
 // викликач із того, що повернув Begin. sync: читає й пише Lib.
 func (e *Engine) Finish(reason player.EndReason, titleID string, ep int) (*Result, error) {
-	// намір пульта забирається до будь-якого раннього виходу — рівно один раз
-	out := &Result{Reason: reason, Intent: e.Live.takeIntent()}
+	// намір і прапорець зупинки забираються до будь-якого раннього виходу —
+	// рівно один раз, інакше вони протекли б у наступну серію
+	intent, requested := e.Live.takeIntent()
+	out := &Result{Reason: reason, Intent: intent, Requested: requested, StopAfter: e.Live.takeStopAfter()}
 	if _, err := e.Store.RecoverJournal(e.Lib); err != nil {
 		return out, err
 	}

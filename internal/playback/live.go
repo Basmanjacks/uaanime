@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/Basmanjacks/uaanime/internal/player"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // Intent — чого попросив веб-пульт замість природного завершення серії.
@@ -17,7 +18,22 @@ const (
 	IntentNone Intent = iota
 	IntentNext
 	IntentStop
+	// IntentPlay — адресний запит «грай цю серію»; ціль лежить у Result.Requested.
+	IntentPlay
 )
+
+// PlayRequest — що саме просять зіграти. Номера серії замало: між публікацією
+// списку і запитом TUI міг перейти на інший тайтл, тому запит несе і Ref, і
+// покоління списку (Gen), за яким застарілий запит відкидається.
+type PlayRequest struct {
+	Ref     provider.TitleRef
+	Gen     int
+	Episode int
+}
+
+// VolumeUnknown — гучність недоступна (плеєр не відповів або нічого не грає).
+// Окреме значення, бо 0 — це легітимна тиша.
+const VolumeUnknown = -1.0
 
 // Snapshot — стан сесії для пульта. Лише значення: у пульта немає доступу
 // ні до бібліотеки, ні до самої сесії.
@@ -28,6 +44,8 @@ type Snapshot struct {
 	PositionSec float64
 	DurationSec float64
 	Paused      bool
+	VolumePct   float64
+	StopAfter   bool
 }
 
 // ErrNotPlaying — команда пульта, коли нічого не грає.
@@ -38,24 +56,26 @@ var ErrNotPlaying = errors.New("зараз нічого не грає")
 // НІКОЛИ не торкається Lib: пульт живе на горутинах net/http, а бібліотека —
 // лише на горутині Update (правило 10 AGENTS.md).
 type Live struct {
-	mu      sync.Mutex
-	sess    player.Session
-	title   string
-	episode int
-	intent  Intent
+	mu        sync.Mutex
+	sess      player.Session
+	title     string
+	episode   int
+	intent    Intent
+	requested PlayRequest
+	stopAfter bool
 }
 
 // Snapshot читає позицію з сесії ПОЗА м'ютексом: RC-обмін VLC може тривати
 // до 5 с і не має блокувати set/clear із Run.
 func (l *Live) Snapshot() (Snapshot, error) {
 	if l == nil {
-		return Snapshot{}, nil
+		return idleSnapshot(), nil
 	}
 	l.mu.Lock()
-	sess, title, episode := l.sess, l.title, l.episode
+	sess, title, episode, stopAfter := l.sess, l.title, l.episode, l.stopAfter
 	l.mu.Unlock()
 	if sess == nil {
-		return Snapshot{}, nil
+		return idleSnapshot(), nil
 	}
 	pos, err := sess.TimePos()
 	if err != nil {
@@ -69,6 +89,12 @@ func (l *Live) Snapshot() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("пульт: стан паузи: %w", err)
 	}
+	// Гучність — єдине поле, чия помилка не валить снапшот: плеєр без звукової
+	// доріжки лишається керованим, а пульт просто ховає повзунок.
+	volume, err := sess.Volume()
+	if err != nil {
+		volume = VolumeUnknown
+	}
 	return Snapshot{
 		Playing:     true,
 		Title:       title,
@@ -76,8 +102,12 @@ func (l *Live) Snapshot() (Snapshot, error) {
 		PositionSec: pos,
 		DurationSec: dur,
 		Paused:      paused,
+		VolumePct:   volume,
+		StopAfter:   stopAfter,
 	}, nil
 }
+
+func idleSnapshot() Snapshot { return Snapshot{VolumePct: VolumeUnknown} }
 
 func (l *Live) session() (player.Session, error) {
 	if l == nil {
@@ -106,6 +136,49 @@ func (l *Live) Seek(deltaSec float64) error {
 		return err
 	}
 	return sess.Seek(deltaSec)
+}
+
+func (l *Live) SeekTo(posSec float64) error {
+	sess, err := l.session()
+	if err != nil {
+		return err
+	}
+	return sess.SeekTo(posSec)
+}
+
+// AddVolume міняє гучність кроком: читає поточну, клампить і ставить абсолютну.
+// Відносної команди в player.Session немає навмисно — жоден із бекендів не має
+// такої, що приймала б відсотки й тримала стелю (див. player.Session).
+func (l *Live) AddVolume(delta float64) error {
+	sess, err := l.session()
+	if err != nil {
+		return err
+	}
+	current, err := sess.Volume()
+	if err != nil {
+		return fmt.Errorf("пульт: гучність: %w", err)
+	}
+	return sess.SetVolume(min(max(current+delta, 0), 100))
+}
+
+// SetStopAfter/StopAfter — «досидіти цю серію й зупинитись». Прапорець живе
+// тут, а не в конфізі: це разове бажання, спільне для TUI і пульта.
+func (l *Live) SetStopAfter(on bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.stopAfter = on
+	l.mu.Unlock()
+}
+
+func (l *Live) StopAfter() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.stopAfter
 }
 
 // Next просить наступну серію: намір записується, сесія закривається, і далі
@@ -144,7 +217,7 @@ func (l *Live) set(sess player.Session, title string, episode int) {
 	}
 	l.mu.Lock()
 	l.sess, l.title, l.episode = sess, title, episode
-	l.intent = IntentNone
+	l.intent, l.requested, l.stopAfter = IntentNone, PlayRequest{}, false
 	l.mu.Unlock()
 }
 
@@ -158,14 +231,28 @@ func (l *Live) clear() {
 	l.mu.Unlock()
 }
 
-// takeIntent віддає намір рівно один раз.
-func (l *Live) takeIntent() Intent {
+// takeIntent віддає намір і його ціль рівно один раз — разом, бо для
+// IntentPlay намір без Requested нічого не означає.
+func (l *Live) takeIntent() (Intent, PlayRequest) {
 	if l == nil {
-		return IntentNone
+		return IntentNone, PlayRequest{}
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	intent := l.intent
-	l.intent = IntentNone
-	return intent
+	intent, requested := l.intent, l.requested
+	l.intent, l.requested = IntentNone, PlayRequest{}
+	return intent, requested
+}
+
+// takeStopAfter віддає прапорець рівно один раз: він стосується сесії, що
+// щойно завершилася, і не має пережити її в наступну.
+func (l *Live) takeStopAfter() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	stopAfter := l.stopAfter
+	l.stopAfter = false
+	return stopAfter
 }
