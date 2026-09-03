@@ -283,6 +283,23 @@ func (s *vlcSession) Seek(deltaSec float64) error {
 	return sendLocked(conn, reader, command)
 }
 
+func (s *vlcSession) SeekTo(posSec float64) error {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	conn, reader, err := s.snapshotLocked()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	// Число БЕЗ знака — абсолютна позиція; знак у тій самій команді означав би
+	// відносний seek (див. Seek вище). Від'ємну ціль RC сам обмежує нулем.
+	pos := int64(math.Round(posSec))
+	if pos < 0 {
+		pos = 0
+	}
+	return sendLocked(conn, reader, fmt.Sprintf("seek %d", pos))
+}
+
 // endReasonOnCleanExit: VLC із --play-and-exit виходить і після кінця файла, і
 // після Ctrl+Q, тому EOF відновлюється з останніх виміряних pos/dur. Виміри
 // приходять із тика двигуна (5 с) — для 95 %-евристики цього достатньо.

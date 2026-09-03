@@ -32,6 +32,11 @@ func TestMPVSessionPlaybackControls(t *testing.T) {
 			call:        func(sess *mpvSession) error { return sess.Seek(10) },
 			wantCommand: `["seek",10,"relative"]`,
 		},
+		{
+			name:        "ставить абсолютну позицію",
+			call:        func(sess *mpvSession) error { return sess.SeekTo(42) },
+			wantCommand: `["seek",42,"absolute"]`,
+		},
 	}
 
 	for _, tt := range tests {

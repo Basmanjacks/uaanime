@@ -105,6 +105,13 @@ func (p fakePlayer) Start(context.Context, string, string, map[string]string, fl
 	return p.session, nil
 }
 
+// sessionCall — записана команда керування: тести звіряють, що рушій дійшов
+// до сесії саме з тим значенням.
+type sessionCall struct {
+	op    string
+	value float64
+}
+
 type fakeSession struct {
 	end       chan player.EndReason
 	positions []float64
@@ -112,6 +119,7 @@ type fakeSession struct {
 	posIndex  int
 	durIndex  int
 	paused    bool
+	calls     []sessionCall
 }
 
 var _ player.Session = (*fakeSession)(nil)
@@ -146,7 +154,16 @@ func (s *fakeSession) TogglePause() error {
 }
 
 func (s *fakeSession) Paused() (bool, error) { return s.paused, nil }
-func (s *fakeSession) Seek(float64) error    { return nil }
+
+func (s *fakeSession) Seek(deltaSec float64) error {
+	s.calls = append(s.calls, sessionCall{op: "seek", value: deltaSec})
+	return nil
+}
+
+func (s *fakeSession) SeekTo(posSec float64) error {
+	s.calls = append(s.calls, sessionCall{op: "seekto", value: posSec})
+	return nil
+}
 
 func (s *fakeSession) End() <-chan player.EndReason { return s.end }
 func (s *fakeSession) Wait() error                  { return nil }
@@ -994,6 +1011,7 @@ func (s *constantSession) Paused() (bool, error) {
 	return s.paused, nil
 }
 func (s *constantSession) Seek(float64) error           { return nil }
+func (s *constantSession) SeekTo(float64) error         { return nil }
 func (s *constantSession) End() <-chan player.EndReason { return s.end }
 func (s *constantSession) Wait() error                  { return nil }
 func (s *constantSession) Close()                       {}

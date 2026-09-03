@@ -27,6 +27,10 @@ type Session interface {
 	Paused() (bool, error)
 	// Seek зсуває позицію відносно поточної; від'ємне — назад.
 	Seek(deltaSec float64) error
+	// SeekTo ставить абсолютну позицію: тап по смузі пульта знає лише
+	// координату, а не зсув, тож перерахунок через Seek дав би зайвий
+	// round-trip і гонку з відтворенням.
+	SeekTo(posSec float64) error
 	End() <-chan EndReason
 	Wait() error
 	Close()

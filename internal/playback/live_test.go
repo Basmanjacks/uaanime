@@ -209,6 +209,7 @@ func (failingSession) Duration() (float64, error)   { return 0, errBroken }
 func (failingSession) TogglePause() error           { return errBroken }
 func (failingSession) Paused() (bool, error)        { return false, errBroken }
 func (failingSession) Seek(float64) error           { return errBroken }
+func (failingSession) SeekTo(float64) error         { return errBroken }
 func (failingSession) End() <-chan player.EndReason { return nil }
 func (failingSession) Wait() error                  { return nil }
 func (failingSession) Close()                       {}

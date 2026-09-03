@@ -284,6 +284,11 @@ func (s *mpvSession) Seek(deltaSec float64) error {
 	return err
 }
 
+func (s *mpvSession) SeekTo(posSec float64) error {
+	_, err := s.request("seek", posSec, "absolute")
+	return err
+}
+
 // Close прибирає сесію: закриває сокет (це зупиняє читача), зупиняє mpv і
 // видаляє каталог сокета.
 func (s *mpvSession) Close() {
