@@ -258,3 +258,103 @@ func TestNewIDUnique(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestPushRecent(t *testing.T) {
+	var list []string
+	for _, q := range []string{"один", "два", "три"} {
+		list = pushRecent(list, q)
+	}
+	if !reflect.DeepEqual(list, []string{"три", "два", "один"}) {
+		t.Fatalf("новий запит має бути першим: %#v", list)
+	}
+	// повтор не дублює, а піднімає наверх — незалежно від регістру
+	list = pushRecent(list, "ОДИН")
+	if !reflect.DeepEqual(list, []string{"ОДИН", "три", "два"}) {
+		t.Fatalf("повтор мав піднятися без дубліката: %#v", list)
+	}
+	for _, q := range []string{"4", "5", "6", "7"} {
+		list = pushRecent(list, q)
+	}
+	if len(list) != maxSearches || list[0] != "7" {
+		t.Fatalf("стеля %d і найсвіжіший перший: %#v", maxSearches, list)
+	}
+}
+
+func TestSearchesNormalizedOnRead(t *testing.T) {
+	s := openTemp(t)
+	var raw []string
+	raw = append(raw, "\x1b[31mчервоний\x1b[0m", "  ", "дубль", "ДУБЛЬ", strings.Repeat("я", 100))
+	for i := range 20 {
+		raw = append(raw, string(rune('a'+i)))
+	}
+	if err := writeAtomic(s.searchesPath(), searches{Queries: raw}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := s.LoadSearches()
+	if len(got) != maxSearches {
+		t.Fatalf("стеля %d, отримав %#v", maxSearches, got)
+	}
+	want := []string{"червоний", "дубль", strings.Repeat("я", maxSearchLen), "a", "b"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("LoadSearches = %#v, очікував %#v", got, want)
+	}
+}
+
+func TestSearchesBrokenJSON(t *testing.T) {
+	s := openTemp(t)
+	if err := os.WriteFile(s.searchesPath(), []byte("{не json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.LoadSearches(); got != nil {
+		t.Fatalf("битий файл історії має читатися як порожній: %#v", got)
+	}
+	// і не заважає писати далі
+	list, err := s.AddSearch("фрірен")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(list, []string{"фрірен"}) {
+		t.Fatalf("AddSearch = %#v", list)
+	}
+	if got := s.LoadSearches(); !reflect.DeepEqual(got, []string{"фрірен"}) {
+		t.Fatalf("після AddSearch на диску %#v", got)
+	}
+}
+
+func TestRemoveSearch(t *testing.T) {
+	s := openTemp(t)
+	for _, q := range []string{"а", "б", "в"} {
+		if _, err := s.AddSearch(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := s.RemoveSearch("Б")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(list, []string{"в", "а"}) {
+		t.Fatalf("RemoveSearch = %#v", list)
+	}
+	if got := s.LoadSearches(); !reflect.DeepEqual(got, []string{"в", "а"}) {
+		t.Fatalf("видалення має переживати перезавантаження: %#v", got)
+	}
+	// видалення відсутнього — не помилка
+	if _, err := s.RemoveSearch("нема"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSearchesFilePerms(t *testing.T) {
+	s := openTemp(t)
+	if _, err := s.AddSearch("фрірен"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(s.searchesPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("права %v, очікував 0600", info.Mode().Perm())
+	}
+}
