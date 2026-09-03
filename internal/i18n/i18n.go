@@ -75,6 +75,9 @@ const (
 	TuiHintEpisodes = "↑↓ Вибір · Enter Грати · X Переглянуто · S Озвучка · M Закладка · Esc Назад"
 	TuiHintStudio   = "↑↓ Вибір · Enter Закріпити й грати · Esc Назад"
 	TuiStudioPinned = "озвучка: %s"
+	// TuiRemainingFmt — залишок серій і оцінка часу в заголовку екрана серій.
+	// «~» перед часом обов'язкове: це середнє, а не точна тривалість.
+	TuiRemainingFmt = "%s · ~%s"
 	// TuiStudioCoverage — скільки серій тайтлу озвучила студія: «3/12».
 	TuiStudioCoverage = "%d/%d"
 	TuiStudioAuto     = "авто"

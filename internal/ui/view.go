@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -30,17 +31,7 @@ func (m Model) View() tea.View {
 	case screenSearch:
 		title = i18n.TuiSearchTitle
 	case screenEpisodes:
-		title = m.currentTitleName()
-		pin := m.studioPin()
-		if pin == "" {
-			pin = i18n.TuiStudioAuto
-		}
-		tail := styleMetaSep.Render(metaSep) + styleMeta.Render(fmt.Sprintf(i18n.TuiStudioPinned, pin))
-		nameWidth := m.w - 2 - lipgloss.Width(tail)
-		if nameWidth < 8 {
-			nameWidth = 8
-		}
-		title = truncate(truncate(title, nameWidth)+tail, m.w-2)
+		title = m.episodesHeader()
 	case screenPlaying:
 		title = m.currentTitleName()
 	case screenStudio:
@@ -115,6 +106,42 @@ func (m Model) View() tea.View {
 	}
 	v.AltScreen = true
 	return v
+}
+
+// episodesHeader — назва тайтла плюс хвіст із метаданих: скільки лишилось і
+// яка озвучка закріплена. Хвіст коштує колонок, тому у вузькому вікні частини
+// відкидаються зліва направо, поки назві не лишиться менше за minTitleName.
+func (m Model) episodesHeader() string {
+	pin := m.studioPin()
+	if pin == "" {
+		pin = i18n.TuiStudioAuto
+	}
+	parts := make([]string, 0, 2)
+	if remaining := m.remainingLabel(); remaining != "" {
+		parts = append(parts, remaining)
+	}
+	parts = append(parts, fmt.Sprintf(i18n.TuiStudioPinned, pin))
+
+	limit := m.w - 2
+	tail := metaTail(parts)
+	for len(parts) > 0 && limit-lipgloss.Width(tail) < minTitleName {
+		parts = parts[1:]
+		tail = metaTail(parts)
+	}
+	nameWidth := limit - lipgloss.Width(tail)
+	if nameWidth < 8 {
+		nameWidth = 8
+	}
+	return truncate(truncate(m.currentTitleName(), nameWidth)+tail, limit)
+}
+
+func metaTail(parts []string) string {
+	var b strings.Builder
+	for _, part := range parts {
+		b.WriteString(styleMetaSep.Render(metaSep))
+		b.WriteString(styleMeta.Render(part))
+	}
+	return b.String()
 }
 
 // remoteLine — адреса пульта на екрані «Грає». Обрізаний URL гірший за

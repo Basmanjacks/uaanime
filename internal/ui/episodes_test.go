@@ -110,3 +110,57 @@ func TestEpisodesHintFitsMinimumWidth(t *testing.T) {
 		t.Fatalf("підказку обрізано у вікні 80 колонок:\n%s", view)
 	}
 }
+
+// TestEpisodesHeaderRemainingDropsFirst — хвіст заголовка стискається за
+// пріоритетом: у вузькому вікні залишок зникає, закріплена озвучка лишається,
+// і жоден рядок кадру не ширший за термінал.
+func TestEpisodesHeaderRemainingDropsFirst(t *testing.T) {
+	m := newTestModel(t)
+	ref := provider.TitleRef{
+		Provider: "test",
+		Slug:     "remaining-header",
+		Name:     "Похорон Фрірен: за межами подорожі життя",
+	}
+	m.eng.Lib.Titles = []*library.LocalTitle{{ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref}}}
+	m.eng.Lib.Entries = []*library.Entry{{TitleID: ref.Slug, StudioPin: "Beta"}}
+	m.eng.Lib.Progress = []*library.Progress{
+		{TitleID: ref.Slug, Episode: 1, DurationSec: 1440, Completed: true},
+	}
+	m.ref, m.episodesRef = ref, ref
+	m.episodes = testEpisodes(12)
+	m.showEpisodes()
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	remaining := fmt.Sprintf(i18n.TuiRemainingFmt, i18n.RemainingEpisodes(11), "4 год 24 хв")
+	pin := fmt.Sprintf(i18n.TuiStudioPinned, "Beta")
+	header := strings.SplitN(ansi.Strip(m.View().Content), "\n", 2)[0]
+	if !strings.Contains(header, remaining) {
+		t.Fatalf("wide header %q does not contain %q", header, remaining)
+	}
+	if !strings.Contains(header, pin) {
+		t.Fatalf("wide header %q does not contain %q", header, pin)
+	}
+	assertViewFitsWidth(t, m)
+
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 60, Height: 24})
+	header = strings.SplitN(ansi.Strip(m.View().Content), "\n", 2)[0]
+	if strings.Contains(header, i18n.RemainingEpisodes(11)) {
+		t.Fatalf("narrow header %q kept the remaining part", header)
+	}
+	if !strings.Contains(header, pin) {
+		t.Fatalf("narrow header %q dropped the studio pin", header)
+	}
+	assertViewFitsWidth(t, m)
+}
+
+// assertViewFitsWidth — інваріант кадру: перенесення рядка зсунуло б увесь
+// екран і сховало нижній рядок.
+func assertViewFitsWidth(t *testing.T, m Model) {
+	t.Helper()
+
+	for i, line := range strings.Split(m.View().Content, "\n") {
+		if got := lipgloss.Width(line); got > m.w {
+			t.Fatalf("line %d width = %d, want <= %d: %q", i, got, m.w, ansi.Strip(line))
+		}
+	}
+}

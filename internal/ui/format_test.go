@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -124,5 +127,98 @@ func TestHumanDate(t *testing.T) {
 				t.Fatalf("humanDate(%v, %v) = %q, want %q", test.at, now, got, test.want)
 			}
 		})
+	}
+}
+
+// Українська множина в заголовку: 1 — однина, 2–4 — форма для кількох,
+// решта — множина; 11 попри «1» на кінці — множина.
+func TestRemainingEpisodesPlural(t *testing.T) {
+	for _, tc := range []struct {
+		n    int
+		want string
+	}{
+		{1, "залишилась 1 серія"},
+		{2, "залишилось 2 серії"},
+		{5, "залишилось 5 серій"},
+		{11, "залишилось 11 серій"},
+		{21, "залишилась 21 серія"},
+	} {
+		if got := i18n.RemainingEpisodes(tc.n); got != tc.want {
+			t.Errorf("RemainingEpisodes(%d) = %q, want %q", tc.n, got, tc.want)
+		}
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	for _, tc := range []struct {
+		sec  float64
+		want string
+	}{
+		{0, ""},
+		{20, ""},
+		{60, "1 хв"},
+		{45 * 60, "45 хв"},
+		{2*3600 + 45*60, "2 год 45 хв"},
+		{3 * 3600, "3 год"},
+	} {
+		if got := i18n.HumanDuration(tc.sec); got != tc.want {
+			t.Errorf("HumanDuration(%v) = %q, want %q", tc.sec, got, tc.want)
+		}
+	}
+}
+
+func TestRemainingLabel(t *testing.T) {
+	newModel := func(t *testing.T) Model {
+		t.Helper()
+		m := newTestModel(t)
+		ref := testRefs("remaining", 1)[0]
+		m.eng.Lib.Titles = []*library.LocalTitle{{ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref}}}
+		m.ref, m.episodesRef = ref, ref
+		m.episodes = testEpisodes(12)
+		return m
+	}
+
+	// без жодного семпла тривалості лишається сама кількість
+	m := newModel(t)
+	if got, want := m.remainingLabel(), i18n.RemainingEpisodes(12); got != want {
+		t.Errorf("remainingLabel without samples = %q, want %q", got, want)
+	}
+
+	// дві переглянуті серії по 24 хв → 10 по 24 хв = 4 год
+	m = newModel(t)
+	for ep := 1; ep <= 2; ep++ {
+		m.eng.Lib.Progress = append(m.eng.Lib.Progress, &library.Progress{
+			TitleID: m.ref.Slug, Episode: ep, DurationSec: 1440, Completed: true,
+		})
+	}
+	want := fmt.Sprintf(i18n.TuiRemainingFmt, i18n.RemainingEpisodes(10), "4 год")
+	if got := m.remainingLabel(); got != want {
+		t.Errorf("remainingLabel = %q, want %q", got, want)
+	}
+
+	// недодивлена серія лишається в залишку
+	m.eng.Lib.Progress = append(m.eng.Lib.Progress, &library.Progress{
+		TitleID: m.ref.Slug, Episode: 3, PositionSec: 300, DurationSec: 1440,
+	})
+	if got := m.remainingLabel(); got != want {
+		t.Errorf("remainingLabel with a partial episode = %q, want %q", got, want)
+	}
+
+	// усе переглянуто — рядка немає
+	m = newModel(t)
+	for ep := 1; ep <= 12; ep++ {
+		m.eng.Lib.Progress = append(m.eng.Lib.Progress, &library.Progress{
+			TitleID: m.ref.Slug, Episode: ep, Completed: true,
+		})
+	}
+	if got := m.remainingLabel(); got != "" {
+		t.Errorf("remainingLabel for a finished title = %q, want empty", got)
+	}
+
+	// серій не знаємо зовсім — теж немає
+	m = newModel(t)
+	m.episodes, m.episodesRef = nil, provider.TitleRef{}
+	if got := m.remainingLabel(); got != "" {
+		t.Errorf("remainingLabel without episodes = %q, want empty", got)
 	}
 }

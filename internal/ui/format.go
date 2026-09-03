@@ -106,3 +106,53 @@ func humanDate(t, now time.Time) string {
 func sameDay(a, b time.Time) bool {
 	return a.Year() == b.Year() && a.YearDay() == b.YearDay()
 }
+
+// minTitleName — скільки колонок мусить лишитися самій назві тайтла в
+// заголовку екрана серій. Метадані корисні, але екран підписаний назвою:
+// коли на неї лишається менше, відкидається хвіст, а не назва.
+const minTitleName = 20
+
+// remainingLabel — «залишилось 8 серій · ~3 год 20 хв» для заголовка екрана
+// серій. Оцінка часу — середня тривалість серій цього тайтла, які вже
+// відкривали: провайдер тривалості не дає, а серії одного релізу приблизно
+// однакові. Без жодного семпла лишається сама кількість.
+func (m *Model) remainingLabel() string {
+	episodes, ok := m.currentEpisodes()
+	if !ok {
+		return ""
+	}
+	completed := map[int]bool{}
+	var sum float64
+	samples := 0
+	if title := m.eng.Lib.TitleByRef(m.ref); title != nil {
+		for _, p := range m.eng.Lib.Progress {
+			if p == nil || p.TitleID != title.ID {
+				continue
+			}
+			if p.Completed {
+				completed[p.Episode] = true
+			}
+			if p.DurationSec > 0 {
+				sum += p.DurationSec
+				samples++
+			}
+		}
+	}
+	remaining := 0
+	for _, ep := range episodes {
+		if !completed[ep.Number] {
+			remaining++
+		}
+	}
+	if remaining == 0 {
+		return ""
+	}
+	label := i18n.RemainingEpisodes(remaining)
+	if samples == 0 {
+		return label
+	}
+	if d := i18n.HumanDuration(sum / float64(samples) * float64(remaining)); d != "" {
+		return fmt.Sprintf(i18n.TuiRemainingFmt, label, d)
+	}
+	return label
+}
