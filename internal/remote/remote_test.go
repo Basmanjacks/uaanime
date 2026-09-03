@@ -31,6 +31,11 @@ type fakeCtl struct {
 	seeks   []float64
 	seekTos []float64
 	volumes []float64
+	// playlist — те, що віддає Episodes; plays — пари (покоління, серія), з
+	// якими прийшов тап по рядку списку.
+	playlist Playlist
+	plErr    error
+	plays    [][2]int
 }
 
 func (f *fakeCtl) Status() (Status, error) {
@@ -65,6 +70,26 @@ func (f *fakeCtl) ToggleStopAfter() error {
 		return err
 	}
 	f.st.StopAfter = !f.st.StopAfter
+	return nil
+}
+
+func (f *fakeCtl) Episodes() (Playlist, error) {
+	if f.plErr != nil {
+		return Playlist{}, f.plErr
+	}
+	return f.playlist, nil
+}
+
+// Play імітує справжній контролер: чужий gen — застарілий список, і до моделі
+// запит не доходить.
+func (f *fakeCtl) Play(gen, n int) error {
+	if err := f.record("play"); err != nil {
+		return err
+	}
+	if gen != f.playlist.Gen || gen == 0 {
+		return fmt.Errorf("gen %d: %w", gen, ErrStalePlaylist)
+	}
+	f.plays = append(f.plays, [2]int{gen, n})
 	return nil
 }
 
@@ -698,5 +723,180 @@ func TestStartAndCloseServeOverTCP(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"playing":true`) {
 		t.Fatalf("тіло %s", body)
+	}
+}
+
+// ---- список серій і тап по рядку (S20) ----
+
+func testPlaylist() Playlist {
+	return Playlist{Gen: 7, Title: "Фрірен", Episodes: []Episode{
+		{Number: 1, Watched: true},
+		{Number: 2, PositionSec: 581, Current: true},
+		{Number: 3},
+	}}
+}
+
+// Сторінка малює список рівно тим, що прийшло: порядок і прапорці — частина
+// контракту, як і імена полів.
+func TestEpisodesEndpointReturnsPlaylist(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
+
+	rec := do(t, h, http.MethodGet, base("episodes"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d, тіло %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type %q", got)
+	}
+	var got Playlist
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("розбір: %v (%q)", err, rec.Body.String())
+	}
+	if got.Gen != 7 || got.Title != "Фрірен" || len(got.Episodes) != 3 {
+		t.Fatalf("Playlist = %+v", got)
+	}
+	for i, want := range c.playlist.Episodes {
+		if got.Episodes[i] != want {
+			t.Errorf("серія %d = %+v, очікував %+v", i, got.Episodes[i], want)
+		}
+	}
+	// імена полів — контракт зі сторінкою
+	var raw struct {
+		Gen      int                          `json:"gen"`
+		Episodes []map[string]json.RawMessage `json:"episodes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"number", "watched", "position_sec", "current"} {
+		if _, ok := raw.Episodes[0][key]; !ok {
+			t.Errorf("у серії немає поля %q: %s", key, rec.Body.String())
+		}
+	}
+	if len(c.calls) != 0 {
+		t.Fatalf("GET episodes смикнув команди: %v", c.calls)
+	}
+}
+
+// Списку немає — це не помилка: сторінка має отримати порожній масив, а не null.
+func TestEpisodesEndpointEmptyPlaylist(t *testing.T) {
+	h := newTestHandler(t, playingCtl())
+	rec := do(t, h, http.MethodGet, base("episodes"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != `{"gen":0,"episodes":[]}` {
+		t.Fatalf("тіло = %s, очікував порожній список", got)
+	}
+}
+
+// Тап по рядку списку: покоління доходить до контролера як є, і у відповідь
+// летить свіжий статус.
+func TestPlayByNumberReachesController(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
+
+	rec := do(t, h, http.MethodPost, base("play/7/2"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("код %d, тіло %q", rec.Code, rec.Body.String())
+	}
+	if len(c.plays) != 1 || c.plays[0] != [2]int{7, 2} {
+		t.Fatalf("plays = %v, очікував [[7 2]]", c.plays)
+	}
+	if st := decodeStatus(t, rec); st.PositionSec != 43 {
+		t.Fatalf("ехо position = %v, очікував свіже 43", st.PositionSec)
+	}
+}
+
+// Тайтл змінився між GET episodes і тапом: 409 із поясненням, і жодного запиту
+// в модель — інакше пульт запустив би серію чужого тайтлу.
+func TestPlayWithStaleGenIs409(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
+	c.playlist.Gen = 8 // у застосунку вже інший список
+
+	rec := do(t, h, http.MethodPost, base("play/7/2"))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("код %d, очікував 409 (тіло %q)", rec.Code, rec.Body.String())
+	}
+	if got := decodeErr(t, rec); got != i18n.RemoteNoPlaylist {
+		t.Fatalf("error = %q, очікував %q", got, i18n.RemoteNoPlaylist)
+	}
+	if len(c.plays) != 0 {
+		t.Fatalf("застарілий тап дійшов до моделі: %v", c.plays)
+	}
+}
+
+// Розбір шляху той самий суворий, що й у seek: усе непередбачене — 404, а не
+// 400, щоб не підтверджувати вгаданий токен.
+func TestPlayPathParsing(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
+	bad := []string{
+		"play/7/0", "play/a/2", "play/7", "play//2", "play/7/", "play/",
+		"play", "play/7/2/3", "play/7/-2", "play/7/+2", "play/7/2.0",
+		"play/1234567/2", "play/7/12345", "play/7/abc", "play/%207/2",
+	}
+	for _, p := range bad {
+		rec := do(t, h, http.MethodPost, base(p))
+		if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 {
+			t.Errorf("POST %s: %d %q, очікував 404 без тіла", p, rec.Code, rec.Body.String())
+		}
+	}
+	if len(c.plays) != 0 || len(c.calls) != 0 {
+		t.Fatalf("сміття дійшло до контролера: plays %v, calls %v", c.plays, c.calls)
+	}
+	// gen 0 — коректний шлях, але завідомо застарілий список
+	if rec := do(t, h, http.MethodPost, base("play/0/2")); rec.Code != http.StatusConflict {
+		t.Fatalf("POST play/0/2 = %d, очікував 409", rec.Code)
+	}
+}
+
+// Чужий токен не має видавати ні списку, ні можливості грати.
+func TestPlaylistPathsNeedToken(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
+	foreign := "/r/ffffffffffffffffffffffffffffffff/"
+	for _, tc := range []struct{ method, path string }{
+		{http.MethodGet, foreign + "episodes"},
+		{http.MethodPost, foreign + "play/7/2"},
+	} {
+		rec := do(t, h, tc.method, tc.path)
+		if rec.Code != http.StatusNotFound || rec.Body.Len() != 0 {
+			t.Errorf("%s %s: %d %q, очікував 404 без тіла", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+	if len(c.plays) != 0 || len(c.calls) != 0 {
+		t.Fatalf("чужий токен дістався контролера: %v %v", c.plays, c.calls)
+	}
+}
+
+// Методи й CSRF — як на решті маршрутів: список лише читається, тап лише
+// постить, і чужий сайт не може ні того, ні того.
+func TestPlaylistMethodsAndCSRF(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
+
+	if rec := do(t, h, http.MethodPost, base("episodes")); rec.Code != http.StatusMethodNotAllowed ||
+		rec.Header().Get("Allow") != http.MethodGet {
+		t.Errorf("POST episodes = %d (Allow %q)", rec.Code, rec.Header().Get("Allow"))
+	}
+	if rec := do(t, h, http.MethodGet, base("play/7/2")); rec.Code != http.StatusMethodNotAllowed ||
+		rec.Header().Get("Allow") != http.MethodPost {
+		t.Errorf("GET play = %d (Allow %q)", rec.Code, rec.Header().Get("Allow"))
+	}
+	rec := doReq(t, h, http.MethodPost, base("play/7/2"), lanHost, map[string]string{"Sec-Fetch-Site": "cross-site"})
+	if rec.Code != http.StatusForbidden || rec.Body.Len() != 0 {
+		t.Errorf("чужий origin: %d %q, очікував 403 без тіла", rec.Code, rec.Body.String())
+	}
+	if len(c.plays) != 0 {
+		t.Fatalf("контролер викликано попри 405/403: %v", c.plays)
 	}
 }

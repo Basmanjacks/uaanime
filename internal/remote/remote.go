@@ -59,8 +59,26 @@ type Status struct {
 	StopAfter bool    `json:"stop_after"`
 	// PlaylistGen — покоління списку серій; 0 = списку немає. Сторінка стежить
 	// саме за ним, а не за Episode: поза грою Episode нульовий, а список серій
-	// уже може бути іншим. Наповнює його S19 — поки контролер віддає 0.
+	// уже може бути іншим.
 	PlaylistGen int `json:"playlist_gen"`
+}
+
+// Playlist — список серій тайтлу, який зараз відкритий у застосунку. Gen —
+// покоління, з яким сторінка потім повертається в play/<gen>/<n>: інакше
+// сервер не відрізнить тап по щойно показаному списку від тапу по старому.
+type Playlist struct {
+	Gen      int       `json:"gen"`
+	Title    string    `json:"title,omitempty"`
+	Episodes []Episode `json:"episodes"`
+}
+
+// Episode — рядок списку серій. Позиція потрібна, щоб недодивлену серію можна
+// було впізнати без окремого запиту.
+type Episode struct {
+	Number      int     `json:"number"`
+	Watched     bool    `json:"watched"`
+	PositionSec float64 `json:"position_sec"`
+	Current     bool    `json:"current"`
 }
 
 // VolumeUnknown — гучність недоступна. Дзеркалить playback.VolumeUnknown:
@@ -70,6 +88,11 @@ const VolumeUnknown = -1.0
 // ErrNotPlaying — команда, коли нічого не грає → 409. Перехідник у cmd/uaanime
 // мапить сюди помилку рушія; remote не імпортує playback.
 var ErrNotPlaying = errors.New("зараз нічого не грає")
+
+// ErrStalePlaylist — тап по списку серій, якого вже немає (у застосунку
+// відкрито інший тайтл) → 409. Перехідник у cmd/uaanime мапить сюди помилку
+// рушія; сторінка на цю відповідь перечитує список.
+var ErrStalePlaylist = errors.New("список серій застарів")
 
 // ErrBadToken — токен не має форми 128-бітного шістнадцяткового рядка. Ловимо
 // на старті, бо коротший токен — це вже не автентифікація.
@@ -86,6 +109,12 @@ type Controller interface {
 	// ToggleStopAfter — перемикач без аргументу: сторінка не надсилає бажаний
 	// стан, бо між опитуванням і тапом його міг змінити TUI.
 	ToggleStopAfter() error
+	// Episodes — список серій відкритого тайтлу; порожній Playlist (Gen 0) —
+	// не помилка, а «зараз показувати нічого».
+	Episodes() (Playlist, error)
+	// Play — тап по рядку списку: gen того списку, з якого тапнули, і номер
+	// серії. Застарілий gen → ErrStalePlaylist.
+	Play(gen, n int) error
 	Next() error
 	Stop() error
 }
@@ -99,10 +128,15 @@ const (
 	volumeStep   = 5
 )
 
-// maxSeekDigits — стеля довжини числа в seek/<секунди>. Шість цифр — це 11 діб
-// відео; довше приймати нема сенсу, а обмеження довжини відсікає сміття ще до
-// арифметики.
-const maxSeekDigits = 6
+// Стелі довжини чисел у шляхах. Шість цифр seek — це 11 діб відео; стільки ж
+// вистачає поколінню списку (одна публікація на дію людини), а чотири цифри
+// номера серії — це вже вчетверо довший серіал, ніж будь-коли виходив.
+// Обмеження довжини відсікає сміття ще до арифметики.
+const (
+	maxSeekDigits    = 6
+	maxGenDigits     = 6
+	maxEpisodeDigits = 4
+)
 
 // pathPrefix — усе, що не починається з нього, невидиме для пульта.
 const pathPrefix = "/r/"
@@ -242,6 +276,8 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.onGet(w, r, h.servePage)
 	case "status":
 		h.onGet(w, r, h.serveStatus)
+	case "episodes":
+		h.onGet(w, r, h.serveEpisodes)
 	case "pause":
 		h.onPost(w, r, h.ctrl.TogglePause)
 	case "back":
@@ -263,12 +299,16 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop":
 		h.onPost(w, r, h.ctrl.Stop)
 	default:
-		sec, ok := parseSeekTo(suffix)
+		if sec, ok := parseSeekTo(suffix); ok {
+			h.onPost(w, r, func() error { return h.ctrl.SeekTo(sec) })
+			return
+		}
+		gen, n, ok := parsePlay(suffix)
 		if !ok {
 			notFound(w)
 			return
 		}
-		h.onPost(w, r, func() error { return h.ctrl.SeekTo(sec) })
+		h.onPost(w, r, func() error { return h.ctrl.Play(gen, n) })
 	}
 }
 
@@ -278,18 +318,53 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // токен угадано і помилка лише в аргументі.
 func parseSeekTo(suffix string) (posSec float64, ok bool) {
 	digits, ok := strings.CutPrefix(suffix, "seek/")
-	if !ok || digits == "" || len(digits) > maxSeekDigits {
+	if !ok {
 		return 0, false
 	}
-	sec := 0
-	for i := 0; i < len(digits); i++ {
-		c := digits[i]
+	sec, ok := parseDigits(digits, maxSeekDigits)
+	if !ok {
+		return 0, false
+	}
+	return float64(sec), true
+}
+
+// parsePlay розбирає суфікс "play/<покоління>/<серія>". Покоління обов'язкове:
+// без нього сервер не відрізнив би тап по щойно показаному списку від тапу по
+// списку, який людина відкрила ще до зміни тайтлу. Нульова серія — сміття, а не
+// «перша»: нумерація в списку починається з одиниці.
+func parsePlay(suffix string) (gen, n int, ok bool) {
+	rest, ok := strings.CutPrefix(suffix, "play/")
+	if !ok {
+		return 0, 0, false
+	}
+	genText, epText, found := strings.Cut(rest, "/")
+	if !found {
+		return 0, 0, false
+	}
+	if gen, ok = parseDigits(genText, maxGenDigits); !ok {
+		return 0, 0, false
+	}
+	if n, ok = parseDigits(epText, maxEpisodeDigits); !ok || n == 0 {
+		return 0, 0, false
+	}
+	return gen, n, true
+}
+
+// parseDigits — той самий суворий розбір для всіх чисел зі шляху: рівно
+// [0-9]{1,max}, без знаків і пробілів, які прийняв би strconv.
+func parseDigits(text string, maxDigits int) (int, bool) {
+	if text == "" || len(text) > maxDigits {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(text); i++ {
+		c := text[i]
 		if c < '0' || c > '9' {
 			return 0, false
 		}
-		sec = sec*10 + int(c-'0')
+		n = n*10 + int(c-'0')
 	}
-	return float64(sec), true
+	return n, true
 }
 
 // route зводить шлях до суфікса команди: "" — сторінка, "status", "pause"...
@@ -378,6 +453,20 @@ func (h *handler) serveStatus(w http.ResponseWriter) {
 	writeJSON(w, http.StatusOK, st)
 }
 
+// serveEpisodes віддає список серій. Порожній слайс, а не null: сторінка
+// перебирає масив без окремої перевірки на «списку немає».
+func (h *handler) serveEpisodes(w http.ResponseWriter) {
+	pl, err := h.ctrl.Episodes()
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if pl.Episodes == nil {
+		pl.Episodes = []Episode{}
+	}
+	writeJSON(w, http.StatusOK, pl)
+}
+
 func secureHeaders(w http.ResponseWriter) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -403,6 +492,12 @@ func methodNotAllowed(w http.ResponseWriter, allow string) {
 func writeError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrNotPlaying) {
 		writeJSON(w, http.StatusConflict, errBody{Error: i18n.RemoteIdle})
+		return
+	}
+	// Не 404: шлях правильний, застарів саме список — і сторінка на цю
+	// відповідь перечитує episodes, а не мовчить.
+	if errors.Is(err, ErrStalePlaylist) {
+		writeJSON(w, http.StatusConflict, errBody{Error: i18n.RemoteNoPlaylist})
 		return
 	}
 	// Текст помилки вже українською — його склав шар плеєра. Пульт не знає ні
