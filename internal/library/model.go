@@ -263,6 +263,53 @@ func (l *Library) RecordPosition(titleID string, episode int, posSec, durSec flo
 	return p
 }
 
+// SetWatched — ручна позначка серії, без плеєра. Позначена серія виглядає так
+// само, як додивлена: перемотана в кінець і завершена, тож Resume пропонує
+// наступну.
+//
+// Зняття позначки видаляє прогрес серії, і це ЄДИНЕ місце, де LastEpisode
+// рухається назад: користувач явно сказав, що серії він не бачив, і залишений
+// попереду LastEpisode збрехав би на домівці. KnownEpisodes не чіпаємо — це
+// база «що вийшло», а не «що переглянуто».
+func (l *Library) SetWatched(titleID string, episode int, watched bool, at time.Time) {
+	if watched {
+		p := l.ProgressFor(titleID, episode)
+		if p == nil {
+			p = &Progress{TitleID: titleID, Episode: episode}
+			l.Progress = append(l.Progress, p)
+		}
+		p.PositionSec = p.DurationSec // невідома тривалість лишається 0
+		p.Completed = true
+		p.WatchedAt = at
+		e := l.EntryFor(titleID)
+		if episode > e.LastEpisode {
+			e.LastEpisode = episode
+		}
+		return
+	}
+
+	if l.ProgressFor(titleID, episode) == nil {
+		return
+	}
+	progress := l.Progress[:0]
+	last := 0
+	for _, p := range l.Progress {
+		if p.TitleID == titleID && p.Episode == episode {
+			continue
+		}
+		if p.TitleID == titleID && p.Episode > last {
+			last = p.Episode
+		}
+		progress = append(progress, p)
+	}
+	l.Progress = progress
+	// EntryLookup, не EntryFor: зняття позначки не має ні створювати запис
+	// списку, ні розховувати прихований.
+	if e := l.EntryLookup(titleID); e != nil {
+		e.LastEpisode = last
+	}
+}
+
 // Resume — що запропонувати на «Продовжити»: незавершена серія з позицією
 // або наступна після останньої завершеної.
 func (l *Library) Resume(titleID string) (episode int, positionSec float64, ok bool) {
