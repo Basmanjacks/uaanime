@@ -105,6 +105,11 @@ func (m Model) View() tea.View {
 	}
 
 	v := tea.NewView(body)
+	// Заголовок вікна ставимо лише під час перегляду: на решті екранів людина
+	// й так дивиться в термінал. Порожнє значення рендерер скидає сам.
+	if m.screen == screenPlaying {
+		v.WindowTitle = fmt.Sprintf(i18n.TuiWindowTitle, m.currentTitleName(), m.pendingEp)
+	}
 	if m.screen == screenSearch {
 		if c := m.input.Cursor(); c != nil {
 			c.X += 2
