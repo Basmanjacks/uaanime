@@ -279,3 +279,26 @@ func TestStopAfterKeyToggles(t *testing.T) {
 		t.Fatalf("друге натискання: stopAfter=%v status=%q", m.eng.Live.StopAfter(), m.status)
 	}
 }
+
+// Заголовок вікна термінала: під час перегляду — назва й серія, поза ним —
+// порожньо (рендерер скине OSC 2 сам).
+func TestWindowTitleOnlyWhilePlaying(t *testing.T) {
+	m := newTestModel(t)
+	if got := m.View().WindowTitle; got != "" {
+		t.Fatalf("заголовок на домівці = %q, want порожній", got)
+	}
+
+	ref := testRefs("window-title", 1)[0]
+	ref.Name = "Фрірен"
+	m = testPlayingModel(t, m, ref)
+	want := fmt.Sprintf(i18n.TuiWindowTitle, "Фрірен", 1)
+	if got := m.View().WindowTitle; got != want {
+		t.Fatalf("заголовок під час гри = %q, want %q", got, want)
+	}
+
+	m, _ = updateTestModel(t, m, playDoneMsg{})
+	mustScreen(t, m, screenEpisodes)
+	if got := m.View().WindowTitle; got != "" {
+		t.Fatalf("заголовок після перегляду = %q, want порожній", got)
+	}
+}
