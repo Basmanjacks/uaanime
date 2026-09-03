@@ -33,6 +33,28 @@ var (
 	colWarn     = pick("#B02A37", "#E8757F") // помилки
 )
 
+// QR-код — свідомий виняток із теми: його читає камера, а не людина.
+// Стандарт вимагає темні модулі на світлому тлі, тому полярність фіксована й
+// не залежить від фону термінала — на темній темі інвертований код половина
+// телефонів просто не бачить.
+var (
+	colQRDark  = lipgloss.Color("#000000")
+	colQRLight = lipgloss.Color("#FFFFFF")
+)
+
+// qrCellStyle — стиль однієї клітинки напівблоку: колір тексту малює верхній
+// модуль, колір фону — нижній.
+func qrCellStyle(upper, lower bool) lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(qrModuleColor(upper)).Background(qrModuleColor(lower))
+}
+
+func qrModuleColor(dark bool) color.Color {
+	if dark {
+		return colQRDark
+	}
+	return colQRLight
+}
+
 var (
 	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(colFgBright).Padding(0, 0, 1, 2)
 	styleBanner  = lipgloss.NewStyle().Foreground(colAccent).PaddingLeft(2)
@@ -47,6 +69,7 @@ var (
 	styleRowSel      = lipgloss.NewStyle().Foreground(colFgBright)
 	styleMeta        = lipgloss.NewStyle().Foreground(colDim)
 	styleRemote      = lipgloss.NewStyle().Foreground(colDim).Padding(0, 0, 0, 2)
+	styleQR          = lipgloss.NewStyle().PaddingLeft(2)
 	styleEta         = lipgloss.NewStyle().Foreground(colDim).Padding(0, 0, 0, 2)
 	styleMetaSel     = lipgloss.NewStyle().Foreground(colFg)
 	styleMetaSep     = lipgloss.NewStyle().Foreground(colFaint)

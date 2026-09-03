@@ -77,6 +77,12 @@ func (m Model) View() tea.View {
 		if line := m.remoteLine(); line != "" {
 			body += line + "\n"
 		}
+		// QR під адресою: навести камеру простіше, ніж набрати 70 символів
+		// руками. Рахуємо вже намальовані рядки плюс підказку внизу — код
+		// з'являється тільки тоді, коли нічого з них не витісняє.
+		if block, ok := m.remoteQR(strings.Count(body, "\n") + hintBlockLines); ok {
+			body += block + "\n"
+		}
 	} else {
 		listView := m.list.View()
 		if len(m.list.Items()) == 0 {
@@ -188,22 +194,59 @@ func (m Model) etaLine() string {
 }
 
 // remoteLine — адреса пульта на екрані «Грає». Обрізаний URL гірший за
-// жоден (половина токена нікуди не веде), тому у вузькому вікні — лише
-// підказка, де адресу взяти.
+// жоден (половина токена нікуди не веде), тому щаблі такі: підписана адреса,
+// гола адреса, те саме за IP (він коротший за mDNS-ім'я і веде туди ж), і лише
+// потім — підказка, де адресу взяти.
 func (m Model) remoteLine() string {
-	if m.remote.URL == "" {
+	if m.remote.URL == "" && m.remote.AltURL == "" {
 		return ""
 	}
 	limit := m.w - 2
 	if m.w <= 0 {
 		limit = 0
 	}
-	for _, text := range []string{fmt.Sprintf(i18n.TuiRemote, m.remote.URL), m.remote.URL} {
+	var variants []string
+	for _, url := range []string{m.remote.URL, m.remote.AltURL} {
+		if url == "" {
+			continue
+		}
+		variants = append(variants, fmt.Sprintf(i18n.TuiRemote, url), url)
+	}
+	for _, text := range variants {
 		if limit == 0 || lipgloss.Width(text) <= limit {
 			return styleRemote.Render(text)
 		}
 	}
 	return styleRemote.Render(i18n.TuiRemoteNarrow)
+}
+
+// remoteURL — найкоротша з адрес пульта. Для камери телефона обидві рівноцінні,
+// а коротша дає меншу версію символу, тобто більший шанс, що QR узагалі влізе
+// в термінал; IP майже завжди коротший за mDNS-ім'я.
+func (m Model) remoteURL() string {
+	url := m.remote.URL
+	if alt := m.remote.AltURL; alt != "" && (url == "" || len(alt) < len(url)) {
+		url = alt
+	}
+	return url
+}
+
+// hintBlockLines — висота підказки/статусу внизу кадру: порожній рядок відступу
+// плюс сам текст. QR не має права з'їсти ці рядки.
+const hintBlockLines = 2
+
+// remoteQR — QR-код адреси пульта під рядком з адресою; usedRows — скільки
+// рядків кадру вже зайнято. Напівблоки не мають ASCII-заміни, тому в
+// ASCII-режимі лишається сам текстовий рядок.
+func (m Model) remoteQR(usedRows int) (string, bool) {
+	if m.ic.ASCII || m.w <= 0 || m.h <= 0 {
+		return "", false
+	}
+	block, ok := qrBlock(m.remoteURL(), m.w-2, m.h-usedRows)
+	if !ok {
+		return "", false
+	}
+	return styleQR.Render(block), true
 }
 
 // hintPlayingNarrow — ширина, нижче якої повна підказка «Грає» вже не влазить

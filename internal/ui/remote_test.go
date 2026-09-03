@@ -19,6 +19,7 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/playertest"
 	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/Basmanjacks/uaanime/internal/qr"
 )
 
 const testRemoteURL = "http://vitaliis-macbook-pro.local:51234/r/0123456789abcdef0123456789abcdef"
@@ -128,6 +129,162 @@ func TestPlayingFrameWithoutRemote(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	if plain := ansi.Strip(m.View().Content); strings.Contains(plain, i18n.TuiRemoteNarrow) || strings.Contains(plain, "/r/") {
 		t.Errorf("без пульта рядка бути не має:\n%s", plain)
+	}
+	if strings.Contains(m.View().Content, qrUpperHalf) {
+		t.Error("без адреси пульта QR малювати нічого")
+	}
+}
+
+// ---- QR пульта (S23) ----
+
+// checkFrameWidth — головний інваріант кадру: жоден рядок не ширший за вікно.
+// Перенесення зсуває кадр і ховає нижній рядок, а QR — найширший блок екрана.
+func checkFrameWidth(t *testing.T, content string, w int) {
+	t.Helper()
+	for i, line := range strings.Split(content, "\n") {
+		if got := lipgloss.Width(line); got > w {
+			t.Errorf("рядок %d ширший за вікно (%d > %d): %q", i, got, w, ansi.Strip(line))
+		}
+	}
+}
+
+// longRemoteURL — адреса з максимальною міткою mDNS (63 символи): це найдовше,
+// що взагалі може приїхати з remote.URL, і QR мусить лишитися можливим.
+var longRemoteURL = "http://" + strings.Repeat("h", 63) + ".local:51234/r/0123456789abcdef0123456789abcdef"
+
+func TestPlayingFrameShowsQR(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		url    string
+		w, h   int
+		wantQR bool
+	}{
+		{"120x40", testRemoteURL, 120, 40, true},
+		{"100x40", testRemoteURL, 100, 40, true},
+		// 80×24: повна зона тиші вже не влазить у висоту, а вузька — так.
+		{"80x24", testRemoteURL, 80, 24, true},
+		// 80×20: не влазить жоден щабель — лишається сама адреса текстом.
+		{"80x20", testRemoteURL, 80, 20, false},
+		{"довга мітка mDNS", longRemoteURL, 120, 40, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newTestModel(t)
+			m.remote.URL = tt.url
+			m.screen = screenPlaying
+			m.status = "" // інакше нижній рядок займає статус домівки, а не підказка
+			m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: tt.w, Height: tt.h})
+
+			content := m.View().Content
+			checkFrameWidth(t, content, tt.w)
+			if got := strings.Contains(content, qrUpperHalf); got != tt.wantQR {
+				t.Errorf("QR у кадрі %dx%d = %v, want %v:\n%s", tt.w, tt.h, got, tt.wantQR, ansi.Strip(content))
+			}
+			if lines := strings.Count(content, "\n") + 1; lines > tt.h {
+				t.Errorf("кадр %d рядків, вікно %d", lines, tt.h)
+			}
+			// Підказка внизу — те, що QR не має права витіснити.
+			if plain := ansi.Strip(content); !strings.Contains(plain, i18n.TuiHintPlaying) && !strings.Contains(plain, i18n.TuiHintPlayingNarrow) {
+				t.Errorf("підказку витіснено:\n%s", plain)
+			}
+		})
+	}
+}
+
+// В ASCII-режимі напівблоків немає: символ ▀ не деградує в ASCII, тому лишається
+// сама адреса текстом.
+func TestPlayingFrameASCIISkipsQR(t *testing.T) {
+	t.Setenv("UAANIME_ASCII", "1")
+	m := newTestModel(t)
+	m.remote.URL = testRemoteURL
+	m.screen = screenPlaying
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	content := m.View().Content
+	if strings.Contains(content, qrUpperHalf) {
+		t.Error("в ASCII-режимі QR малювати не можна")
+	}
+	if !strings.Contains(ansi.Strip(content), testRemoteURL) {
+		t.Errorf("адреса має лишитися текстом:\n%s", ansi.Strip(content))
+	}
+}
+
+// Найкоротша адреса виграє: QR за IP менший, а веде туди ж.
+func TestRemoteURLPrefersShortest(t *testing.T) {
+	m := newTestModel(t)
+	m.remote.URL = testRemoteURL
+	m.remote.AltURL = "http://192.168.0.12:51234/r/0123456789abcdef0123456789abcdef"
+	if got := m.remoteURL(); got != m.remote.AltURL {
+		t.Errorf("remoteURL() = %q, want коротшу адресу за IP", got)
+	}
+	m.remote.AltURL = ""
+	if got := m.remoteURL(); got != testRemoteURL {
+		t.Errorf("remoteURL() без IP = %q, want %q", got, testRemoteURL)
+	}
+}
+
+// Коли підписана й гола mDNS-адреса не влазять, показуємо коротшу за IP —
+// підказка «дивись у налаштуваннях» лишається останнім щаблем.
+func TestRemoteLineFallsBackToIP(t *testing.T) {
+	m := newTestModel(t)
+	m.remote.URL = longRemoteURL
+	m.remote.AltURL = "http://192.168.0.12:51234/r/0123456789abcdef0123456789abcdef"
+	m.screen = screenPlaying
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 70, Height: 40})
+
+	plain := ansi.Strip(m.remoteLine())
+	if !strings.Contains(plain, m.remote.AltURL) {
+		t.Errorf("рядок пульта = %q, want адресу за IP", plain)
+	}
+	m.remote.AltURL = ""
+	if plain := ansi.Strip(m.remoteLine()); !strings.Contains(plain, i18n.TuiRemoteNarrow) {
+		t.Errorf("рядок пульта без IP = %q, want підказку", plain)
+	}
+}
+
+// Зона тиші звужується з 4 модулів до 2, і лише потім QR зникає зовсім:
+// обрізаний код не сканується.
+func TestQRBlockQuietZoneDegrades(t *testing.T) {
+	code, err := qr.Encode(testRemoteURL)
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	size := code.Size()
+	for _, tt := range []struct {
+		name     string
+		w, h     int
+		wantOK   bool
+		wantWide int
+	}{
+		{"зона 4", size + 8, qrRows(size + 8), true, size + 8},
+		{"зона 2", size + 4, qrRows(size + 8), true, size + 4},
+		{"вузько", size + 3, qrRows(size + 8), false, 0},
+		{"низько", size + 8, qrRows(size+4) - 1, false, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			block, ok := qrBlock(testRemoteURL, tt.w, tt.h)
+			if ok != tt.wantOK {
+				t.Fatalf("qrBlock(%d, %d) ok = %v, want %v", tt.w, tt.h, ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			lines := strings.Split(block, "\n")
+			if got := len(lines); got != qrRows(tt.wantWide) {
+				t.Errorf("рядків = %d, want %d", got, qrRows(tt.wantWide))
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(line); got != tt.wantWide {
+					t.Errorf("рядок %d ширини %d, want %d", i, got, tt.wantWide)
+				}
+			}
+		})
+	}
+}
+
+// Задовга адреса в QR не влазить — це не помилка кадру, просто коду немає.
+func TestQRBlockTooLong(t *testing.T) {
+	if _, ok := qrBlock(strings.Repeat("x", 200), 200, 200); ok {
+		t.Error("текст поза місткістю v6 не має давати QR")
 	}
 }
 
