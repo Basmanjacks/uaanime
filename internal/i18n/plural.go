@@ -1,6 +1,9 @@
 package i18n
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // plural повертає українську форму слова: однину для чисел на 1, форму для 2–4
 // та множину для решти; числа на 11–14 завжди мають множину.
@@ -31,4 +34,29 @@ func Episodes(n int) string {
 // NewEpisodes форматує кількість нових серій за українським правилом множини.
 func NewEpisodes(n int) string {
 	return fmt.Sprintf("+%d %s", n, plural(n, "нова серія", "нові серії", "нових серій"))
+}
+
+// RemainingEpisodes — скільки серій ще не переглянуто, за українським правилом
+// множини. Дієслово теж змінюється, тому форми беруться цілими фразами.
+func RemainingEpisodes(n int) string {
+	return fmt.Sprintf(plural(n, "залишилась %d серія", "залишилось %d серії", "залишилось %d серій"), n)
+}
+
+// HumanDuration — тривалість словами: «2 год 45 хв». Секунди не показуємо —
+// це оцінка із середнього, а не таймер; «год» і «хв» скорочення й не
+// відмінюються. Менше за хвилину — порожньо: показувати «0 хв» гірше, ніж нічого.
+func HumanDuration(sec float64) string {
+	minutes := int(math.Round(sec / 60))
+	if minutes <= 0 {
+		return ""
+	}
+	h, mm := minutes/60, minutes%60
+	switch {
+	case h > 0 && mm > 0:
+		return fmt.Sprintf("%d год %d хв", h, mm)
+	case h > 0:
+		return fmt.Sprintf("%d год", h)
+	default:
+		return fmt.Sprintf("%d хв", mm)
+	}
 }
