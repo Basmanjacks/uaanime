@@ -452,3 +452,81 @@ func TestJourneyFramesFitWindow(t *testing.T) {
 		})
 	}
 }
+
+// Ручна позначка «переглянуто» на екрані серій: без плеєра, з нуля — тайтл до
+// цього не був ані в закладках, ані в історії.
+func TestJourneyMarkWatchedFromEpisodes(t *testing.T) {
+	m, fp, st := journeyModel(t)
+	tr := &trace{}
+
+	// «/» → пошук → Enter → результати → Enter → серії
+	m = press(t, m, tr, '/', "/")
+	m.input.SetValue("фрірен")
+	m = press(t, m, tr, tea.KeyEnter, "")
+	m = press(t, m, tr, tea.KeyEnter, "")
+	mustScreen(t, m, screenEpisodes)
+
+	selectTestItem(t, &m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 2 })
+	index := m.list.Index()
+	m = press(t, m, tr, 'x', "x")
+	mustScreen(t, m, screenEpisodes)
+	if len(fp.Starts()) != 0 {
+		t.Fatalf("позначка не має запускати плеєр: %+v", fp.Starts())
+	}
+	if m.list.Index() != index {
+		t.Errorf("курсор поїхав: %d, want %d", m.list.Index(), index)
+	}
+	if got := m.list.SelectedItem().(item); got.badge != i18n.TuiEpDone || got.icon != m.ic.Done {
+		t.Errorf("рядок серії 2 = %+v, want позначку «переглянуто»", got)
+	}
+	if m.status != fmt.Sprintf(i18n.TuiEpMarked, 2) {
+		t.Errorf("статус = %q", m.status)
+	}
+
+	// на диску: тайтл створено з нуля, серія 2 завершена
+	lib, err := st.LoadLibrary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	title := lib.TitleByRef(journeyRef)
+	if title == nil {
+		t.Fatal("тайтл не створено")
+	}
+	if p := lib.ProgressFor(title.ID, 2); p == nil || !p.Completed {
+		t.Fatalf("прогрес серії 2 = %+v, want завершено", p)
+	}
+	if e := lib.EntryLookup(title.ID); e == nil || e.LastEpisode != 2 {
+		t.Fatalf("entry = %+v, want LastEpisode 2", e)
+	}
+
+	// домівка пропонує наступну серію
+	m = press(t, m, tr, tea.KeyEsc, "")
+	m = press(t, m, tr, tea.KeyEsc, "")
+	mustScreen(t, m, screenHome)
+	rows := sectionRows(t, m, i18n.TuiBlockContinue)
+	if len(rows) != 1 || rows[0].title != fmt.Sprintf(i18n.TuiContinuePfx, journeyRef.Name, 3) {
+		t.Fatalf("«Продовжити» = %+v, want серію 3", rows)
+	}
+
+	// повернення на серії через закладку і зняття позначки
+	selectTestItem(t, &m, func(it item) bool { _, ok := it.payload.(payloadTitle); return ok })
+	m = press(t, m, tr, tea.KeyEnter, "")
+	mustScreen(t, m, screenEpisodes)
+	selectTestItem(t, &m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 2 })
+	m = press(t, m, tr, 'x', "x")
+	if got := m.list.SelectedItem().(item); got.badge != "" || got.icon != m.ic.Pending {
+		t.Errorf("рядок серії 2 після зняття = %+v", got)
+	}
+	if m.status != fmt.Sprintf(i18n.TuiEpUnmarked, 2) {
+		t.Errorf("статус = %q", m.status)
+	}
+	if lib, err = st.LoadLibrary(); err != nil {
+		t.Fatal(err)
+	}
+	if p := lib.ProgressFor(title.ID, 2); p != nil {
+		t.Fatalf("прогрес серії 2 не зник: %+v", p)
+	}
+	if e := lib.EntryLookup(title.ID); e == nil || e.LastEpisode != 0 {
+		t.Fatalf("entry = %+v, want LastEpisode 0", e)
+	}
+}

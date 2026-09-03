@@ -12,6 +12,13 @@ import (
 
 func (m *Model) showEpisodes() tea.Cmd {
 	m.setScreen(screenEpisodes)
+	return m.setItems(m.episodeRows(), 0)
+}
+
+// episodeRows будує рядки списку серій із m.episodes і прогресу бібліотеки.
+// Окремо від showEpisodes, бо клавіша «переглянуто» перебудовує ті самі рядки,
+// не рухаючи курсор і не заходячи на екран заново.
+func (m *Model) episodeRows() []item {
 	title := m.eng.Lib.TitleByRef(m.ref)
 	var items []item
 	for _, ep := range m.episodes {
@@ -35,7 +42,7 @@ func (m *Model) showEpisodes() tea.Cmd {
 			payload: payloadEp{num: ep.Number},
 		})
 	}
-	return m.setItems(items, 0)
+	return items
 }
 
 func releasesSummary(rels []provider.Release) string {

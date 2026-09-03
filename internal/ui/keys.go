@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 
@@ -134,6 +136,11 @@ func (m Model) updateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			return m.openSelected()
+		case "x", "X":
+			// Історія лишає «x» списку: позначати там нічого.
+			if m.screen == screenEpisodes {
+				return m.toggleWatched()
+			}
 		}
 
 	case screenStudio:
@@ -218,6 +225,40 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 		m.status = i18n.TuiBookmarkRemoved
 	}
 	return m, refreshCmd
+}
+
+// toggleWatched — клавіша «x» на екрані серій. Перемикач простий: завершена
+// серія скидається, будь-яка інша (включно з недодивленою) стає переглянутою.
+func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
+	it, ok := m.list.SelectedItem().(item)
+	if !ok || it.header {
+		return m, nil
+	}
+	p, ok := it.payload.(payloadEp)
+	if !ok {
+		return m, nil
+	}
+
+	watched := true
+	if title := m.eng.Lib.TitleByRef(m.ref); title != nil {
+		if pr := m.eng.Lib.ProgressFor(title.ID, p.num); pr != nil && pr.Completed {
+			watched = false
+		}
+	}
+
+	m.errText = ""
+	if err := m.eng.SetWatched(m.ref, p.num, watched); err != nil {
+		m.errText = provider.CleanText(err.Error())
+		return m, nil
+	}
+	if watched {
+		m.status = fmt.Sprintf(i18n.TuiEpMarked, p.num)
+	} else {
+		m.status = fmt.Sprintf(i18n.TuiEpUnmarked, p.num)
+	}
+	// Index(), не GlobalIndex(): рядки перебудовуються ті самі й у тому ж
+	// порядку, тож видима позиція під фільтром не змінюється.
+	return m, m.setItems(m.episodeRows(), m.list.Index())
 }
 
 func maxEpisodeNumber(episodes []provider.Episode) int {
