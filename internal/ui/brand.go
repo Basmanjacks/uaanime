@@ -68,6 +68,13 @@ var brandOrnaments = map[season]brandOrnament{
 	seasonAutumn: {"✦", "."},
 }
 
+// brandCatOrnament — орнамент пасхалки «ня». Геометрія та сама, що в сезонів:
+// кіт не має права зсунути кадр.
+var brandCatOrnament = brandOrnament{"ᗢ", "^"}
+
+// brandCatBanner — банер пасхалки.
+func brandCatBanner(ascii bool) []string { return brandVariant(brandCatOrnament, ascii) }
+
 // brandVariant — банер із підставленим орнаментом. Підстановка, а не окремі
 // рядки на сезон: так усі варіанти однакової висоти й ширини за побудовою, а
 // не за домовленістю.
@@ -86,6 +93,9 @@ func brandVariant(o brandOrnament, ascii bool) []string {
 // brandBanner — банер, який побачить саме цей запуск: сезон за датою, набір
 // символів за UAANIME_ASCII.
 func (m *Model) brandBanner() []string {
+	if m.nya {
+		return brandCatBanner(m.ic.ASCII)
+	}
 	return brandVariant(brandOrnaments[seasonFor(brandNow())], m.ic.ASCII)
 }
 

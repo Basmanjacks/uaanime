@@ -244,6 +244,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case liveMsg:
 		return m.updateLive(msg)
 
+	case nyaOffMsg:
+		m.nya = false
+		return m, nil
+
 	case signalMsg:
 		return m.requestQuit()
 	}

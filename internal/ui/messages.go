@@ -62,6 +62,8 @@ type (
 	badgesMsg struct {
 		counts map[string]int // локальний ID тайтла → скільки нових серій
 	}
+	// nyaOffMsg — час кота вийшов; банер повертається до сезонного.
+	nyaOffMsg           struct{}
 	bookmarkBaselineMsg struct {
 		titleID     string
 		ref         provider.TitleRef
