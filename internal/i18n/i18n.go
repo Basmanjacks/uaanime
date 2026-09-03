@@ -185,9 +185,16 @@ const (
 	RemotePause      = "Пауза"
 	RemoteBack       = "−10 с"
 	RemoteForward    = "+10 с"
-	RemoteNext       = "Наступна серія"
-	RemoteStopAfter  = "Зупинити після цієї"
-	RemoteStop       = "Зупинити"
+	RemoteBack30     = "−30 с"
+	RemoteForward30  = "+30 с"
+	RemoteVolume     = "Гучність"
+	// RemoteVolumeFmt — гучність над смугою прогресу. Підстановку робить JS
+	// сторінки (`replace("%d", …)`), а не fmt: у шаблон іде сирий рядок.
+	RemoteVolumeFmt = "🔊 %d%"
+	RemoteEpisodes  = "Список серій"
+	RemoteNext      = "Наступна серія"
+	RemoteStopAfter = "Зупинити після цієї"
+	RemoteStop      = "Зупинити"
 	// RemoteNoPlaylist — тап по списку серій, який застарів: у застосунку вже
 	// відкрито інший тайтл, тому сторінка мусить перечитати список.
 	RemoteNoPlaylist = "Список серій оновився — відкрийте його ще раз"

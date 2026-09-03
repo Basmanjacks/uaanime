@@ -606,11 +606,15 @@ func TestPageIsSelfContained(t *testing.T) {
 	rec := do(t, h, http.MethodGet, "/r/"+testToken)
 	body := rec.Body.String()
 
-	if n := len(body); n >= 8192 {
-		t.Fatalf("сторінка %d байтів, стеля 8192", n)
+	if n := len(body); n >= 16384 {
+		t.Fatalf("сторінка %d байтів, стеля 16384", n)
 	}
 	if want := `const BASE = "/r/` + testToken + `/";`; !strings.Contains(body, want) {
 		t.Fatalf("немає %q у сторінці", want)
+	}
+	// Жодної нерозгорнутої дії шаблону: телефон отримує готовий HTML.
+	if strings.Contains(body, "{{") {
+		t.Errorf("на сторінці лишився шаблон: %q", body[strings.Index(body, "{{"):])
 	}
 
 	// Усі підписи приходять із i18n. Порівнюємо з розекранованим тілом: html/template
@@ -624,6 +628,13 @@ func TestPageIsSelfContained(t *testing.T) {
 		"RemotePause":      i18n.RemotePause,
 		"RemoteBack":       i18n.RemoteBack,
 		"RemoteForward":    i18n.RemoteForward,
+		"RemoteBack30":     i18n.RemoteBack30,
+		"RemoteForward30":  i18n.RemoteForward30,
+		"RemoteVolume":     i18n.RemoteVolume,
+		"RemoteVolumeFmt":  i18n.RemoteVolumeFmt,
+		"RemoteEpisodes":   i18n.RemoteEpisodes,
+		"RemoteStopAfter":  i18n.RemoteStopAfter,
+		"RemoteNoPlaylist": i18n.RemoteNoPlaylist,
 		"RemoteNext":       i18n.RemoteNext,
 		"RemoteStop":       i18n.RemoteStop,
 		"RemoteOffline":    i18n.RemoteOffline,
@@ -650,6 +661,52 @@ func TestPageIsSelfContained(t *testing.T) {
 	}
 }
 
+// Сторож «шаблон ↔ скрипт»: кожен id, за який хапається JS, мусить існувати в
+// розмітці. Інакше кнопка мовчки нічого не робить — на телефоні цього не видно
+// зовсім, бо консолі там ніхто не відкриває.
+func TestPageIDsUsedByScriptExist(t *testing.T) {
+	body := do(t, newTestHandler(t, playingCtl()), http.MethodGet, "/r/"+testToken).Body.String()
+
+	want := map[string]bool{}
+	for _, m := range regexp.MustCompile(`\$\("([a-z0-9-]+)"\)`).FindAllStringSubmatch(body, -1) {
+		want[m[1]] = true
+	}
+	// L("k") — це $("l-" + k): підпис береться зі схованого блоку.
+	for _, m := range regexp.MustCompile(`\bL\("([a-z0-9-]+)"\)`).FindAllStringSubmatch(body, -1) {
+		want["l-"+m[1]] = true
+	}
+	// Кнопки команд адресуються через список CMDS, тому в тексті $("…") їх немає.
+	cmds := regexp.MustCompile(`const CMDS = \[([^\]]*)\]`).FindStringSubmatch(body)
+	if cmds == nil {
+		t.Fatal("на сторінці немає списку CMDS")
+	}
+	for _, m := range regexp.MustCompile(`"([a-z0-9]+)"`).FindAllStringSubmatch(cmds[1], -1) {
+		want[m[1]] = true
+	}
+	if len(want) < 15 {
+		t.Fatalf("сторож знайшов лише %d id — регулярка перестала ловити скрипт", len(want))
+	}
+	for id := range want {
+		if !strings.Contains(body, `id="`+id+`"`) {
+			t.Errorf("скрипт бере id=%q, а в розмітці його немає", id)
+		}
+	}
+}
+
+// Позиція тапу по смузі рахується від рамки смуги. offsetX дав би зсув
+// відносно цілі події, тобто відносно #fill при тапі по заповненій частині:
+// тап посередині 50-відсоткової смуги перемотав би на 25 %.
+func TestSeekBarUsesBoundingRect(t *testing.T) {
+	body := do(t, newTestHandler(t, playingCtl()), http.MethodGet, "/r/"+testToken).Body.String()
+
+	if !strings.Contains(body, "getBoundingClientRect") {
+		t.Error("смуга перемотки не міряє себе через getBoundingClientRect")
+	}
+	if strings.Contains(body, "offsetX") {
+		t.Error("смуга перемотки рахує позицію через offsetX — це зсув відносно цілі події")
+	}
+}
+
 func TestHostileTitleIsEscapedAsJSONData(t *testing.T) {
 	const hostile = `<script>alert(1)</script>`
 	c := playingCtl()
@@ -672,16 +729,26 @@ func TestHostileTitleIsEscapedAsJSONData(t *testing.T) {
 
 // Кожен шлях, який JS клеїть із BASE, має існувати — інакше кнопка мовчки нічого не робить.
 func TestEveryPathUsedByJSExists(t *testing.T) {
-	h := newTestHandler(t, playingCtl())
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	h := newTestHandler(t, c)
 	cases := []struct {
 		suffix, method string
 	}{
 		{"status", http.MethodGet},
+		{"episodes", http.MethodGet},
 		{"pause", http.MethodPost},
 		{"back", http.MethodPost},
 		{"forward", http.MethodPost},
+		{"back30", http.MethodPost},
+		{"forward30", http.MethodPost},
+		{"voldown", http.MethodPost},
+		{"volup", http.MethodPost},
 		{"next", http.MethodPost},
+		{"stopafter", http.MethodPost},
 		{"stop", http.MethodPost},
+		{"seek/42", http.MethodPost},
+		{"play/7/2", http.MethodPost},
 	}
 	for _, tc := range cases {
 		rec := do(t, h, tc.method, base(tc.suffix))

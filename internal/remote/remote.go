@@ -166,17 +166,24 @@ type pageData struct {
 	// JS-значення JSStr виводиться дослівно й сам обгортається лапками. Це
 	// безпечно, бо значення — константний префікс плюс токен, уже перевірений
 	// на 32 шістнадцяткові символи: ні лапки, ні розриву рядка там не буде.
-	Base    template.JSStr
-	Title   string
-	Idle    string
-	Episode string
-	Play    string
-	Pause   string
-	Back    string
-	Forward string
-	Next    string
-	Stop    string
-	Offline string
+	Base       template.JSStr
+	Title      string
+	Idle       string
+	Episode    string
+	Play       string
+	Pause      string
+	Back       string
+	Forward    string
+	Back30     string
+	Forward30  string
+	Volume     string
+	VolumeFmt  string
+	Next       string
+	StopAfter  string
+	Episodes   string
+	NoPlaylist string
+	Stop       string
+	Offline    string
 }
 
 type errBody struct {
@@ -214,17 +221,24 @@ func newHandler(token string, open bool, c Controller) (http.Handler, error) {
 	// кожен запит з телефона — це просто копія байтів.
 	var buf bytes.Buffer
 	data := pageData{
-		Base:    template.JSStr(base),
-		Title:   i18n.RemotePageTitle,
-		Idle:    i18n.RemoteIdle,
-		Episode: i18n.RemoteEpisodeFmt,
-		Play:    i18n.RemotePlay,
-		Pause:   i18n.RemotePause,
-		Back:    i18n.RemoteBack,
-		Forward: i18n.RemoteForward,
-		Next:    i18n.RemoteNext,
-		Stop:    i18n.RemoteStop,
-		Offline: i18n.RemoteOffline,
+		Base:       template.JSStr(base),
+		Title:      i18n.RemotePageTitle,
+		Idle:       i18n.RemoteIdle,
+		Episode:    i18n.RemoteEpisodeFmt,
+		Play:       i18n.RemotePlay,
+		Pause:      i18n.RemotePause,
+		Back:       i18n.RemoteBack,
+		Forward:    i18n.RemoteForward,
+		Back30:     i18n.RemoteBack30,
+		Forward30:  i18n.RemoteForward30,
+		Volume:     i18n.RemoteVolume,
+		VolumeFmt:  i18n.RemoteVolumeFmt,
+		Next:       i18n.RemoteNext,
+		StopAfter:  i18n.RemoteStopAfter,
+		Episodes:   i18n.RemoteEpisodes,
+		NoPlaylist: i18n.RemoteNoPlaylist,
+		Stop:       i18n.RemoteStop,
+		Offline:    i18n.RemoteOffline,
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, err
