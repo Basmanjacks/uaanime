@@ -218,6 +218,68 @@ func TestVLCSessionSeekToWritesAbsoluteCommand(t *testing.T) {
 	}
 }
 
+func TestVLCSessionSetVolumeConvertsPercentToRaw(t *testing.T) {
+	commands := make(chan string, 1)
+	sess, serverDone := startFakeVLCIPC(t, recordVLCCommands(commands, 1))
+	defer func() {
+		sess.Close()
+		<-serverDone
+	}()
+
+	done := make(chan error, 1)
+	go func() { done <- sess.SetVolume(65) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("SetVolume: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SetVolume завис")
+	}
+	if got := <-commands; got != "volume 166" {
+		t.Fatalf("команда = %q, очікував volume 166", got)
+	}
+}
+
+func TestVLCSessionVolumeNormalizesRawScale(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  int
+		want float64
+	}{
+		{name: "повна гучність", raw: 256, want: 100},
+		{name: "тиша", raw: 0, want: 0},
+		{name: "підсилення понад 100 %", raw: 294, want: 294 / 2.56},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sess, serverDone := startFakeVLCIPC(t, replyVolumeRC(tt.raw))
+			defer func() {
+				sess.Close()
+				<-serverDone
+			}()
+
+			got, err := sess.Volume()
+			if err != nil || got != tt.want {
+				t.Fatalf("Volume = (%v, %v), очікував (%v, nil)", got, err, tt.want)
+			}
+		})
+	}
+}
+
+// replyVolumeRC — RC-сервер, що на "volume" без аргументу віддає сире значення
+// окремим рядком (формат звірено з VLC 3.0.17.3, 2026-09-03).
+func replyVolumeRC(raw int) func(net.Conn) {
+	return func(conn net.Conn) {
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			if scanner.Text() == "volume" {
+				_, _ = fmt.Fprintf(conn, "%d\r\n", raw)
+			}
+		}
+	}
+}
+
 func TestVLCSessionPausedReadsStatus(t *testing.T) {
 	tests := []struct {
 		name  string

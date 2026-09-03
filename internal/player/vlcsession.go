@@ -300,6 +300,33 @@ func (s *vlcSession) SeekTo(posSec float64) error {
 	return sendLocked(conn, reader, fmt.Sprintf("seek %d", pos))
 }
 
+// vlcVolumeScale — RC VLC працює в сирій шкалі, де 256 = 100 %. Значення понад
+// 256 законні (VLC дозволяє підсилення), тож нормалізація не обрізає стелю.
+const vlcVolumeScale = 2.56
+
+// Volume: "volume" без аргументу друкує ціле сире значення окремим рядком —
+// такий самий формат, як get_time (перевірено VLC 3.0.17.3, 2026-09-03).
+func (s *vlcSession) Volume() (float64, error) {
+	raw, err := s.request("volume")
+	if err != nil {
+		return 0, err
+	}
+	return raw / vlcVolumeScale, nil
+}
+
+func (s *vlcSession) SetVolume(pct float64) error {
+	s.requestMu.Lock()
+	defer s.requestMu.Unlock()
+	conn, reader, err := s.snapshotLocked()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.SetDeadline(time.Time{}) }()
+	// "volume <raw>" відповіді не друкує, лише промпт — як pause і seek.
+	raw := int64(math.Round(pct * vlcVolumeScale))
+	return sendLocked(conn, reader, fmt.Sprintf("volume %d", raw))
+}
+
 // endReasonOnCleanExit: VLC із --play-and-exit виходить і після кінця файла, і
 // після Ctrl+Q, тому EOF відновлюється з останніх виміряних pos/dur. Виміри
 // приходять із тика двигуна (5 с) — для 95 %-евристики цього достатньо.

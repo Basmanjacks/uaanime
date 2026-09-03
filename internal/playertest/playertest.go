@@ -85,6 +85,9 @@ type Session struct {
 	// Hold затримує завершення: Reason не надсилається, доки тест не викличе
 	// Release (або рушій — Close). Потрібен там, де сесію має обірвати сигнал.
 	Hold bool
+	// VolumePct — поточна гучність у відсотках; NewSession ставить 100, як
+	// справжній плеєр на старті. Читається під тим самим м'ютексом, що й calls.
+	VolumePct float64
 
 	// Started закривається у Start, Sampled — після першого TimePos: тест
 	// синхронізується з фоновою командою без sleep.
@@ -111,6 +114,7 @@ func NewSession(reason player.EndReason, positions, durations []float64) *Sessio
 		Reason:    reason,
 		Positions: positions,
 		Durations: durations,
+		VolumePct: 100,
 		Started:   make(chan struct{}),
 		Sampled:   make(chan struct{}),
 		end:       make(chan player.EndReason, 1),
@@ -192,6 +196,22 @@ func (s *Session) SeekTo(posSec float64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, Call{Op: "seekto", Delta: posSec})
+	return nil
+}
+
+func (s *Session) Volume() (float64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.VolumePct, nil
+}
+
+// SetVolume не обмежує діапазон: клампінг — робота playback.Live, і тест має
+// побачити, якщо вона його не зробила.
+func (s *Session) SetVolume(pct float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, Call{Op: "volume", Delta: pct})
+	s.VolumePct = pct
 	return nil
 }
 
