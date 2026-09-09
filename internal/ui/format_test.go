@@ -221,4 +221,11 @@ func TestRemainingLabel(t *testing.T) {
 	if got := m.remainingLabel(); got != "" {
 		t.Errorf("remainingLabel without episodes = %q, want empty", got)
 	}
+
+	// тайтл із пошуку, якого ще немає в бібліотеці: залишок — увесь список
+	m = newModel(t)
+	m.eng.Lib.Titles = nil
+	if got, want := m.remainingLabel(), i18n.RemainingEpisodes(12); got != want {
+		t.Errorf("remainingLabel for a title outside the library = %q, want %q", got, want)
+	}
 }

@@ -30,6 +30,7 @@ func TestStudioKeyOpensChoicesAndMarksPinnedStudio(t *testing.T) {
 	m.eng.Lib.Titles = []*library.LocalTitle{{ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref}}}
 	m.eng.Lib.Entries = []*library.Entry{{TitleID: ref.Slug, StudioPin: "Beta"}}
 	m.ref = ref
+	m.episodesRef = ref
 	m.episodes = testEpisodes(1)
 	m.showEpisodes()
 
@@ -148,7 +149,7 @@ func TestStudioCoverageIgnoresPreviousTitle(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("coverage-nav", 2)
 	previous, current := refs[0], refs[1]
-	seedTestLibrary(&m, refs, library.StateWatching)
+	seedTestLibrary(&m, refs)
 
 	m.ref = previous
 	m, _ = updateTestModel(t, m, episodesDoneMsg{

@@ -7,6 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -20,18 +21,22 @@ func (m *Model) showEpisodes() tea.Cmd {
 // не рухаючи курсор і не заходячи на екран заново.
 func (m *Model) episodeRows() []item {
 	title := m.eng.Lib.TitleByRef(m.ref)
-	var items []item
-	for _, ep := range m.episodes {
+	titleID := ""
+	if title != nil {
+		titleID = title.ID
+	}
+	progress := library.IndexProgress(titleID, m.eng.Lib.Progress)
+	episodes, _ := m.currentEpisodes()
+	items := make([]item, 0, len(episodes))
+	for _, ep := range episodes {
 		icon, meta := m.ic.Pending, releasesSummary(ep.Releases)
 		badge := ""
-		if title != nil {
-			if p := m.eng.Lib.ProgressFor(title.ID, ep.Number); p != nil {
-				if p.Completed {
-					icon, meta, badge = m.ic.Done, "", i18n.TuiEpDone
-				} else if p.PositionSec > 0 {
-					icon = m.ic.Play
-					meta = fmt.Sprintf(i18n.TuiEpAt, int(p.PositionSec)/60, int(p.PositionSec)%60)
-				}
+		if p, ok := progress[ep.Number]; ok {
+			if p.Completed {
+				icon, meta, badge = m.ic.Done, "", i18n.TuiEpDone
+			} else if p.PositionSec > 0 {
+				icon = m.ic.Play
+				meta = fmt.Sprintf(i18n.TuiEpAt, int(p.PositionSec)/60, int(p.PositionSec)%60)
 			}
 		}
 		items = append(items, item{

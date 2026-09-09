@@ -16,18 +16,11 @@ type LocalTitle struct {
 	Sources []provider.TitleRef `json:"sources"`
 }
 
-type State string
-
-const (
-	StateWatching  State = "watching"
-	StatePlanned   State = "planned"
-	StateCompleted State = "completed"
-)
-
-// Entry — запис списку перегляду.
+// Entry — запис списку перегляду. Стану тут навмисно немає: «у планах» /
+// «переглядаєш» / «переглянуто» рахуються з журналу прогресу (див. StatusOf),
+// бо збережений стан розходився з ним при кожній ручній позначці.
 type Entry struct {
 	TitleID       string        `json:"title_id"`
-	State         State         `json:"state"`
 	StudioPin     string        `json:"studio_pin,omitempty"`
 	KindPin       provider.Kind `json:"kind_pin,omitempty"`
 	LastEpisode   int           `json:"last_episode,omitempty"`
@@ -110,11 +103,6 @@ func (l *Library) Normalize(clean func(string) string) (dropped int) {
 		if e.KindPin != "" && !provider.ValidKind(e.KindPin) {
 			e.KindPin = ""
 		}
-		switch e.State {
-		case StateWatching, StatePlanned, StateCompleted, "":
-		default:
-			e.State = ""
-		}
 		if !known[e.TitleID] || seen[e.TitleID] {
 			dropped++
 			continue
@@ -168,7 +156,7 @@ func (l *Library) EntryFor(titleID string) *Entry {
 		e.Hidden = false
 		return e
 	}
-	e := &Entry{TitleID: titleID, State: StateWatching}
+	e := &Entry{TitleID: titleID}
 	l.Entries = append(l.Entries, e)
 	return e
 }
@@ -191,23 +179,36 @@ func (l *Library) ToggleBookmark(titleID string, knownEpisodes int) BookmarkResu
 		if entry.TitleID != titleID {
 			continue
 		}
-		if entry.State == StatePlanned {
-			l.Entries = append(l.Entries[:i], l.Entries[i+1:]...)
-			return BookmarkRemoved
-		}
+		// Прихований перевіряється ПЕРШИМ: зняття всіх позначок лишає запис
+		// без прогресу, і без цього порядку повернення в закладки читалося б
+		// як «нічого не почато» і видаляло б запис замість розховати його.
 		if entry.Hidden {
 			entry.Hidden = false
 			return BookmarkAdded
+		}
+		if !l.started(titleID) {
+			l.Entries = append(l.Entries[:i], l.Entries[i+1:]...)
+			return BookmarkRemoved
 		}
 		entry.Hidden = true
 		return BookmarkRemoved
 	}
 	l.Entries = append(l.Entries, &Entry{
 		TitleID:       titleID,
-		State:         StatePlanned,
 		KnownEpisodes: knownEpisodes,
 	})
 	return BookmarkAdded
+}
+
+// started — чи є в журналі бодай один запис про цей тайтл. Це й є межа між
+// «у планах» і рештою станів.
+func (l *Library) started(titleID string) bool {
+	for _, p := range l.Progress {
+		if p != nil && p.TitleID == titleID {
+			return true
+		}
+	}
+	return false
 }
 
 // MarkSeen рухає базову лінію відомих серій лише вперед.
@@ -221,7 +222,7 @@ func (l *Library) MarkSeen(titleID string, maxEp int) {
 // ReconcileKnown замінює лише незмінену попередню оцінку кількості серій.
 func (l *Library) ReconcileKnown(titleID string, provisional, actual int) bool {
 	entry := l.EntryLookup(titleID)
-	if entry == nil || entry.State != StatePlanned || entry.KnownEpisodes != provisional || actual == provisional {
+	if entry == nil || l.started(titleID) || entry.KnownEpisodes != provisional || actual == provisional {
 		return false
 	}
 	// EpAired на картці буває завищеним, тому підтверджене число може бути меншим.
@@ -310,23 +311,69 @@ func (l *Library) SetWatched(titleID string, episode int, watched bool, at time.
 	}
 }
 
-// Resume — що запропонувати на «Продовжити»: незавершена серія з позицією
-// або наступна після останньої завершеної.
-func (l *Library) Resume(titleID string) (episode int, positionSec float64, ok bool) {
+// ResumeIn — що запропонувати на «Продовжити» для тайтла зі списком серій
+// episodes. Список обов'язковий саме тому, що без нього попередня версія
+// пропонувала «остання завершена + 1» — серію, якої на сайті ще немає.
+//
+// Ручні позначки лишають дірки (завершена 10-та при непереглянутій 3-й), тож
+// порядок такий: незавершена серія з позицією → перша після останньої
+// завершеної → найменша непереглянута → нема чого дивитися.
+func (l *Library) ResumeIn(titleID string, episodes []provider.Episode) (episode int, positionSec float64, ok bool) {
+	if len(episodes) == 0 {
+		// Списку немає (перший запуск, порожній кеш): звірити номер нема з чим,
+		// тож пропонуємо лише те, що людина точно вже відкривала.
+		if best := l.latestProgress(titleID, nil); best != nil && !best.Completed {
+			return best.Episode, best.PositionSec, true
+		}
+		return 0, 0, false
+	}
+
+	exists := make(map[int]bool, len(episodes))
+	completed := make(map[int]bool, len(episodes))
+	for _, ep := range episodes {
+		exists[ep.Number] = true
+	}
+	for _, p := range l.Progress {
+		if p != nil && p.TitleID == titleID && p.Completed && exists[p.Episode] {
+			completed[p.Episode] = true
+		}
+	}
+
+	if best := l.latestProgress(titleID, exists); best != nil {
+		if !best.Completed {
+			return best.Episode, best.PositionSec, true
+		}
+		if next, found := NextEpisodeAfter(episodes, best.Episode); found && !completed[next] {
+			return next, 0, true
+		}
+	}
+
+	first, found := 0, false
+	for _, ep := range episodes {
+		if completed[ep.Number] {
+			continue
+		}
+		if !found || ep.Number < first {
+			first, found = ep.Number, true
+		}
+	}
+	return first, 0, found
+}
+
+// latestProgress — найсвіжіший запис журналу для тайтла; among != nil звужує
+// вибір до серій, які досі є в списку.
+func (l *Library) latestProgress(titleID string, among map[int]bool) *Progress {
 	var best *Progress
 	for _, p := range l.Progress {
-		if p.TitleID != titleID {
+		if p == nil || p.TitleID != titleID {
+			continue
+		}
+		if among != nil && !among[p.Episode] {
 			continue
 		}
 		if best == nil || p.WatchedAt.After(best.WatchedAt) {
 			best = p
 		}
 	}
-	if best == nil {
-		return 0, 0, false
-	}
-	if best.Completed {
-		return best.Episode + 1, 0, true
-	}
-	return best.Episode, best.PositionSec, true
+	return best
 }

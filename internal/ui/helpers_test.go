@@ -247,11 +247,25 @@ func seedTestHistory(m *Model, refs []provider.TitleRef) {
 
 // seedTestLibrary додає до історії ще й записи списку перегляду: без Entries
 // секція «Бібліотека» на домівці не будується.
-func seedTestLibrary(m *Model, refs []provider.TitleRef, state library.State) {
+func seedTestLibrary(m *Model, refs []provider.TitleRef) {
 	seedTestHistory(m, refs)
 	m.eng.Lib.Entries = make([]*library.Entry, len(refs))
 	for i, ref := range refs {
-		m.eng.Lib.Entries[i] = &library.Entry{TitleID: ref.Slug, State: state}
+		m.eng.Lib.Entries[i] = &library.Entry{TitleID: ref.Slug}
+	}
+	m.showHome()
+}
+
+// seedTestPlanned — закладки, до яких ще не торкалися: записи без жодного
+// прогресу. Саме це й означає «у планах» після відмови від збереженого стану.
+func seedTestPlanned(m *Model, refs []provider.TitleRef) {
+	m.eng.Lib.Titles = make([]*library.LocalTitle, len(refs))
+	m.eng.Lib.Entries = make([]*library.Entry, len(refs))
+	for i, ref := range refs {
+		m.eng.Lib.Titles[i] = &library.LocalTitle{
+			ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref},
+		}
+		m.eng.Lib.Entries[i] = &library.Entry{TitleID: ref.Slug}
 	}
 	m.showHome()
 }
@@ -336,7 +350,7 @@ func seedBadgeModel(t *testing.T, m *Model, refs []provider.TitleRef, episodes, 
 	if err := m.eng.Store.SaveEpisodes(refs[0], testEpisodes(episodes)); err != nil {
 		t.Fatalf("save episodes: %v", err)
 	}
-	seedTestLibrary(m, refs, library.StateWatching)
+	seedTestLibrary(m, refs)
 	e := m.eng.Lib.EntryLookup(refs[0].Slug)
 	if e == nil {
 		t.Fatalf("entry for %q not seeded", refs[0].Slug)

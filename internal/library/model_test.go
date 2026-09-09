@@ -3,11 +3,21 @@ package library
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
+
+// eps — список серій 1..n для ResumeIn і StatusOf.
+func eps(n int) []provider.Episode {
+	out := make([]provider.Episode, 0, n)
+	for i := 1; i <= n; i++ {
+		out = append(out, provider.Episode{Number: i})
+	}
+	return out
+}
 
 func TestRecordPositionAndResume(t *testing.T) {
 	lib := &Library{}
@@ -20,9 +30,9 @@ func TestRecordPositionAndResume(t *testing.T) {
 	now := time.Now()
 	// вийшли на 14:32 з 24 хв
 	lib.RecordPosition(title.ID, 3, 872, 1440, now)
-	ep, pos, ok := lib.Resume(title.ID)
+	ep, pos, ok := lib.ResumeIn(title.ID, eps(5))
 	if !ok || ep != 3 || pos != 872 {
-		t.Fatalf("Resume = (%d, %v, %v)", ep, pos, ok)
+		t.Fatalf("ResumeIn = (%d, %v, %v)", ep, pos, ok)
 	}
 
 	// додивилися до 95% — завершено, resume пропонує наступну
@@ -31,9 +41,9 @@ func TestRecordPositionAndResume(t *testing.T) {
 	if p == nil || !p.Completed {
 		t.Fatalf("очікував completed на 95%%: %+v", p)
 	}
-	ep, pos, ok = lib.Resume(title.ID)
+	ep, pos, ok = lib.ResumeIn(title.ID, eps(5))
 	if !ok || ep != 4 || pos != 0 {
-		t.Fatalf("Resume після завершення = (%d, %v, %v)", ep, pos, ok)
+		t.Fatalf("ResumeIn після завершення = (%d, %v, %v)", ep, pos, ok)
 	}
 
 	if e := lib.EntryFor(title.ID); e.LastEpisode != 3 {
@@ -72,15 +82,15 @@ func TestToggleBookmark(t *testing.T) {
 			t.Fatalf("ToggleBookmark = %v, очікував BookmarkAdded", got)
 		}
 		entry := lib.EntryLookup("title")
-		if entry == nil || entry.State != StatePlanned || entry.KnownEpisodes != 12 {
+		if entry == nil || entry.KnownEpisodes != 12 {
 			t.Fatalf("запис закладки = %+v", entry)
 		}
 	})
 
-	t.Run("removes planned entry", func(t *testing.T) {
+	t.Run("removes entry without progress", func(t *testing.T) {
 		lib := &Library{Entries: []*Entry{
-			{TitleID: "title", State: StatePlanned, KnownEpisodes: 12},
-			{TitleID: "other", State: StateWatching},
+			{TitleID: "title", KnownEpisodes: 12},
+			{TitleID: "other"},
 		}}
 
 		if got := lib.ToggleBookmark("title", 20); got != BookmarkRemoved {
@@ -94,25 +104,40 @@ func TestToggleBookmark(t *testing.T) {
 		}
 	})
 
-	for _, state := range []State{StateWatching, StateCompleted} {
-		t.Run(string(state)+" hides and restores entry", func(t *testing.T) {
-			entry := &Entry{TitleID: "title", State: state, StudioPin: "Студія", LastEpisode: 4}
-			lib := &Library{Entries: []*Entry{entry}}
+	t.Run("hides and restores started entry", func(t *testing.T) {
+		entry := &Entry{TitleID: "title", StudioPin: "Студія", LastEpisode: 4}
+		lib := &Library{
+			Entries:  []*Entry{entry},
+			Progress: []*Progress{{TitleID: "title", Episode: 4, Completed: true}},
+		}
 
-			if got := lib.ToggleBookmark("title", 20); got != BookmarkRemoved {
-				t.Fatalf("ToggleBookmark = %v, очікував BookmarkRemoved", got)
-			}
-			if len(lib.Entries) != 1 || lib.Entries[0] != entry || !entry.Hidden {
-				t.Fatalf("запис перегляду не приховано: %+v", lib.Entries)
-			}
-			if got := lib.ToggleBookmark("title", 20); got != BookmarkAdded {
-				t.Fatalf("ToggleBookmark вдруге = %v, очікував BookmarkAdded", got)
-			}
-			if entry.Hidden {
-				t.Fatalf("запис перегляду лишився прихованим: %+v", entry)
-			}
-		})
-	}
+		if got := lib.ToggleBookmark("title", 20); got != BookmarkRemoved {
+			t.Fatalf("ToggleBookmark = %v, очікував BookmarkRemoved", got)
+		}
+		if len(lib.Entries) != 1 || lib.Entries[0] != entry || !entry.Hidden {
+			t.Fatalf("запис перегляду не приховано: %+v", lib.Entries)
+		}
+		if got := lib.ToggleBookmark("title", 20); got != BookmarkAdded {
+			t.Fatalf("ToggleBookmark вдруге = %v, очікував BookmarkAdded", got)
+		}
+		if entry.Hidden {
+			t.Fatalf("запис перегляду лишився прихованим: %+v", entry)
+		}
+	})
+
+	// Знята остання позначка лишає прихований запис зовсім без прогресу:
+	// «немає прогресу» тут не має означати «нічого не було».
+	t.Run("restores hidden entry without progress", func(t *testing.T) {
+		entry := &Entry{TitleID: "title", StudioPin: "Студія", Hidden: true}
+		lib := &Library{Entries: []*Entry{entry}}
+
+		if got := lib.ToggleBookmark("title", 20); got != BookmarkAdded {
+			t.Fatalf("ToggleBookmark = %v, очікував BookmarkAdded", got)
+		}
+		if len(lib.Entries) != 1 || entry.Hidden {
+			t.Fatalf("прихований запис не повернувся: %+v", lib.Entries)
+		}
+	})
 }
 
 func TestToggleBookmarkPreservesProgress(t *testing.T) {
@@ -126,9 +151,9 @@ func TestToggleBookmarkPreservesProgress(t *testing.T) {
 	if entry == nil || !entry.Hidden {
 		t.Fatalf("прихований запис = %+v", entry)
 	}
-	ep, pos, ok := lib.Resume("title")
+	ep, pos, ok := lib.ResumeIn("title", eps(5))
 	if !ok || ep != 3 || pos != 872 {
-		t.Fatalf("Resume після приховування = (%d, %v, %v)", ep, pos, ok)
+		t.Fatalf("ResumeIn після приховування = (%d, %v, %v)", ep, pos, ok)
 	}
 
 	if got := lib.ToggleBookmark("title", 12); got != BookmarkAdded {
@@ -142,11 +167,13 @@ func TestToggleBookmarkPreservesProgress(t *testing.T) {
 func TestToggleBookmarkPreservesStudioPin(t *testing.T) {
 	entry := &Entry{
 		TitleID:   "title",
-		State:     StateWatching,
 		StudioPin: "Студія",
 		KindPin:   provider.KindDub,
 	}
-	lib := &Library{Entries: []*Entry{entry}}
+	lib := &Library{
+		Entries:  []*Entry{entry},
+		Progress: []*Progress{{TitleID: "title", Episode: 1, Completed: true}},
+	}
 
 	lib.ToggleBookmark("title", 12)
 	lib.ToggleBookmark("title", 12)
@@ -157,7 +184,7 @@ func TestToggleBookmarkPreservesStudioPin(t *testing.T) {
 }
 
 func TestEntryForRevealsHiddenEntry(t *testing.T) {
-	entry := &Entry{TitleID: "title", State: StateWatching, Hidden: true}
+	entry := &Entry{TitleID: "title", Hidden: true}
 	lib := &Library{Entries: []*Entry{entry}}
 
 	if got := lib.EntryFor("title"); got != entry || got.Hidden {
@@ -166,7 +193,7 @@ func TestEntryForRevealsHiddenEntry(t *testing.T) {
 }
 
 func TestMarkSeenIsMonotonic(t *testing.T) {
-	lib := &Library{Entries: []*Entry{{TitleID: "title", State: StatePlanned, KnownEpisodes: 3}}}
+	lib := &Library{Entries: []*Entry{{TitleID: "title", KnownEpisodes: 3}}}
 
 	lib.MarkSeen("title", 5)
 	lib.MarkSeen("title", 2)
@@ -189,8 +216,8 @@ func TestSetWatchedMarksAndUnmarks(t *testing.T) {
 	if p == nil || !p.Completed || !p.WatchedAt.Equal(now) {
 		t.Fatalf("прогрес після позначки: %+v", p)
 	}
-	if ep, pos, ok := lib.Resume("title"); !ok || ep != 3 || pos != 0 {
-		t.Fatalf("Resume = (%d, %v, %v), очікував серію 3", ep, pos, ok)
+	if ep, pos, ok := lib.ResumeIn("title", eps(5)); !ok || ep != 3 || pos != 0 {
+		t.Fatalf("ResumeIn = (%d, %v, %v), очікував серію 3", ep, pos, ok)
 	}
 	if got := lib.EntryFor("title").LastEpisode; got != 2 {
 		t.Fatalf("LastEpisode = %d, очікував 2", got)
@@ -215,7 +242,7 @@ func TestSetWatchedMarksAndUnmarks(t *testing.T) {
 }
 
 func TestSetWatchedKeepsDurationAndKnownEpisodes(t *testing.T) {
-	lib := &Library{Entries: []*Entry{{TitleID: "title", State: StateWatching, KnownEpisodes: 12}}}
+	lib := &Library{Entries: []*Entry{{TitleID: "title", KnownEpisodes: 12}}}
 	now := time.Now()
 	lib.RecordPosition("title", 4, 100, 1440, now)
 
@@ -232,7 +259,7 @@ func TestSetWatchedKeepsDurationAndKnownEpisodes(t *testing.T) {
 }
 
 func TestSetWatchedUnmarkMissingIsNoop(t *testing.T) {
-	lib := &Library{Entries: []*Entry{{TitleID: "title", State: StateWatching, LastEpisode: 5}}}
+	lib := &Library{Entries: []*Entry{{TitleID: "title", LastEpisode: 5}}}
 
 	lib.SetWatched("title", 7, false, time.Now())
 	if len(lib.Progress) != 0 {
@@ -250,7 +277,7 @@ func TestSetWatchedUnmarkMissingIsNoop(t *testing.T) {
 
 func TestReconcileKnown(t *testing.T) {
 	t.Run("lowers matching provisional value", func(t *testing.T) {
-		lib := &Library{Entries: []*Entry{{TitleID: "title", State: StatePlanned, KnownEpisodes: 12}}}
+		lib := &Library{Entries: []*Entry{{TitleID: "title", KnownEpisodes: 12}}}
 
 		if changed := lib.ReconcileKnown("title", 12, 10); !changed {
 			t.Fatal("ReconcileKnown не повідомив про зміну")
@@ -261,7 +288,7 @@ func TestReconcileKnown(t *testing.T) {
 	})
 
 	t.Run("refuses changed baseline", func(t *testing.T) {
-		lib := &Library{Entries: []*Entry{{TitleID: "title", State: StatePlanned, KnownEpisodes: 12}}}
+		lib := &Library{Entries: []*Entry{{TitleID: "title", KnownEpisodes: 12}}}
 		lib.MarkSeen("title", 13)
 
 		if changed := lib.ReconcileKnown("title", 12, 10); changed {
@@ -272,8 +299,11 @@ func TestReconcileKnown(t *testing.T) {
 		}
 	})
 
-	t.Run("refuses watching entry", func(t *testing.T) {
-		lib := &Library{Entries: []*Entry{{TitleID: "title", State: StateWatching, KnownEpisodes: 12}}}
+	t.Run("refuses started entry", func(t *testing.T) {
+		lib := &Library{
+			Entries:  []*Entry{{TitleID: "title", KnownEpisodes: 12}},
+			Progress: []*Progress{{TitleID: "title", Episode: 1}},
+		}
 
 		if changed := lib.ReconcileKnown("title", 12, 10); changed {
 			t.Fatal("ReconcileKnown змінив запис перегляду")
@@ -285,7 +315,7 @@ func TestReconcileKnown(t *testing.T) {
 }
 
 func TestKnownEpisodesJSONCompatibility(t *testing.T) {
-	want := &Library{Entries: []*Entry{{TitleID: "title", State: StatePlanned, KnownEpisodes: 12}}}
+	want := &Library{Entries: []*Entry{{TitleID: "title", KnownEpisodes: 12}}}
 	data, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
@@ -339,7 +369,7 @@ func TestNormalizeCleansControlChars(t *testing.T) {
 			Name:    "Фрірен\x1b[2J",
 			Sources: []provider.TitleRef{{Provider: "anitube", Slug: "1-x", Name: "Фрірен\u009b2J", URL: "https://evil.invalid/x"}},
 		}},
-		Entries: []*Entry{{TitleID: "t1", State: StateWatching, StudioPin: "FanVox\x1b[2J", KindPin: provider.Kind("\x1b")}},
+		Entries: []*Entry{{TitleID: "t1", StudioPin: "FanVox\x1b[2J", KindPin: provider.Kind("\x1b")}},
 	}
 
 	if dropped := lib.Normalize(provider.CleanText); dropped != 0 {
@@ -369,7 +399,7 @@ func TestNormalizeDropsTitleWithBadSlug(t *testing.T) {
 			Name:    "Погана",
 			Sources: []provider.TitleRef{{Provider: "anitube", Slug: "../x"}},
 		}},
-		Entries:  []*Entry{{TitleID: "bad", State: StateWatching}},
+		Entries:  []*Entry{{TitleID: "bad"}},
 		Progress: []*Progress{{TitleID: "bad", Episode: 1}},
 	}
 
@@ -390,9 +420,9 @@ func TestNormalizeDropsOrphansAndDuplicates(t *testing.T) {
 			Sources: []provider.TitleRef{{Provider: "anitube", Slug: "1-x"}},
 		}},
 		Entries: []*Entry{
-			{TitleID: "t1", State: StateWatching, LastEpisode: 5},
-			{TitleID: "t1", State: StatePlanned},
-			{TitleID: "ghost", State: StateWatching},
+			{TitleID: "t1", LastEpisode: 5},
+			{TitleID: "t1"},
+			{TitleID: "ghost"},
 		},
 		Progress: []*Progress{{TitleID: "t1", Episode: 1}, {TitleID: "ghost", Episode: 1}},
 	}
@@ -409,16 +439,29 @@ func TestNormalizeDropsOrphansAndDuplicates(t *testing.T) {
 	}
 }
 
-func TestNormalizeResetsUnknownState(t *testing.T) {
-	lib := &Library{
-		Titles:  []*LocalTitle{{ID: "t1", Sources: []provider.TitleRef{{Provider: "anitube", Slug: "1-x"}}}},
-		Entries: []*Entry{{TitleID: "t1", State: State("dropped-by-user")}},
+// Стан більше не зберігається, але старі library.json несуть ключ "state" —
+// читання не має ні падати, ні воскрешати поле.
+func TestNormalizeIgnoresLegacyState(t *testing.T) {
+	const raw = `{"titles":[{"id":"t1","name":"X","sources":[{"provider":"anitube","slug":"1-x"}]}],
+	              "entries":[{"title_id":"t1","state":"dropped-by-user","known_episodes":3}],
+	              "progress":[]}`
+	var lib Library
+	if err := json.Unmarshal([]byte(raw), &lib); err != nil {
+		t.Fatal(err)
 	}
 	if dropped := lib.Normalize(provider.CleanText); dropped != 0 {
-		t.Fatalf("dropped = %d, невідомий стан не привід викидати запис", dropped)
+		t.Fatalf("dropped = %d, старий ключ не привід викидати запис", dropped)
 	}
-	if got := lib.Entries[0].State; got != "" {
-		t.Errorf("State = %q, очікував порожній", got)
+	entry := lib.EntryLookup("t1")
+	if entry == nil || entry.KnownEpisodes != 3 {
+		t.Fatalf("запис зі старим ключем = %+v", entry)
+	}
+	data, err := json.Marshal(&lib)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(data), `"state"`) {
+		t.Fatalf("збережена бібліотека досі несе state: %s", data)
 	}
 }
 
@@ -430,7 +473,7 @@ func TestNormalizeLeavesValidLibraryIntact(t *testing.T) {
 				Name:    "Фрірен",
 				Sources: []provider.TitleRef{{Provider: "anitube", Slug: "4465-frren", Name: "Фрірен"}},
 			}},
-			Entries:  []*Entry{{TitleID: "t1", State: StateCompleted, StudioPin: "FanVox", KindPin: provider.KindDub}},
+			Entries:  []*Entry{{TitleID: "t1", StudioPin: "FanVox", KindPin: provider.KindDub}},
 			Progress: []*Progress{{TitleID: "t1", Episode: 2, PositionSec: 60, DurationSec: 1440}},
 		}
 	}

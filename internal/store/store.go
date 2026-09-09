@@ -40,8 +40,13 @@ func NewID() string {
 }
 
 type Store struct {
-	dir string
+	dir      string
+	readOnly bool
 }
+
+// OpenReadOnly skips directory creation, migrations, and maintenance writes.
+// Metadata caches remain best-effort; durable user state is never written.
+func OpenReadOnly(dir string) *Store { return &Store{dir: dir, readOnly: true} }
 
 func Open(dir string) (*Store, error) {
 	for _, sub := range []string{"state", "cache"} {
@@ -185,7 +190,7 @@ func (s *Store) LoadLibrary() (*library.Library, error) {
 	// ручне редагування лишає `null` у масивах. Читати далі важливіше за звіт,
 	// але викинуте не має зникати мовчки: наступний SaveLibrary закріпив би
 	// втрату, тому оригінал перед першим записом лягає в .bak.
-	if lib.Normalize(provider.CleanText) > 0 {
+	if lib.Normalize(provider.CleanText) > 0 && !s.readOnly {
 		if raw, err := os.ReadFile(s.libraryPath()); err == nil {
 			_ = os.WriteFile(s.libraryPath()+".bak", raw, 0o600)
 		}

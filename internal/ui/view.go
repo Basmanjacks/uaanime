@@ -104,6 +104,8 @@ func (m Model) View() tea.View {
 	switch {
 	case m.errText != "":
 		body += styleErr.Render(fit(provider.CleanText(m.errText)))
+	case m.journalWarning:
+		body += styleErr.Render(fit(i18n.MsgJournalFailed))
 	case m.status != "":
 		body += styleStatus.Render(fit(provider.CleanText(m.status)))
 	default:

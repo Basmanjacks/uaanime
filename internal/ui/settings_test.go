@@ -93,7 +93,7 @@ func noteTitles(t *testing.T, m Model) []string {
 
 func TestHomeSettingsRowLastInMoreAndCommaOpens(t *testing.T) {
 	m := newSettingsModel(t, Options{})
-	seedTestLibrary(&m, testRefs("lib", 1), library.StateWatching)
+	seedTestLibrary(&m, testRefs("lib", 1))
 	items := homeItems(t, m)
 	idx := -1
 	for i, it := range items {
@@ -271,7 +271,7 @@ func TestSettingsRemoteStatusesAndNotes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := newSettingsModel(t, Options{RestartRemote: func(string) RemoteInfo { return tc.info }})
+			m := newSettingsModel(t, Options{Debug: true, RestartRemote: func(string) RemoteInfo { return tc.info }})
 			m = openSettings(t, m)
 			selectSetting(t, &m, settingRemote)
 			m, _ = pressTestKey(t, m, tea.KeyRight, "")

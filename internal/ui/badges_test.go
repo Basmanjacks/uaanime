@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,9 +19,6 @@ func TestSearchBookmarkKeyAddsAndRemovesPlannedTitle(t *testing.T) {
 
 	m, _ = pressTestKey(t, m, 'm', "m")
 	entry := bookmarkTestEntry(t, m, card.TitleRef)
-	if entry.State != library.StatePlanned {
-		t.Fatalf("state after first m = %q, want %q", entry.State, library.StatePlanned)
-	}
 	if entry.KnownEpisodes != card.EpAired {
 		t.Errorf("known episodes after first m = %d, want %d", entry.KnownEpisodes, card.EpAired)
 	}
@@ -61,8 +59,11 @@ func TestHomeUppercaseBookmarkKeyAddsPlannedTitle(t *testing.T) {
 	m, _ = pressTestKey(t, m, 'M', "M")
 
 	entry := bookmarkTestEntry(t, m, card.TitleRef)
-	if entry.State != library.StatePlanned {
-		t.Fatalf("state after uppercase M = %q, want %q", entry.State, library.StatePlanned)
+	if entry == nil || entry.KnownEpisodes != card.EpAired {
+		t.Fatalf("entry after uppercase M = %+v", entry)
+	}
+	if got := m.eng.Lib.StatusOf(card.Slug, nil).Kind; got != library.StatusPlanned {
+		t.Fatalf("status after uppercase M = %v, want planned", got)
 	}
 }
 
@@ -74,7 +75,9 @@ func TestSearchBookmarkKeyRemovesWatchingTitleFromHome(t *testing.T) {
 		Name:    card.Name,
 		Sources: []provider.TitleRef{card.TitleRef},
 	}}
-	m.eng.Lib.Entries = []*library.Entry{{TitleID: card.Slug, State: library.StateWatching}}
+	m.eng.Lib.Entries = []*library.Entry{{TitleID: card.Slug, LastEpisode: 1}}
+	// Почато: без прогресу закладка не ховалася б, а видалялася.
+	m.eng.Lib.Progress = []*library.Progress{{TitleID: card.Slug, Episode: 1, Completed: true}}
 	searchTestCards(&m, []provider.TitleCard{card})
 
 	m, _ = pressTestKey(t, m, 'm', "m")
@@ -82,8 +85,8 @@ func TestSearchBookmarkKeyRemovesWatchingTitleFromHome(t *testing.T) {
 		t.Errorf("status after m = %q, want %q", m.status, i18n.TuiBookmarkRemoved)
 	}
 	entry := bookmarkTestEntry(t, m, card.TitleRef)
-	if entry.State != library.StateWatching || !entry.Hidden {
-		t.Errorf("entry after m = %+v, want hidden watching entry", entry)
+	if !entry.Hidden {
+		t.Errorf("entry after m = %+v, want hidden entry", entry)
 	}
 	m.showHome()
 	if rows := sectionRows(t, m, i18n.TuiBlockLibrary); len(rows) != 0 {
@@ -94,6 +97,7 @@ func TestSearchBookmarkKeyRemovesWatchingTitleFromHome(t *testing.T) {
 func TestEpisodesBookmarkKeyUsesMaximumEpisodeNumber(t *testing.T) {
 	m := newTestModel(t)
 	m.ref = testRefs("episodes-bookmark", 1)[0]
+	m.episodesRef = m.ref
 	m.episodes = []provider.Episode{{Number: 3}, {Number: 9}, {Number: 4}}
 	m.showEpisodes()
 
@@ -209,48 +213,42 @@ func TestPlannedBadgeUsesKnownEpisodesBaseline(t *testing.T) {
 	m.eng.Lib.Titles = []*library.LocalTitle{{
 		ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref},
 	}}
-	m.eng.Lib.Entries = []*library.Entry{{
-		TitleID: ref.Slug, State: library.StatePlanned, KnownEpisodes: 3,
-	}}
+	m.eng.Lib.Entries = []*library.Entry{{TitleID: ref.Slug, KnownEpisodes: 3}}
 	if err := m.eng.Store.SaveEpisodes(ref, testEpisodes(5)); err != nil {
 		t.Fatalf("save episodes: %v", err)
 	}
 	m.showHome()
 
-	if got, want := libraryRow(t, m, ref.Name).badge, i18n.NewEpisodes(2); got != want {
-		t.Fatalf("planned badge = %q, want %q", got, want)
+	row := libraryRow(t, m, ref.Name)
+	if want := i18n.NewEpisodes(2); row.badge != want {
+		t.Fatalf("planned badge = %q, want %q", row.badge, want)
+	}
+	if want := fmt.Sprintf(i18n.TuiStatePlannedWith, i18n.Episodes(5)); row.meta != want {
+		t.Fatalf("planned meta = %q, want %q", row.meta, want)
 	}
 }
 
-func TestNewEpisodeCountCountsUniqueNumbersAfterBaseline(t *testing.T) {
-	episodes := []provider.Episode{{Number: 1}, {Number: 3}, {Number: 3}}
-
-	if got := newEpisodeCount(episodes, 1); got != 1 {
-		t.Fatalf("newEpisodeCount = %d, want 1", got)
-	}
-}
-
-func TestBadgesCmdIncludesPlannedEntries(t *testing.T) {
+// TestLibraryEpisodesCmdIncludesPlannedEntries — закладка, якої ще не
+// торкалися, теж має дізнатися про нові серії.
+func TestLibraryEpisodesCmdIncludesPlannedEntries(t *testing.T) {
 	m := newTestModel(t)
 	ref := testRefs("planned-probe", 1)[0]
 	m.eng.Provider = episodesStub(testEpisodes(4))
 	m.eng.Lib.Titles = []*library.LocalTitle{{
 		ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref},
 	}}
-	m.eng.Lib.Entries = []*library.Entry{{
-		TitleID: ref.Slug, State: library.StatePlanned, KnownEpisodes: 2,
-	}}
+	m.eng.Lib.Entries = []*library.Entry{{TitleID: ref.Slug, KnownEpisodes: 2}}
 
-	cmd := m.badgesCmd()
+	cmd := m.libraryEpisodesCmd()
 	if cmd == nil {
-		t.Fatal("badgesCmd returned nil for planned entry")
+		t.Fatal("libraryEpisodesCmd returned nil for planned entry")
 	}
-	msg, ok := cmd().(badgesMsg)
-	if !ok {
-		t.Fatalf("badgesCmd message = %T, want badgesMsg", msg)
+	if _, ok := cmd().(libraryEpisodesMsg); !ok {
+		t.Fatal("libraryEpisodesCmd message is not libraryEpisodesMsg")
 	}
-	if got := msg.counts[ref.Slug]; got != 2 {
-		t.Fatalf("planned badge count = %d, want 2", got)
+	m.showHome()
+	if want := i18n.NewEpisodes(2); libraryRow(t, m, ref.Name).badge != want {
+		t.Fatalf("planned badge = %q, want %q", libraryRow(t, m, ref.Name).badge, want)
 	}
 }
 
@@ -263,24 +261,23 @@ func TestBadgesCmdSkipsHiddenEntriesWithoutConsumingProbeSlots(t *testing.T) {
 			ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref},
 		})
 		m.eng.Lib.Entries = append(m.eng.Lib.Entries, &library.Entry{
-			TitleID: ref.Slug, State: library.StateWatching, Hidden: i < maxBadgeProbes,
+			TitleID: ref.Slug, Hidden: i < maxBadgeProbes,
 		})
 	}
 
-	cmd := m.badgesCmd()
+	cmd := m.libraryEpisodesCmd()
 	if cmd == nil {
-		t.Fatal("badgesCmd returned nil with a visible entry")
+		t.Fatal("libraryEpisodesCmd returned nil with a visible entry")
 	}
-	msg, ok := cmd().(badgesMsg)
-	if !ok {
-		t.Fatalf("badgesCmd message = %T, want badgesMsg", msg)
+	if _, ok := cmd().(libraryEpisodesMsg); !ok {
+		t.Fatal("libraryEpisodesCmd message is not libraryEpisodesMsg")
 	}
-	visibleID := refs[maxBadgeProbes].Slug
-	if got := msg.counts[visibleID]; got != 4 {
-		t.Fatalf("visible badge count = %d, want 4; counts=%+v", got, msg.counts)
+	// Прогріто лише видимий тайтл: приховані не з'їли жодного зі слотів.
+	if _, _, found := m.eng.Store.LoadEpisodes(refs[maxBadgeProbes]); !found {
+		t.Fatal("visible entry episodes were not cached")
 	}
-	if len(msg.counts) != 1 {
-		t.Fatalf("badgesCmd probed hidden entries: %+v", msg.counts)
+	if _, _, found := m.eng.Store.LoadEpisodes(refs[0]); found {
+		t.Fatal("hidden entry consumed a probe slot")
 	}
 }
 
@@ -291,7 +288,6 @@ func TestOpeningPlannedTitleMarksEpisodesSeen(t *testing.T) {
 		t.Fatalf("Bookmark: %v", err)
 	}
 	title := m.eng.Lib.TitleByRef(ref)
-	m.badges[title.ID] = 3
 	m.reqID = 7
 
 	m, _ = updateTestModel(t, m, episodesDoneMsg{
@@ -302,8 +298,8 @@ func TestOpeningPlannedTitleMarksEpisodesSeen(t *testing.T) {
 	if entry.KnownEpisodes != 5 {
 		t.Fatalf("KnownEpisodes after open = %d, want 5", entry.KnownEpisodes)
 	}
-	if got := m.badges[title.ID]; got != 0 {
-		t.Fatalf("badge after open = %d, want 0", got)
+	if got := m.eng.Lib.StatusOf(title.ID, testEpisodes(5)).Fresh; got != 0 {
+		t.Fatalf("fresh episodes after open = %d, want 0", got)
 	}
 }
 
@@ -338,8 +334,6 @@ func TestBookmarkBaselineLowersProvisionalKnownEpisodes(t *testing.T) {
 	if err := m.eng.Store.SaveEpisodes(ref, testEpisodes(10)); err != nil {
 		t.Fatalf("save episodes: %v", err)
 	}
-	m.badges[title.ID] = 4
-
 	m, _ = updateTestModel(t, m, bookmarkBaselineMsg{
 		titleID: title.ID, ref: ref, provisional: 12, maxEp: 10,
 	})
@@ -347,8 +341,8 @@ func TestBookmarkBaselineLowersProvisionalKnownEpisodes(t *testing.T) {
 	if got := m.eng.Lib.EntryLookup(title.ID).KnownEpisodes; got != 10 {
 		t.Fatalf("KnownEpisodes = %d, want 10", got)
 	}
-	if got := m.badges[title.ID]; got != 0 {
-		t.Fatalf("badge after reconcile = %d, want 0", got)
+	if got := libraryRow(t, m, ref.Name).badge; got != "" {
+		t.Fatalf("badge after reconcile = %q, want empty", got)
 	}
 }
 
@@ -424,8 +418,11 @@ func TestBadgeShrinksAfterWatch(t *testing.T) {
 	}
 
 	// А фонова перевірка, що знайшла ще одну серію, бейдж повертає.
-	m, _ = updateTestModel(t, m, badgesMsg{counts: map[string]int{refs[0].Slug: 1}})
+	if err := m.eng.Store.SaveEpisodes(refs[0], testEpisodes(6)); err != nil {
+		t.Fatalf("save episodes: %v", err)
+	}
+	m, _ = updateTestModel(t, m, libraryEpisodesMsg{})
 	if want := i18n.NewEpisodes(1); libraryRow(t, m, refs[0].Name).badge != want {
-		t.Fatalf("badge after badgesMsg = %q, want %q", libraryRow(t, m, refs[0].Name).badge, want)
+		t.Fatalf("badge after libraryEpisodesMsg = %q, want %q", libraryRow(t, m, refs[0].Name).badge, want)
 	}
 }

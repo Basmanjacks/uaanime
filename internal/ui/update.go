@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 
 	tea "charm.land/bubbletea/v2"
@@ -9,7 +10,6 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // ---- update ----
@@ -23,7 +23,7 @@ func (m *Model) rejectStale(req int) bool { return req != m.reqID }
 func (m *Model) failNav(err error) {
 	m.pending = nil
 	m.pendingReq = 0
-	m.errText = i18n.ErrorText(err)
+	m.errText = m.errorText(err)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -58,10 +58,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshHome()
 		return m, nil
 
-	case badgesMsg:
-		for id, n := range msg.counts {
-			m.badges[id] = n
-		}
+	case libraryEpisodesMsg:
 		m.refreshHome()
 		return m, nil
 
@@ -95,16 +92,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if msg.offline {
 				m.status = i18n.MsgOfflineCache
 			}
+			if m.screen == screenEpisodes {
+				return m, m.setItems(m.episodeRows(), -1)
+			}
 			return m, nil
 		}
 		if title := m.eng.Lib.TitleByRef(msg.ref); title != nil {
-			if entry := m.eng.Lib.EntryLookup(title.ID); entry != nil && entry.State == library.StatePlanned {
-				// Відкриття запланованого тайтлу означає ознайомлення з наявними
+			if st := m.eng.Lib.StatusOf(title.ID, msg.eps); st.Kind == library.StatusPlanned {
+				// Відкриття ще не початого тайтлу означає ознайомлення з наявними
 				// серіями; у перегляді бейдж навмисно очищає лише сам перегляд.
 				if err := m.eng.MarkSeen(msg.ref, maxEpisodeNumber(msg.eps)); err != nil {
-					m.errText = provider.CleanText(err.Error())
+					m.errText = m.errorText(err)
 				}
-				m.badges[title.ID] = 0
 			}
 		}
 		if msg.offline {
@@ -124,14 +123,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.failNav(msg.err)
 			var cmd tea.Cmd
 			if m.screen == screenPlaying {
-				if len(m.episodes) > 0 {
+				if _, ok := m.currentEpisodes(); ok {
 					cmd = m.showEpisodes()
 				} else {
 					m.showHome()
 				}
 			}
 			// showHome чистить errText, тому текст ставимо після переходу.
-			m.errText = i18n.ErrorText(msg.err)
+			m.errText = m.errorText(msg.err)
 			return m, cmd
 		}
 		m.commitPending(msg.req)
@@ -165,6 +164,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showStudioChoice(msg.choices)
 		return m, nil
 
+	case journalMsg:
+		if msg.gen != m.playGen || !msg.open {
+			return m, nil
+		}
+		m.journalWarning = msg.err != nil
+		return m, m.journalCmd()
+
 	case playDoneMsg:
 		if m.pendingBaseline != nil {
 			m.applyBookmarkBaseline(*m.pendingBaseline)
@@ -180,9 +186,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Журнал уже злитий у бібліотеку — публікуємо список із новою позначкою
 		// «переглянуто» і без підсвіченої серії.
 		m.publishPlaylist()
-		if msg.err != nil {
-			err = msg.err
-		}
+		err = errors.Join(msg.err, err)
 		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
 		// без автоплею, «стоп» уриває ланцюжок навіть з ним
 		chain, requested := false, 0
@@ -209,28 +213,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.resolveCmd(m.ref, requested, req, m.eng.ResolveHints(m.ref, requested))
 		}
 		if chain {
-			if next, ok := playback.NextEpisodeNumber(m.episodes, m.pendingEp); ok {
+			episodes, _ := m.currentEpisodes()
+			if next, ok := playback.NextEpisodeNumber(episodes, m.pendingEp); ok {
 				req := m.nextReq()
 				m.pendingEp = next
 				m.status = i18n.TuiResolving
 				return m, m.resolveCmd(m.ref, next, req, m.eng.ResolveHints(m.ref, next))
 			}
 		}
+		// Choose the return screen before assigning feedback: showHome clears
+		// old messages, but must not erase this session's finalization failure.
+		var cmd tea.Cmd
+		if _, ok := m.currentEpisodes(); ok {
+			cmd = m.showEpisodes()
+		} else {
+			m.showHome()
+		}
 		switch {
 		case err != nil:
-			m.errText = fmt.Sprintf(i18n.MsgPlayerFailed, err)
+			m.errText = m.errorText(err)
 		case result.Completed:
 			m.status = fmt.Sprintf(i18n.MsgEpisodeDone, m.pendingEp)
 		case result.PositionSec > 0:
 			m.status = fmt.Sprintf(i18n.MsgProgressSaved,
 				int(result.PositionSec)/60, int(result.PositionSec)%60)
-		}
-		// повертаємось на екран серій з оновленими станами
-		var cmd tea.Cmd
-		if len(m.episodes) > 0 {
-			cmd = m.showEpisodes()
-		} else {
-			m.showHome()
 		}
 		// Друга фаза виходу: журнал уже злитий, тепер можна завершувати.
 		if m.quitting {
@@ -253,6 +259,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	var cmd tea.Cmd
+	if m.screen == screenSearch && m.input.Focused() {
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+	}
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
 }
@@ -331,12 +341,6 @@ func (m *Model) applyBookmarkBaseline(msg bookmarkBaselineMsg) {
 		return
 	}
 	_ = m.eng.ReconcileKnown(msg.ref, msg.provisional, msg.maxEp)
-	delete(m.badges, msg.titleID)
-	if title := m.titleByID(msg.titleID); title != nil {
-		if entry := m.eng.Lib.EntryLookup(title.ID); entry != nil {
-			m.badges[title.ID] = m.newEpisodes(title, entry)
-		}
-	}
 	m.refreshHome()
 }
 
@@ -345,7 +349,7 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	// Помилка (немає плеєра, не записалась бібліотека) лишає екран як був.
 	titleID, pinned, err := m.eng.Begin(res)
 	if err != nil {
-		m.errText = i18n.ErrorText(err)
+		m.errText = m.errorText(err)
 		return m, nil
 	}
 	if m.screen == screenStudio && len(m.stack) > 0 {
@@ -353,6 +357,8 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	}
 	m.pendingEp = res.Episode
 	m.playTitleID, m.playPinned = titleID, pinned
+	m.playGen++
+	m.journalWarning = false
 	m.setScreen(screenPlaying)
 	// Статус лишається порожнім навмисно: екран «Грає» тепер керований, і
 	// внизу корисніша підказка з клавішами, ніж «плеєр запущено».
@@ -367,7 +373,7 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	m.publishPlaylist()
 	// Знімок замовляється разом із сесією: перша відповідь запускає цикл, а до
 	// неї рядок оцінки просто відсутній.
-	return m, tea.Batch(cmd, m.liveSnapshotCmd(m.resetLive()))
+	return m, tea.Batch(cmd, m.liveSnapshotCmd(m.resetLive()), m.journalCmd())
 }
 
 // requestQuit — двофазний вихід. Під час відтворення Ctrl+C і сигнал лише

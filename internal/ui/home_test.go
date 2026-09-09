@@ -19,7 +19,7 @@ import (
 func TestHomeResumeAlsoAppearsInBookmarks(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("dedupe", 1)
-	seedTestLibrary(&m, refs, library.StateWatching)
+	seedTestLibrary(&m, refs)
 
 	name := refs[0].Name
 	resumeRows := 0
@@ -68,7 +68,7 @@ func TestHomeResumeAlsoAppearsInBookmarks(t *testing.T) {
 func TestHomeContinueRows(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("continue", 4)
-	seedTestLibrary(&m, refs, library.StateWatching)
+	seedTestLibrary(&m, refs)
 
 	// seedTestHistory дає кожному тайтлу свій час перегляду, зростаючий за
 	// індексом, тому найсвіжіший — останній.
@@ -130,7 +130,7 @@ func resumeEpisodeFor(t *testing.T, m Model, name string) int {
 		if title.Name != name {
 			continue
 		}
-		ep, _, ok := m.eng.Lib.Resume(title.ID)
+		ep, _, ok := m.eng.Lib.ResumeIn(title.ID, m.titleEpisodes(title))
 		if !ok {
 			t.Fatalf("library has no resume point for %q", name)
 		}
@@ -145,7 +145,7 @@ func resumeEpisodeFor(t *testing.T, m Model, name string) int {
 func TestHomeBookmarkOrder(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("order", 3)
-	seedTestLibrary(&m, refs, library.StateWatching)
+	seedTestLibrary(&m, refs)
 
 	names := func() []string {
 		t.Helper()
@@ -163,7 +163,10 @@ func TestHomeBookmarkOrder(t *testing.T) {
 	}
 
 	// Нові серії в найстарішого — і він піднімається над усіма.
-	m, _ = updateTestModel(t, m, badgesMsg{counts: map[string]int{refs[0].Slug: 2}})
+	if err := m.eng.Store.SaveEpisodes(refs[0], testEpisodes(2)); err != nil {
+		t.Fatalf("save episodes: %v", err)
+	}
+	m, _ = updateTestModel(t, m, libraryEpisodesMsg{})
 	want = []string{refs[0].Name, refs[2].Name, refs[1].Name}
 	if got := names(); !slices.Equal(got, want) {
 		t.Fatalf("bookmarks after badges = %v, want %v", got, want)
@@ -210,7 +213,7 @@ func TestHomeRouletteRowPlacement(t *testing.T) {
 func TestHomeRoulettePicksPlanned(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("roulette", 3)
-	seedTestLibrary(&m, refs, library.StatePlanned)
+	seedTestPlanned(&m, refs)
 	// Прибраний із бібліотеки план рулетці не пропонується.
 	m.eng.Lib.Entries[0].Hidden = true
 	// Каталог є, але поки живі плани — він не потрібен.
@@ -360,7 +363,7 @@ func TestEpisodesScreenHasNoEasterEgg(t *testing.T) {
 func TestHomeSectionsPresent(t *testing.T) {
 	m := newTestModel(t)
 	refs := testRefs("section", 2)
-	seedTestLibrary(&m, refs, library.StateWatching)
+	seedTestLibrary(&m, refs)
 
 	var headers []string
 	for _, it := range homeItems(t, m) {
@@ -382,7 +385,7 @@ func TestHomeSectionsPresent(t *testing.T) {
 func TestHomeSectionSpacers(t *testing.T) {
 	m := newTestModel(t)
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 30})
-	seedTestLibrary(&m, testRefs("spacers", 1), library.StateWatching)
+	seedTestLibrary(&m, testRefs("spacers", 1))
 	m.catalog[provider.CatalogTopSeason] = testCards("top-spacers", 1)
 	m.catalog[provider.CatalogFresh] = testCards("fresh-spacers", 1)
 
@@ -423,7 +426,7 @@ func TestHomeSectionSpacers(t *testing.T) {
 func TestHomeSpacersFollowResizeAndPreserveSelection(t *testing.T) {
 	m := newTestModel(t)
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 14})
-	seedTestLibrary(&m, testRefs("resize", 1), library.StateWatching)
+	seedTestLibrary(&m, testRefs("resize", 1))
 	m.catalog[provider.CatalogTopSeason] = testCards("resize-top", 1)
 	m.showHome()
 	selectTestItem(t, &m, func(it item) bool {
@@ -548,7 +551,7 @@ func TestHomeCatalogBlocks(t *testing.T) {
 // але не має права перемалювати екран, на якому людина зараз працює.
 func TestCatalogSurvivesNavigation(t *testing.T) {
 	m := newTestModel(t)
-	seedTestLibrary(&m, testRefs("nav", 1), library.StateWatching)
+	seedTestLibrary(&m, testRefs("nav", 1))
 	m = openTestSearch(t, m)
 	if got := len(m.list.Items()); got != 0 {
 		t.Fatalf("fresh search screen has %d items, want 0", got)
@@ -603,5 +606,89 @@ func TestHistoryGrouping(t *testing.T) {
 	}
 	if !strings.Contains(items[0].meta, i18n.Episodes(3)) {
 		t.Errorf("first history meta = %q, want episode count %q", items[0].meta, i18n.Episodes(3))
+	}
+}
+
+// seedWatchedTitle — тайтл із бібліотеки з кешем серій і ручними позначками:
+// саме так виглядають записи, на яких статус закладки колись брехав.
+func seedWatchedTitle(t *testing.T, m *Model, ref provider.TitleRef, entry *library.Entry, episodes int, completed ...int) {
+	t.Helper()
+
+	if err := m.eng.Store.SaveEpisodes(ref, testEpisodes(episodes)); err != nil {
+		t.Fatalf("save episodes: %v", err)
+	}
+	m.eng.Lib.Titles = []*library.LocalTitle{{
+		ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref},
+	}}
+	entry.TitleID = ref.Slug
+	m.eng.Lib.Entries = []*library.Entry{entry}
+	for i, ep := range completed {
+		// PositionSec/DurationSec нульові — так виглядає ручна позначка X.
+		m.eng.Lib.Progress = append(m.eng.Lib.Progress, &library.Progress{
+			TitleID:   ref.Slug,
+			Episode:   ep,
+			Completed: true,
+			WatchedAt: time.Date(2026, 9, 4, 12, i, 0, 0, time.UTC),
+		})
+	}
+	m.showHome()
+}
+
+// TestHomeFullyWatchedTitleHasNoBadgeOrResume — «Вигнаний лицар»: усі 10 серій
+// переглянуто (остання — вручну), базова лінія відстала на одну. Бейджа нових
+// серій бути не може, а «ПРОДОВЖИТИ» не пропонує неіснуючу 11-ту.
+func TestHomeFullyWatchedTitleHasNoBadgeOrResume(t *testing.T) {
+	m := newTestModel(t)
+	ref := testRefs("fully-watched", 1)[0]
+	seedWatchedTitle(t, &m, ref, &library.Entry{LastEpisode: 10, KnownEpisodes: 9}, 10,
+		1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+
+	row := libraryRow(t, m, ref.Name)
+	if row.meta != i18n.TuiStateDone {
+		t.Errorf("meta = %q, want %q", row.meta, i18n.TuiStateDone)
+	}
+	if row.badge != "" {
+		t.Errorf("badge = %q, want empty", row.badge)
+	}
+	if rows := sectionRows(t, m, i18n.TuiBlockContinue); len(rows) != 0 {
+		t.Fatalf("«%s» = %+v, want no rows", i18n.TuiBlockContinue, rows)
+	}
+}
+
+// TestHomeManuallyMarkedTitleShowsRemaining — «Король розкрадачів гробниць»:
+// закладка, у якій вісім серій позначено вручну. Це не «у планах», а
+// «залишилась 1 серія», і її ж пропонує «ПРОДОВЖИТИ».
+func TestHomeManuallyMarkedTitleShowsRemaining(t *testing.T) {
+	m := newTestModel(t)
+	ref := testRefs("hand-marked", 1)[0]
+	seedWatchedTitle(t, &m, ref, &library.Entry{LastEpisode: 8, KnownEpisodes: 9}, 9,
+		1, 2, 3, 4, 5, 6, 7, 8)
+
+	row := libraryRow(t, m, ref.Name)
+	if want := i18n.RemainingEpisodes(1); row.meta != want {
+		t.Errorf("meta = %q, want %q", row.meta, want)
+	}
+	if row.badge != "" {
+		t.Errorf("badge = %q, want empty: серія 9 вийшла ще до закладки", row.badge)
+	}
+	rows := sectionRows(t, m, i18n.TuiBlockContinue)
+	if len(rows) != 1 || rows[0].title != fmt.Sprintf(i18n.TuiContinuePfx, ref.Name, 9) {
+		t.Fatalf("«%s» = %+v, want серію 9", i18n.TuiBlockContinue, rows)
+	}
+}
+
+// TestHomePlannedTitleShowsEpisodeCount — закладка, до якої ще не торкалися:
+// видно, на що підписуєшся, і скільки серій вийшло після додавання.
+func TestHomePlannedTitleShowsEpisodeCount(t *testing.T) {
+	m := newTestModel(t)
+	ref := testRefs("planned-count", 1)[0]
+	seedWatchedTitle(t, &m, ref, &library.Entry{KnownEpisodes: 3}, 5)
+
+	row := libraryRow(t, m, ref.Name)
+	if want := fmt.Sprintf(i18n.TuiStatePlannedWith, i18n.Episodes(5)); row.meta != want {
+		t.Errorf("meta = %q, want %q", row.meta, want)
+	}
+	if want := i18n.NewEpisodes(2); row.badge != want {
+		t.Errorf("badge = %q, want %q", row.badge, want)
 	}
 }

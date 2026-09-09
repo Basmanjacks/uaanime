@@ -89,6 +89,9 @@ let busy = false;
 let live = false;
 let dur = 0;
 let timer = 0;
+let polling = false;
+let pollAgain = false;
+let commandGen = 0;
 // Покоління показаного списку серій. −1 — списку ще не тягнули: нуль зайнятий
 // станом «плейлиста немає», і з ним сторінка не помітила б першої публікації.
 let epsGen = -1;
@@ -101,7 +104,10 @@ function mmss(v) {
   return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
 }
 function enable(on) {
-  for (const id of CMDS) { $(id).disabled = !on; }
+  for (const id of CMDS) { $(id).disabled = !on || busy; }
+  for (const row of $("eps").children) {
+    if (row.tagName === "BUTTON") { row.disabled = busy; }
+  }
 }
 function stopAfter(on) {
   $("stopafter").classList.toggle("on", on);
@@ -173,6 +179,7 @@ function drawEps(list) {
     const n = Number(e.number) || 0;
     const sec = Number(e.position_sec) || 0;
     const row = document.createElement("button");
+    row.disabled = busy;
     const name = document.createElement("span");
     const pos = document.createElement("span");
     row.className = e.current ? "current" : "";
@@ -198,12 +205,16 @@ async function call(path, method) {
   if (command) {
     if (busy) { return; }
     busy = true;
+    commandGen++;
     enable(false);
   }
+  const gen = commandGen;
   try {
     const r = await fetch(BASE + path, { method: method });
+    if (gen !== commandGen) { return; }
     if (r.status === 409) {
       const body = await r.json().catch(() => null);
+      if (gen !== commandGen) { return; }
       $("ep").textContent = body && body.error ? body.error : "";
       // Застарілий список — не привід гасити пульт: перечитуємо серії й лишаємо
       // кнопки як були.
@@ -212,19 +223,30 @@ async function call(path, method) {
       return;
     }
     const st = await r.json();
+    if (gen !== commandGen) { return; }
     if (!r.ok) { $("ep").textContent = st.error || ""; enable(live); return; }
     render(st);
   } catch (e) {
+    if (gen !== commandGen) { return; }
     $("title").textContent = L("offline");
     enable(live);
   } finally {
-    if (command) { busy = false; }
+    if (command) {
+      busy = false;
+      enable(live);
+      pollAgain = true;
+      poll();
+    }
   }
 }
 async function poll() {
   clearTimeout(timer);
-  if (document.hidden) { return; }
+  if (document.hidden || polling || busy) { return; }
+  pollAgain = false;
+  polling = true;
   await call("status", "GET");
+  polling = false;
+  if (pollAgain) { poll(); return; }
   if (!document.hidden) { timer = setTimeout(poll, 2000); }
 }
 for (const id of CMDS) {

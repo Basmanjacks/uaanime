@@ -96,16 +96,11 @@ func publishPlaylist(ctx context.Context, eng *playback.Engine, ref provider.Tit
 	if title != nil && title.Name != "" {
 		name = title.Name
 	}
-	rows := make([]playback.EpisodeInfo, 0, len(episodes))
-	for _, ep := range episodes {
-		row := playback.EpisodeInfo{Number: ep.Number, Current: ep.Number == current}
-		if title != nil {
-			if p := eng.Lib.ProgressFor(title.ID, ep.Number); p != nil {
-				row.Watched, row.PositionSec = p.Completed, p.PositionSec
-			}
-		}
-		rows = append(rows, row)
+	titleID := ""
+	if title != nil {
+		titleID = title.ID
 	}
+	rows := playback.BuildEpisodeInfo(episodes, titleID, eng.Lib.Progress, current)
 	eng.Live.SetPlaylist(ref, name, rows)
 }
 
@@ -236,14 +231,14 @@ func (r *remoteRun) info(err error) ui.RemoteInfo {
 }
 
 // reportRemoteErr друкує помилку старту пульта у headless-режимі.
-func (r *remoteRun) reportRemoteErr(err error) {
+func (r *remoteRun) reportRemoteErr(err error, debug bool) {
 	if err == nil {
 		return
 	}
 	if r.srv == nil {
-		errf(i18n.MsgRemoteFailed+"\n", err)
+		errf(i18n.MsgRemoteFailed+"\n", i18n.ErrorTextWithDebug(err, debug))
 	} else {
-		errf(i18n.MsgRemoteIdentityUnsaved+"\n", err)
+		errf(i18n.MsgRemoteIdentityUnsaved+"\n", i18n.ErrorTextWithDebug(err, debug))
 	}
 }
 

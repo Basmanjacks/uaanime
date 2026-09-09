@@ -7,7 +7,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
@@ -82,38 +81,34 @@ func (m *Model) catalogCmd(kind provider.CatalogKind) tea.Cmd {
 	})
 }
 
-// badgesCmd рахує нові серії для тайтлів у перегляді й запланованих. Один спільний
-// дедлайн на всі перевірки й обмежений паралелізм: двадцять послідовних
-// запитів тривали б довше, ніж людина дивиться на домівку, а двадцять
-// одночасних виглядали б для сайту як атака.
-func (m *Model) badgesCmd() tea.Cmd {
+// libraryEpisodesCmd прогріває кеш списків серій для бібліотеки. Числа рядків
+// рахуються з того самого кешу на диску, тож команда нічого не повертає, крім
+// «дані оновилися» — жодного другого джерела правди, яке могло б застаріти.
+//
+// Один спільний дедлайн на всі перевірки й обмежений паралелізм: двадцять
+// послідовних запитів тривали б довше, ніж людина дивиться на домівку, а
+// двадцять одночасних виглядали б для сайту як атака.
+func (m *Model) libraryEpisodesCmd() tea.Cmd {
 	if m.eng == nil || m.eng.Provider == nil || m.eng.Lib == nil {
 		return nil
 	}
-	type probe struct {
-		id       string
-		ref      provider.TitleRef
-		baseline int
-	}
-	var probes []probe
+	var refs []provider.TitleRef
 	for _, e := range m.eng.Lib.Entries {
-		if e.Hidden || (e.State != library.StateWatching && e.State != library.StatePlanned) {
+		// Стан більше не фільтрує: переглянутий тайтл теж має дізнатися,
+		// що вийшла нова серія.
+		if e.Hidden {
 			continue
 		}
 		t := m.titleByID(e.TitleID)
 		if t == nil || len(t.Sources) == 0 {
 			continue
 		}
-		probes = append(probes, probe{
-			id:       t.ID,
-			ref:      t.Sources[0],
-			baseline: max(e.LastEpisode, e.KnownEpisodes),
-		})
-		if len(probes) == maxBadgeProbes {
+		refs = append(refs, t.Sources[0])
+		if len(refs) == maxBadgeProbes {
 			break
 		}
 	}
-	if len(probes) == 0 {
+	if len(refs) == 0 {
 		return nil
 	}
 
@@ -122,31 +117,24 @@ func (m *Model) badgesCmd() tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 
-		counts := make(map[string]int, len(probes))
-		var mu sync.Mutex
 		var wg sync.WaitGroup
-		jobs := make(chan probe)
+		jobs := make(chan provider.TitleRef)
 		for range badgeWorkers {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for p := range jobs {
-					eps, _, err := eng.EpisodesCached(ctx, p.ref)
-					if err != nil {
-						continue // недоступний тайтл не ховає бейджі решти
-					}
-					mu.Lock()
-					counts[p.id] = newEpisodeCount(eps, p.baseline)
-					mu.Unlock()
+				for ref := range jobs {
+					// Помилка нічого не ламає: лишається те, що вже в кеші.
+					_, _, _ = eng.EpisodesCached(ctx, ref)
 				}
 			}()
 		}
-		for _, p := range probes {
-			jobs <- p
+		for _, ref := range refs {
+			jobs <- ref
 		}
 		close(jobs)
 		wg.Wait()
-		return badgesMsg{counts: counts}
+		return libraryEpisodesMsg{}
 	}
 }
 
@@ -207,8 +195,35 @@ func (m *Model) remoteRequestCmd() tea.Cmd {
 func (m *Model) playCmd(res *playback.Resolved, titleID string) (tea.Cmd, context.CancelFunc) {
 	eng := m.eng
 	ctx, cancel := context.WithCancel(context.Background())
+	// Latest state is enough: the observer must never wait for terminal input
+	// or mutate the UI. Closing also releases a waiter after a failed start.
+	events := make(chan error, 1)
+	m.journalEvents = events
+	observe := func(err error) {
+		select {
+		case events <- err:
+		default:
+			select {
+			case <-events:
+			default:
+			}
+			events <- err
+		}
+	}
 	return func() tea.Msg {
-		reason, err := eng.Run(ctx, res, titleID)
+		defer close(events)
+		reason, err := eng.RunWithObserver(ctx, res, titleID, observe)
 		return playDoneMsg{reason: reason, err: err}
 	}, cancel
+}
+
+func (m *Model) journalCmd() tea.Cmd {
+	events, gen := m.journalEvents, m.playGen
+	if events == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		err, open := <-events
+		return journalMsg{gen: gen, err: err, open: open}
+	}
 }

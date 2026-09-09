@@ -37,6 +37,11 @@ type (
 		reason player.EndReason
 		err    error
 	}
+	journalMsg struct {
+		gen  int
+		err  error
+		open bool
+	}
 	// liveMsg — знімок сесії, що грає. gen — покоління, за яким відкидаються
 	// відповіді попередньої сесії; periodic позначає відповідь тіка: лише
 	// вона має право переозброїти цикл, інакше кожна клавіша плодила б свій.
@@ -52,16 +57,16 @@ type (
 	remotePlayMsg struct {
 		req playback.PlayRequest
 	}
-	// catalogMsg і badgesMsg — пасивні: вони не ведуть нікуди й тому не мають
-	// req. Фонове оновлення каталогу не має права ні скасувати навігацію,
-	// ні перемалювати екран, на якому людина зараз працює.
+	// catalogMsg і libraryEpisodesMsg — пасивні: вони не ведуть нікуди й тому
+	// не мають req. Фонове оновлення каталогу не має права ні скасувати
+	// навігацію, ні перемалювати екран, на якому людина зараз працює.
 	catalogMsg struct {
 		kind  provider.CatalogKind
 		cards []provider.TitleCard // nil — помилка або мережі немає
 	}
-	badgesMsg struct {
-		counts map[string]int // локальний ID тайтла → скільки нових серій
-	}
+	// libraryEpisodesMsg — кеш списків серій бібліотеки оновлено; рядки домівки
+	// перечитають його самі.
+	libraryEpisodesMsg struct{}
 	// nyaOffMsg — час кота вийшов; банер повертається до сезонного.
 	nyaOffMsg           struct{}
 	bookmarkBaselineMsg struct {

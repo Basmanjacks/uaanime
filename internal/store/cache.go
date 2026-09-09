@@ -1,6 +1,7 @@
 package store
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -47,6 +48,9 @@ func (s *Store) episodesCachePath(ref provider.TitleRef) string {
 }
 
 func (s *Store) SaveEpisodes(ref provider.TitleRef, eps []provider.Episode) error {
+	if err := os.MkdirAll(filepath.Join(s.dir, "cache"), 0700); err != nil {
+		return err
+	}
 	return writeAtomic(s.episodesCachePath(ref), &episodesCache{
 		FetchedAt: time.Now(),
 		Episodes:  eps,
@@ -81,6 +85,9 @@ func (s *Store) catalogCachePath(providerID string, kind provider.CatalogKind) s
 }
 
 func (s *Store) SaveCatalog(providerID string, kind provider.CatalogKind, cards []provider.TitleCard) error {
+	if err := os.MkdirAll(filepath.Join(s.dir, "cache"), 0700); err != nil {
+		return err
+	}
 	return writeAtomic(s.catalogCachePath(providerID, kind), &catalogCache{
 		FetchedAt: time.Now(),
 		Year:      time.Now().Year(),

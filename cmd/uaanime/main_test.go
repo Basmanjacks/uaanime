@@ -358,7 +358,15 @@ func TestRunRecoversPanic(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("run(boom) = %d, want 1", code)
 	}
-	mustContain(t, "stderr", errOut, fmt.Sprintf(i18n.MsgInternalError, "тестовий вибух"))
+	mustContain(t, "stderr", errOut, i18n.MsgInternalFailure)
+	if strings.Contains(errOut, "тестовий вибух") {
+		t.Fatal("panic diagnostics leaked without debug")
+	}
+	code, _, errOut = runCLI(t, "boom", "--debug")
+	if code != 1 {
+		t.Fatalf("debug panic exit: %d", code)
+	}
+	mustContain(t, "stderr", errOut, "тестовий вибух")
 }
 
 func mustJSON(t *testing.T, out string, v any) {

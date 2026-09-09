@@ -110,8 +110,8 @@ func Run(t *testing.T, newExtractor func(*http.Client) extractor.Extractor, c Ca
 		e := newExtractor(clientOf(func(*http.Request) (*http.Response, error) {
 			return response(http.StatusOK, ""), nil
 		}))
-		if _, err := e.Extract(t.Context(), c.Embed, referer); !errors.Is(err, errs.ErrNoStream) {
-			t.Fatalf("Extract error = %v, want ErrNoStream", err)
+		if _, err := e.Extract(t.Context(), c.Embed, referer); !errors.Is(err, errs.ErrProvider) {
+			t.Fatalf("Extract error = %v, want ErrProvider", err)
 		}
 	})
 }
