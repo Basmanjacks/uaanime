@@ -169,7 +169,7 @@ func (m *Model) remoteNotes() []item {
 	}
 	switch {
 	case m.remote.Err != nil:
-		notes = append(notes, m.note(fmt.Sprintf(i18n.MsgRemoteFailed, m.remote.Err)))
+		notes = append(notes, m.note(fmt.Sprintf(i18n.MsgRemoteFailed, m.errorText(m.remote.Err))))
 	case m.remote.URL != "":
 		if fits(m.remote.URL) {
 			notes = append(notes, m.note(m.remote.URL))
@@ -181,7 +181,7 @@ func (m *Model) remoteNotes() []item {
 		}
 	}
 	if m.remote.Warn != nil {
-		notes = append(notes, m.note(fmt.Sprintf(i18n.MsgRemoteIdentityUnsaved, m.remote.Warn)))
+		notes = append(notes, m.note(fmt.Sprintf(i18n.MsgRemoteIdentityUnsaved, m.errorText(m.remote.Warn))))
 	}
 	return notes
 }
@@ -259,7 +259,7 @@ func (m *Model) applySetting(id settingID, value string) (status, errText string
 			m.remote = m.opts.RestartRemote(m.cfg.Remote)
 			switch {
 			case m.remote.Err != nil:
-				errText = fmt.Sprintf(i18n.MsgRemoteFailed, m.remote.Err)
+				errText = fmt.Sprintf(i18n.MsgRemoteFailed, m.errorText(m.remote.Err))
 			case m.remote.Ephemeral:
 				status = fmt.Sprintf(i18n.MsgRemotePortBusy, m.remote.SavedPort, m.remote.URL)
 			case m.cfg.Remote == "open":
@@ -274,7 +274,7 @@ func (m *Model) applySetting(id settingID, value string) (status, errText string
 	// Незбережений конфіг важливіший за будь-який успіх: зміна застосована,
 	// але не переживе перезапуск.
 	if saveErr != nil {
-		status, errText = "", fmt.Sprintf(i18n.MsgConfigSaveFailed, saveErr)
+		status, errText = "", fmt.Sprintf(i18n.MsgConfigSaveFailed, m.errorText(saveErr))
 	}
 	return status, errText
 }

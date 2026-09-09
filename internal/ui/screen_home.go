@@ -15,6 +15,7 @@ import (
 // заголовок читається як помилка, а не як структура.
 func (m *Model) showHome() {
 	m.setScreen(screenHome)
+	m.epsScratch = map[string][]provider.Episode{}
 	m.errText = ""
 	m.homeSpacers = m.list.Height() >= 16
 	var items []item
@@ -77,6 +78,7 @@ func (m *Model) bookmarkRows() []item {
 	type row struct {
 		it        item
 		fresh     bool
+		left      bool // є що дивитися: переглянуте осідає вниз секції
 		watchedAt time.Time
 	}
 	watchedAt := m.watchedAtByTitle()
@@ -90,20 +92,18 @@ func (m *Model) bookmarkRows() []item {
 		if t == nil || len(t.Sources) == 0 {
 			continue
 		}
-		badge := ""
-		n := m.newEpisodes(t, e)
-		if n > 0 {
-			badge = i18n.NewEpisodes(n)
-		}
+		status := m.titleStatus(t)
+		meta, badge := statusMeta(status)
 		rows = append(rows, row{
 			it: item{
 				title:   titleName(t),
-				meta:    stateLabel(e.State),
+				meta:    meta,
 				badge:   badge,
 				role:    "lib",
 				payload: payloadTitle{ref: t.Sources[0]},
 			},
-			fresh:     n > 0,
+			fresh:     status.Fresh > 0,
+			left:      status.Kind != library.StatusDone,
 			watchedAt: watchedAt[e.TitleID],
 		})
 	}
@@ -111,6 +111,9 @@ func (m *Model) bookmarkRows() []item {
 		a, b := rows[i], rows[j]
 		if a.fresh != b.fresh {
 			return a.fresh
+		}
+		if a.left != b.left {
+			return a.left
 		}
 		if !a.watchedAt.Equal(b.watchedAt) {
 			return a.watchedAt.After(b.watchedAt)
@@ -168,7 +171,9 @@ func (m *Model) continueRows(limit int) []item {
 		if t == nil || len(t.Sources) == 0 {
 			continue
 		}
-		ep, pos, ok := m.eng.Lib.Resume(id)
+		// Список серій, а не самий журнал: без нього «остання завершена + 1»
+		// пропонувала серію, якої на сайті ще немає.
+		ep, pos, ok := m.eng.Lib.ResumeIn(id, m.titleEpisodes(t))
 		if !ok {
 			continue
 		}
@@ -194,11 +199,11 @@ func (m *Model) continueRows(limit int) []item {
 func (m *Model) rouletteCandidates() []provider.TitleRef {
 	var refs []provider.TitleRef
 	for _, e := range m.eng.Lib.Entries {
-		if e.Hidden || e.State != library.StatePlanned {
+		if e.Hidden {
 			continue
 		}
 		t := m.titleByID(e.TitleID)
-		if t == nil || len(t.Sources) == 0 {
+		if t == nil || len(t.Sources) == 0 || m.titleStatus(t).Kind != library.StatusPlanned {
 			continue
 		}
 		refs = append(refs, t.Sources[0])
@@ -257,34 +262,51 @@ func catalogBlockTitle(kind provider.CatalogKind) string {
 	return i18n.TuiBlockTop
 }
 
-// newEpisodes — скільки серій вийшло після базової лінії тайтлу. Фонова
-// перевірка має пріоритет; поки її немає, рахуємо з кешу на диску, щоб бейдж
-// стояв уже в першому кадрі, а не з'являвся через секунду після нього.
-func (m *Model) newEpisodes(t *library.LocalTitle, e *library.Entry) int {
-	if e.State != library.StateWatching && e.State != library.StatePlanned {
-		return 0
+// titleEpisodes — список серій тайтла з кешу на диску. Кеш пише фонова
+// команда на кожному старті, тож числа стоять уже в першому кадрі. Мапа
+// scratch живе рівно одну перебудову екрана: без неї один showHome читав би
+// той самий файл із трьох різних місць.
+func (m *Model) titleEpisodes(t *library.LocalTitle) []provider.Episode {
+	if eps, ok := m.epsScratch[t.ID]; ok {
+		return eps
 	}
-	if n, ok := m.badges[t.ID]; ok {
-		return n
-	}
-	if m.eng.Store == nil || len(t.Sources) == 0 {
-		return 0
-	}
-	eps, _, found := m.eng.Store.LoadEpisodes(t.Sources[0])
-	if !found {
-		return 0
-	}
-	return newEpisodeCount(eps, max(e.LastEpisode, e.KnownEpisodes))
-}
-
-func newEpisodeCount(eps []provider.Episode, baseline int) int {
-	numbers := make(map[int]struct{})
-	for _, ep := range eps {
-		if ep.Number > baseline {
-			numbers[ep.Number] = struct{}{}
+	var eps []provider.Episode
+	if m.eng.Store != nil && len(t.Sources) > 0 {
+		if cached, _, found := m.eng.Store.LoadEpisodes(t.Sources[0]); found {
+			eps = cached
 		}
 	}
-	return len(numbers)
+	if m.epsScratch != nil {
+		m.epsScratch[t.ID] = eps
+	}
+	return eps
+}
+
+// titleStatus — стан тайтла для рядка списку: рахується з журналу і списку
+// серій, ніде не зберігається.
+func (m *Model) titleStatus(t *library.LocalTitle) library.Status {
+	return m.eng.Lib.StatusOf(t.ID, m.titleEpisodes(t))
+}
+
+// statusMeta — підпис рядка бібліотеки й бейдж новинок. Одне джерело чисел із
+// заголовком екрана серій: «залишилась 1 серія» там і тут означає те саме.
+func statusMeta(s library.Status) (meta, badge string) {
+	if s.Fresh > 0 {
+		badge = i18n.NewEpisodes(s.Fresh)
+	}
+	switch {
+	case s.Kind == library.StatusDone:
+		return i18n.TuiStateDone, ""
+	case s.Kind == library.StatusPlanned:
+		if s.Total == 0 {
+			return i18n.TuiStatePlanned, badge
+		}
+		return fmt.Sprintf(i18n.TuiStatePlannedWith, i18n.Episodes(s.Total)), badge
+	case s.Total == 0:
+		return i18n.TuiStateWatching, badge
+	default:
+		return i18n.RemainingEpisodes(s.Remaining), badge
+	}
 }
 
 // refreshHome перебудовує домівку після фонового оновлення, лишаючи курсор

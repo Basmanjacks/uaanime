@@ -35,17 +35,17 @@ func TestErrorText(t *testing.T) {
 		{
 			name: "player",
 			err:  fmt.Errorf("сокет: %w", errs.ErrPlayer),
-			want: fmt.Sprintf(MsgPlayerFailed, fmt.Errorf("сокет: %w", errs.ErrPlayer)),
+			want: MsgPlayerUnavailable,
 		},
 		{
 			name: "provider",
 			err:  fmt.Errorf("сторінка: %w", errs.ErrProvider),
-			want: fmt.Sprintf(MsgProviderFailed, fmt.Errorf("сторінка: %w", errs.ErrProvider)),
+			want: MsgSourceUnavailable,
 		},
 		{
 			name: "unclassified",
 			err:  errors.New("невідома помилка"),
-			want: fmt.Sprintf(MsgProviderFailed, errors.New("невідома помилка")),
+			want: MsgOperationFailed,
 		},
 	}
 
@@ -68,5 +68,25 @@ func TestErrorTextStripsControlSequences(t *testing.T) {
 	got := ErrorText(err)
 	if strings.ContainsRune(got, 0x1b) {
 		t.Fatalf("ErrorText = %q, містить ESC", got)
+	}
+}
+
+func TestErrorTextHidesDiagnostics(t *testing.T) {
+	for _, class := range []error{errs.ErrProvider, errs.ErrPlayer} {
+		err := fmt.Errorf("HTTP 503 https://example.invalid/private?token=secret: %w", class)
+		got := ErrorText(err)
+		if strings.Contains(got, "503") || strings.Contains(got, "https://") || strings.Contains(got, "secret") {
+			t.Fatalf("leaked diagnostics: %s", got)
+		}
+	}
+}
+
+func TestDebugDiagnosticsAreOptInAndClean(t *testing.T) {
+	err := fmt.Errorf("HTTP 503 https://example.invalid/\x1b[2J: %w", errs.ErrProvider)
+	if got := ErrorTextWithDebug(err, true); !strings.Contains(got, "HTTP 503") || strings.ContainsRune(got, '\x1b') {
+		t.Fatalf("debug: %q", got)
+	}
+	if got := ErrorTextWithDebug(err, false); got != ErrorText(err) {
+		t.Fatalf("default: %q", got)
 	}
 }

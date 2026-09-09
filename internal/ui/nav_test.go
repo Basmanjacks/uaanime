@@ -10,7 +10,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 
-	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -225,7 +224,7 @@ func TestPendingFrameNoDup(t *testing.T) {
 
 func TestHomeCursorSkipsHeaders(t *testing.T) {
 	m := newTestModel(t)
-	seedTestLibrary(&m, testRefs("cursor", 3), library.StateWatching)
+	seedTestLibrary(&m, testRefs("cursor", 3))
 	m.catalog[provider.CatalogTopSeason] = testCards("cursor-catalog", 1)
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 40})
 
@@ -261,7 +260,7 @@ func TestHomeCursorSkipsHeaders(t *testing.T) {
 
 func TestHomeHeaderEnterIsNoop(t *testing.T) {
 	m := newTestModel(t)
-	seedTestLibrary(&m, testRefs("noop", 1), library.StateWatching)
+	seedTestLibrary(&m, testRefs("noop", 1))
 	m.list.Select(0) // заголовок «Продовжити»
 
 	m, cmd := pressTestKey(t, m, tea.KeyEnter, "")

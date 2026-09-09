@@ -56,8 +56,8 @@ func TestUnwrapRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := unwrap(tt.blob)
-			if !errors.Is(err, errs.ErrNoStream) {
-				t.Fatalf("unwrap error = %v, want ErrNoStream", err)
+			if !errors.Is(err, errs.ErrProvider) {
+				t.Fatalf("unwrap error = %v, want ErrProvider", err)
 			}
 		})
 	}
@@ -156,8 +156,8 @@ func TestExtractRejectsSuspiciousURL(t *testing.T) {
 		t.Run(streamURL, func(t *testing.T) {
 			js := `function _0xd(e){var k="k3y"} var rawVideo = _0xd("` + xorEncode("k3y", streamURL) + `")`
 			_, err := New(pageWith(js)).Extract(t.Context(), "https://moonanime.art/iframe/x", "https://anitube.in.ua/")
-			if !errors.Is(err, errs.ErrNoStream) || !strings.Contains(err.Error(), "підозрілий URL") {
-				t.Fatalf("Extract error = %v, want ErrNoStream про підозрілий URL", err)
+			if !errors.Is(err, errs.ErrProvider) || !strings.Contains(err.Error(), "підозрілий URL") {
+				t.Fatalf("Extract error = %v, want ErrProvider про підозрілий URL", err)
 			}
 		})
 	}
@@ -178,8 +178,8 @@ func TestExtractPlayerjsVariantAndQualityList(t *testing.T) {
 func TestExtractMismatchedDecoderName(t *testing.T) {
 	js := `function _0xd(e){var k="k3y"} var rawVideo = other("QQ==")`
 	_, err := New(pageWith(js)).Extract(t.Context(), "https://moonanime.art/iframe/x", "https://anitube.in.ua/")
-	if !errors.Is(err, errs.ErrNoStream) || !strings.Contains(err.Error(), "не тією функцією") {
-		t.Fatalf("Extract error = %v, want ErrNoStream про невідповідну функцію", err)
+	if !errors.Is(err, errs.ErrProvider) || !strings.Contains(err.Error(), "не тією функцією") {
+		t.Fatalf("Extract error = %v, want ErrProvider про невідповідну функцію", err)
 	}
 }
 

@@ -79,15 +79,15 @@ var (
 	reLabeled  = regexp.MustCompile(`\[([^\]]+)\](https?://[^,\[\s]+)`)
 )
 
-func noStream(what string) error {
-	return fmt.Errorf("moonanime: %s (хост змінив плеєр?): %w", what, errs.ErrNoStream)
+func playerChanged(what string) error {
+	return fmt.Errorf("moonanime: %s (хост змінив плеєр?): %w", what, errs.ErrProvider)
 }
 
 // unwrap — етап 1: base64-блоб інлайн-скрипта → розшифрований JS-текст.
 func unwrap(blob string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(blob)
 	if err != nil || len(raw) < 34 {
-		return nil, noStream("не вдалося розпакувати конфіг плеєра")
+		return nil, playerChanged("не вдалося розпакувати конфіг плеєра")
 	}
 	key := raw[1:33]
 	body := raw[33:]
@@ -105,7 +105,7 @@ func unwrap(blob string) ([]byte, error) {
 func xorKey(b64, key string) (string, error) {
 	raw, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil || len(raw) == 0 || key == "" {
-		return "", noStream("не вдалося розшифрувати адресу відео")
+		return "", playerChanged("не вдалося розшифрувати адресу відео")
 	}
 	out := make([]byte, len(raw))
 	for i, c := range raw {
@@ -142,7 +142,7 @@ func parseVideoURLs(s string) []videoURL {
 func decodeVideo(page []byte) (string, error) {
 	m := reBlob.FindSubmatch(page)
 	if m == nil {
-		return "", noStream("не знайдено конфіг плеєра atob(\"…\")")
+		return "", playerChanged("не знайдено конфіг плеєра atob(\"…\")")
 	}
 	js, err := unwrap(string(m[1]))
 	if err != nil {
@@ -151,10 +151,10 @@ func decodeVideo(page []byte) (string, error) {
 	km := reKey.FindSubmatch(js)
 	vm := reRawVideo.FindSubmatch(js)
 	if km == nil || vm == nil {
-		return "", noStream("не знайдено rawVideo або ключ декодера")
+		return "", playerChanged("не знайдено rawVideo або ключ декодера")
 	}
 	if !bytes.Equal(km[1], vm[1]) {
-		return "", noStream("rawVideo декодується не тією функцією, що очікувалось")
+		return "", playerChanged("rawVideo декодується не тією функцією, що очікувалось")
 	}
 	return xorKey(string(vm[2]), string(km[2]))
 }
@@ -187,7 +187,7 @@ func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extra
 		})
 	}
 	if len(streams) == 0 {
-		return nil, fmt.Errorf("moonanime: підозрілий URL потоку: %w", errs.ErrNoStream)
+		return nil, fmt.Errorf("moonanime: підозрілий URL потоку: %w", errs.ErrProvider)
 	}
 	return streams, nil
 }

@@ -41,13 +41,13 @@ func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extra
 	}
 	m := reFile.FindSubmatch(body)
 	if m == nil {
-		return nil, fmt.Errorf("ashdi: у embed %q не знайдено file:'…m3u8' (хост змінив плеєр?): %w", embed, errs.ErrNoStream)
+		return nil, fmt.Errorf("ashdi: у embed %q не знайдено file:'…m3u8' (хост змінив плеєр?): %w", embed, errs.ErrProvider)
 	}
 	streamURL := string(m[1])
 	// Regex пускає http:// і будь-який хост, тому URL із недовіреної сторінки
 	// проходить ту саму перевірку, що й у решти екстракторів.
 	if !extractor.ValidStreamURL(streamURL) {
-		return nil, fmt.Errorf("ashdi: підозрілий URL потоку: %w", errs.ErrNoStream)
+		return nil, fmt.Errorf("ashdi: підозрілий URL потоку: %w", errs.ErrProvider)
 	}
 	return []extractor.Stream{{
 		URL:     streamURL,

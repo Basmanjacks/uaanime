@@ -340,7 +340,7 @@ func aggregateFailures(ep int, failures []error) error {
 	} else if len(failures) > 0 && noStream == len(failures) {
 		class = errs.ErrNoStream
 	}
-	return fmt.Errorf("серія %d: жодне джерело не дало потоку: %w: %w", ep, class, errors.Join(failures...))
+	return fmt.Errorf("серія %d: жодне джерело не дало потоку: %w", ep, errs.WithClass(class, errors.Join(failures...)))
 }
 
 // EpisodesCached — серії з кешем метаданих: свіжий кеш (< TTL) віддається без
@@ -377,13 +377,7 @@ func (e *Engine) EpisodesFresh(ctx context.Context, ref provider.TitleRef) ([]pr
 // NextEpisodeNumber знаходить найближчу наявну серію після поточної, навіть
 // коли нумерація має пропуски або список не відсортований.
 func NextEpisodeNumber(eps []provider.Episode, after int) (int, bool) {
-	next := 0
-	for _, ep := range eps {
-		if ep.Number > after && (next == 0 || ep.Number < next) {
-			next = ep.Number
-		}
-	}
-	return next, next != 0
+	return library.NextEpisodeAfter(eps, after)
 }
 
 // CatalogCached — блок каталогу з кешем метаданих: свіжий кеш (< TTL)
@@ -410,11 +404,11 @@ func (e *Engine) CatalogCached(ctx context.Context, kind provider.CatalogKind) (
 
 // PinStudio закріплює студію за тайтлом (відповідь на одноразове питання).
 // sync: пише Lib.
-func (e *Engine) PinStudio(ref provider.TitleRef, studio string) error {
+func (e *Engine) PinStudio(ref provider.TitleRef, studio string, kind provider.Kind) error {
 	title := e.Lib.EnsureTitle(ref, store.NewID)
 	entry := e.Lib.EntryFor(title.ID)
 	entry.StudioPin = studio
-	entry.KindPin = ""
+	entry.KindPin = kind
 	return e.Store.SaveLibrary(e.Lib)
 }
 
@@ -514,7 +508,7 @@ type Result struct {
 	StopAfter bool
 }
 
-// Begin — синхронна половина запуску: тайтл, пін студії й стан watching.
+// Begin — синхронна половина запуску: тайтл і пін студії.
 // Відсутність плеєра перевіряється ПЕРШИМ рядком, щоб бібліотека не мутувала
 // заради сесії, якої не буде. sync: пише Lib.
 func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) {
@@ -528,9 +522,9 @@ func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) 
 	// піде тією самою озвучкою без питань
 	if entry.StudioPin == "" {
 		entry.StudioPin = res.Source.Studio
+		entry.KindPin = res.Source.Kind
 		pinnedStudio = res.Source.Studio
 	}
-	entry.State = library.StateWatching
 	if err := e.Store.SaveLibrary(e.Lib); err != nil {
 		return "", "", err
 	}
@@ -538,9 +532,17 @@ func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) 
 }
 
 // Run веде сесію плеєра: позиція семплюється раз на journalInterval і пишеться
-// в журнал, лише коли вона змінилася (на паузі журнал не переписується).
+// в журнал, лише коли вона змінилася або попередній запис не вдався.
 // Скасування ctx закриває плеєр. async-safe: плеєр і файл журналу, без Lib.
 func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player.EndReason, error) {
+	return e.RunWithObserver(ctx, res, titleID, nil)
+}
+
+// RunWithObserver повідомляє про перший збій журналу та відновлення (nil),
+// не перериваючи перегляд. Observer викликається синхронно в горутині Run:
+// він не повинен блокувати або торкатися Lib. Помилка, яка не відновилась
+// до завершення сесії, повертається викликачу. async-safe: без Lib.
+func (e *Engine) RunWithObserver(ctx context.Context, res *Resolved, titleID string, observer func(error)) (player.EndReason, error) {
 	sess, err := e.Player.Start(ctx, res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
 	if err != nil {
 		return player.EndError, err
@@ -552,6 +554,7 @@ func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player
 	ticker := time.NewTicker(e.journalInterval())
 	defer ticker.Stop()
 	lastPos, sampled := 0.0, false
+	var journalErr error
 	for {
 		select {
 		case <-ticker.C:
@@ -559,20 +562,36 @@ func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player
 			if err != nil {
 				continue // буферизація чи пауза — не привід падати
 			}
-			if sampled && pos == lastPos {
+			if sampled && pos == lastPos && journalErr == nil {
 				continue
 			}
 			dur, _ := sess.Duration()
-			_ = e.Store.WriteJournal(&store.Journal{
+			err = e.Store.WriteJournal(&store.Journal{
 				TitleID: titleID, Episode: res.Episode,
 				PositionSec: pos, DurationSec: dur, UpdatedAt: time.Now(),
 			})
+			if err != nil {
+				if journalErr == nil && observer != nil {
+					observer(err)
+				}
+				journalErr = err
+				continue
+			}
 			lastPos, sampled = pos, true
+			if journalErr != nil {
+				journalErr = nil
+				if observer != nil {
+					observer(nil)
+				}
+			}
 		case reason := <-sess.End():
-			return reason, nil
+			if reason == player.EndError {
+				return reason, errors.Join(errs.ErrPlayer, journalErr)
+			}
+			return reason, journalErr
 		case <-ctx.Done():
 			sess.Close()
-			return player.EndQuit, nil
+			return player.EndQuit, journalErr
 		}
 	}
 }
@@ -588,6 +607,9 @@ func (e *Engine) Finish(reason player.EndReason, titleID string, ep int) (*Resul
 		return out, err
 	}
 	p := e.Lib.ProgressFor(titleID, ep)
+	if p == nil && reason == player.EndEOF {
+		p = e.Lib.RecordPosition(titleID, ep, 0, 0, time.Now())
+	}
 	if p == nil {
 		return out, nil
 	}
@@ -606,17 +628,20 @@ func (e *Engine) Finish(reason player.EndReason, titleID string, ep int) (*Resul
 // Play — послідовний сценарій для headless-команди: Begin → Run → Finish.
 // sync: через Begin і Finish торкається Lib.
 func (e *Engine) Play(ctx context.Context, res *Resolved) (*Result, error) {
+	return e.PlayWithObserver(ctx, res, nil)
+}
+
+// PlayWithObserver is the sequential CLI path with journal state feedback.
+// The observer follows RunWithObserver's rules; Begin and Finish remain sync.
+func (e *Engine) PlayWithObserver(ctx context.Context, res *Resolved, observer func(error)) (*Result, error) {
 	titleID, pinned, err := e.Begin(res)
 	if err != nil {
 		return nil, err
 	}
-	reason, err := e.Run(ctx, res, titleID)
-	if err != nil {
-		return nil, err
-	}
-	out, err := e.Finish(reason, titleID, res.Episode)
+	reason, runErr := e.RunWithObserver(ctx, res, titleID, observer)
+	out, finishErr := e.Finish(reason, titleID, res.Episode)
 	out.PinnedStudio = pinned
-	return out, err
+	return out, errors.Join(runErr, finishErr)
 }
 
 func without(sources []provider.Source, drop provider.Source) []provider.Source {

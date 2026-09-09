@@ -258,7 +258,7 @@ func TestResolveCandidatesPlayable(t *testing.T) {
 	}
 }
 
-func TestPinStudioClearsKindPin(t *testing.T) {
+func TestPinStudioRemembersSelectedKind(t *testing.T) {
 	st, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -271,11 +271,42 @@ func TestPinStudioClearsKindPin(t *testing.T) {
 	entry.KindPin = provider.KindDub
 	engine := &Engine{Store: st, Lib: lib}
 
-	if err := engine.PinStudio(ref, "New"); err != nil {
+	if err := engine.PinStudio(ref, "New", provider.KindVoiceover); err != nil {
 		t.Fatalf("PinStudio: %v", err)
 	}
-	if entry.StudioPin != "New" || entry.KindPin != "" {
-		t.Fatalf("pins = (%q, %q), want (New, empty)", entry.StudioPin, entry.KindPin)
+	if entry.StudioPin != "New" || entry.KindPin != provider.KindVoiceover {
+		t.Fatalf("pins = (%q, %q), want (New, voiceover)", entry.StudioPin, entry.KindPin)
+	}
+}
+
+func TestBeginRemembersKindWithoutOverwritingExistingPin(t *testing.T) {
+	for _, existing := range []provider.Kind{"", provider.KindDub, provider.KindVoiceover} {
+		for _, pinned := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%v", existing, pinned), func(t *testing.T) {
+				st, err := store.Open(t.TempDir())
+				if err != nil {
+					t.Fatal(err)
+				}
+				e := &Engine{Store: st, Lib: &library.Library{}, Player: fakePlayer{}}
+				ref := provider.TitleRef{Provider: "stub", Slug: "title"}
+				title := e.Lib.EnsureTitle(ref, store.NewID)
+				entry := e.Lib.EntryFor(title.ID)
+				if pinned {
+					entry.StudioPin, entry.KindPin = "Old", existing
+				}
+				_, _, err = e.Begin(&Resolved{Ref: ref, Episode: 1, Source: provider.Source{Studio: "New", Kind: provider.KindVoiceover}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantStudio, wantKind := "New", provider.KindVoiceover
+				if pinned {
+					wantStudio, wantKind = "Old", existing
+				}
+				if entry.StudioPin != wantStudio || entry.KindPin != wantKind {
+					t.Fatalf("pins = (%q,%q), want (%q,%q)", entry.StudioPin, entry.KindPin, wantStudio, wantKind)
+				}
+			})
+		}
 	}
 }
 
@@ -394,7 +425,7 @@ func TestBookmarkPersistsAddedAndRemoved(t *testing.T) {
 		t.Fatal("Bookmark не зберіг тайтл")
 	}
 	entry := saved.EntryLookup(title.ID)
-	if entry == nil || entry.State != library.StatePlanned || entry.KnownEpisodes != 12 {
+	if entry == nil || entry.KnownEpisodes != 12 {
 		t.Fatalf("збережена закладка = %+v", entry)
 	}
 

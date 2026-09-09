@@ -8,10 +8,11 @@ import (
 )
 
 var (
-	ErrOffline  = errors.New("немає з'єднання")
-	ErrNoStream = errors.New("потік не знайдено")
-	ErrNoPlayer = errors.New("не знайдено жодного відеоплеєра")
-	ErrProvider = errors.New("джерело зламалось")
+	ErrStoreBusy = errors.New("бібліотека вже відкрита іншим процесом")
+	ErrOffline   = errors.New("немає з'єднання")
+	ErrNoStream  = errors.New("потік не знайдено")
+	ErrNoPlayer  = errors.New("не знайдено жодного відеоплеєра")
+	ErrProvider  = errors.New("джерело зламалось")
 	// ErrPlayer — плеєр знайдено, але сесія не піднялася (старт, IPC, сокет).
 	// Це інший клас, ніж ErrNoPlayer: підказка «встановіть плеєр» тут хибна.
 	ErrPlayer = errors.New("плеєр не запустився")

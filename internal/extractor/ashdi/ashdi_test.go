@@ -60,8 +60,8 @@ func TestExtractRejectsSuspiciousURL(t *testing.T) {
 			})}
 
 			_, err := New(client).Extract(t.Context(), "https://ashdi.vip/vod/1", "https://anitube.in.ua/x")
-			if !errors.Is(err, errs.ErrNoStream) || !strings.Contains(err.Error(), "підозрілий URL") {
-				t.Fatalf("Extract error = %v, want ErrNoStream про підозрілий URL", err)
+			if !errors.Is(err, errs.ErrProvider) || !strings.Contains(err.Error(), "підозрілий URL") {
+				t.Fatalf("Extract error = %v, want ErrProvider про підозрілий URL", err)
 			}
 		})
 	}

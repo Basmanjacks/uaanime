@@ -53,8 +53,8 @@ func TestDecodeRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := decode(tt.blob)
-			if !errors.Is(err, errs.ErrNoStream) {
-				t.Fatalf("decode error = %v, want ErrNoStream", err)
+			if !errors.Is(err, errs.ErrProvider) {
+				t.Fatalf("decode error = %v, want ErrProvider", err)
 			}
 		})
 	}
@@ -97,8 +97,8 @@ func TestExtractRejectsSuspiciousURL(t *testing.T) {
 			})}
 
 			_, err := New(client).Extract(t.Context(), "https://tortuga.tw/vod/1", "https://anitube.in.ua/")
-			if !errors.Is(err, errs.ErrNoStream) {
-				t.Fatalf("Extract error = %v, want ErrNoStream", err)
+			if !errors.Is(err, errs.ErrProvider) {
+				t.Fatalf("Extract error = %v, want ErrProvider", err)
 			}
 		})
 	}

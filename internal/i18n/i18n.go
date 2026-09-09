@@ -13,7 +13,8 @@ const (
   uaanime play <title-id> <серія> [--dry-run]
   uaanime doctor [--json]
   uaanime export > backup.json
-  uaanime import backup.json`
+  uaanime import backup.json
+  --debug                              # технічні подробиці помилок`
 	MsgBadEpisode       = "номер серії має бути додатним числом, отримано: %s"
 	MsgBadTitleID       = "невалідний ідентифікатор тайтлу: %s"
 	MsgNothingFound     = "нічого не знайдено"
@@ -56,23 +57,26 @@ const (
 	TuiSearchItem   = "Пошук нового"
 	// Рулетка: вибір за людину, коли обирати самому вже несила. Порожній стан
 	// каже, що робити далі, — «нема з чого» без поради читається як поломка.
-	TuiRouletteItem    = "Що подивитись?"
-	TuiRouletteEmpty   = "Немає з чого обирати — додай щось у плани"
-	TuiSearchPrompt    = "назва українською… "
-	TuiEpisodeNo       = "Серія %d"
-	TuiEpDone          = "переглянуто"
-	TuiEpAt            = "зупинився на %02d:%02d"
-	TuiStateWatching   = "переглядаєш"
-	TuiStateDone       = "переглянуто"
-	TuiStatePlanned    = "у планах"
-	TuiResolving       = "Шукаю потік…"
-	TuiSearching       = "Шукаю…"
-	TuiBookmarkAdded   = "додано в закладки"
-	TuiBookmarkRemoved = "прибрано із закладок"
-	TuiEpMarked        = "серія %d — переглянуто"
-	TuiEpUnmarked      = "серія %d — позначку знято"
-	TuiHintHome        = "↑↓ Вибір · Enter Відкрити · M Закладка · / Пошук · , Налаштування · Q Вихід"
-	TuiHintSearch      = "Enter Шукати/відкрити · ↓ Нещодавнє · X Прибрати · M Закладка · Esc"
+	TuiRouletteItem  = "Що подивитись?"
+	TuiRouletteEmpty = "Немає з чого обирати — додай щось у плани"
+	TuiSearchPrompt  = "назва українською… "
+	TuiEpisodeNo     = "Серія %d"
+	TuiEpDone        = "переглянуто"
+	TuiEpAt          = "зупинився на %02d:%02d"
+	TuiStateWatching = "переглядаєш"
+	TuiStateDone     = "переглянуто"
+	TuiStatePlanned  = "у планах"
+	// TuiStatePlannedWith — «у планах» із кількістю серій: перш ніж почати,
+	// корисно знати, на що підписуєшся.
+	TuiStatePlannedWith = "у планах · %s"
+	TuiResolving        = "Шукаю потік…"
+	TuiSearching        = "Шукаю…"
+	TuiBookmarkAdded    = "додано в закладки"
+	TuiBookmarkRemoved  = "прибрано із закладок"
+	TuiEpMarked         = "серія %d — переглянуто"
+	TuiEpUnmarked       = "серія %d — позначку знято"
+	TuiHintHome         = "↑↓ Вибір · Enter Відкрити · M Закладка · / Пошук · , Налаштування · Q Вихід"
+	TuiHintSearch       = "Enter Шукати/відкрити · ↓ Нещодавнє · X Прибрати · M Закладка · Esc"
 	// Підказка мусить влазити в 80 колонок цілою: обрізане «Esc Назад» гірше
 	// за незгадану клавішу фільтра, яку список підказує сам.
 	TuiHintEpisodes = "↑↓ Вибір · Enter Грати · X Переглянуто · S Озвучка · M Закладка · Esc Назад"

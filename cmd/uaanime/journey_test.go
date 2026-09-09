@@ -101,6 +101,8 @@ func journeyEngine(t *testing.T, ft *faultTransport, fp *playertest.Player) *pla
 		t.Fatalf("newAppWith: %v", err)
 	}
 	eng := a.engineWithoutPlayer()
+	// These tests drive sequential Engine calls, not an app process lifetime.
+	a.Close()
 	eng.Player = fp
 	eng.JournalInterval = time.Millisecond
 	return eng
@@ -162,7 +164,7 @@ func TestJourneyResumeAfterQuit(t *testing.T) {
 		t.Fatal("тайтл не з'явився у бібліотеці")
 	}
 	entry := lib.EntryLookup(title.ID)
-	if entry == nil || entry.State != library.StateWatching || entry.StudioPin == "" {
+	if entry == nil || entry.StudioPin == "" {
 		t.Fatalf("entry = %+v, want watching з піном студії", entry)
 	}
 	if p := lib.ProgressFor(title.ID, 1); p == nil || p.PositionSec != 872 || p.DurationSec != 1440 || p.Completed {
@@ -220,6 +222,7 @@ func TestJourneyJournalSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newAppWith: %v", err)
 	}
+	defer a.Close()
 	if _, err := os.Stat(journalPath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("журнал має бути видалений після злиття: %v", err)
 	}
@@ -326,7 +329,7 @@ func TestJourneyDeadHostFallsBackWithinStudio(t *testing.T) {
 	if studio == "" {
 		t.Fatal("фікстура не має студії з ≥2 підтримуваними хостами")
 	}
-	if err := eng.PinStudio(ref, studio); err != nil {
+	if err := eng.PinStudio(ref, studio, ""); err != nil {
 		t.Fatalf("PinStudio: %v", err)
 	}
 
@@ -381,7 +384,7 @@ func TestJourneyDeadStudioFallsBackToOtherDub(t *testing.T) {
 		t.Fatal("Pick не обрав джерело")
 	}
 	studio := pinned.Studio
-	if err := eng.PinStudio(ref, studio); err != nil {
+	if err := eng.PinStudio(ref, studio, ""); err != nil {
 		t.Fatalf("PinStudio: %v", err)
 	}
 	for _, s := range sources {
@@ -485,15 +488,15 @@ func ageCache(t *testing.T, path string, age time.Duration) {
 	}
 }
 
-// J6 — хости живі, але потоку не віддають: третій клас помилки, не офлайн.
-func TestJourneyNoStreamIsNotOffline(t *testing.T) {
+// Empty host HTML cannot prove a video is absent: the player parser failed.
+func TestJourneyChangedPlayerIsNotMissingStreamOrOffline(t *testing.T) {
 	_, ft, _ := journeyEnv(t)
 	for _, h := range []string{"ashdi.vip", "tortuga.tw", "moonanime.art"} {
 		ft.failHost(h, faultEmptyBody)
 	}
 	code, out, errOut := runCLI(t, "resolve", fixtureTitleID, "1")
 	mustExit(t, 1, code, out, errOut)
-	want := i18n.ErrorText(errs.ErrNoStream)
+	want := i18n.ErrorText(errs.ErrProvider)
 	if got := strings.TrimSpace(errOut); got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}

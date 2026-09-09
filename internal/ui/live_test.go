@@ -57,6 +57,7 @@ func TestStartPlaybackAsksForSnapshotImmediately(t *testing.T) {
 	ref := testRefs("live-start", 1)[0]
 	m.ref = ref
 	m.episodes = testEpisodes(2)
+	m.episodesRef = m.ref
 	m.screen = screenEpisodes
 	m.reqID = 1
 

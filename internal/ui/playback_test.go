@@ -62,6 +62,7 @@ func TestPlayDoneAutoplaysNextEpisodeAfterEOF(t *testing.T) {
 	m.eng.Autoplay = true
 	m.screen = screenPlaying
 	m.ref = testRefs("autoplay", 1)[0]
+	m.episodesRef = m.ref
 	m.episodes = []provider.Episode{{Number: 1}, {Number: 3}}
 	m.pendingEp = 1
 
@@ -203,6 +204,7 @@ func testPlayingModel(t *testing.T, m Model, ref provider.TitleRef) Model {
 		t.Fatalf("Begin: %v", err)
 	}
 	m.ref = ref
+	m.episodesRef = ref
 	m.episodes = testEpisodes(2)
 	m.pendingEp = 1
 	m.playTitleID = titleID

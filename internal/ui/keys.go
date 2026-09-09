@@ -275,7 +275,7 @@ func (m Model) playingKey(key string) (tea.Model, tea.Cmd) {
 		if errors.Is(err, playback.ErrNotPlaying) {
 			m.errText = i18n.TuiNotPlaying
 		} else {
-			m.errText = i18n.ErrorText(err)
+			m.errText = m.errorText(err)
 		}
 		return m, nil
 	}
@@ -291,7 +291,8 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 
 	if m.screen == screenEpisodes {
 		ref = m.ref
-		baseline = maxEpisodeNumber(m.episodes)
+		episodes, _ := m.currentEpisodes()
+		baseline = maxEpisodeNumber(episodes)
 	} else {
 		it, ok := m.list.SelectedItem().(item)
 		if !ok || it.header {
@@ -318,7 +319,7 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 	m.errText = ""
 	result, err := m.eng.Bookmark(ref, baseline)
 	if err != nil {
-		m.errText = provider.CleanText(err.Error())
+		m.errText = m.errorText(err)
 		return m, nil
 	}
 	var refreshCmd tea.Cmd
@@ -366,7 +367,7 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 
 	m.errText = ""
 	if err := m.eng.SetWatched(m.ref, p.num, watched); err != nil {
-		m.errText = provider.CleanText(err.Error())
+		m.errText = m.errorText(err)
 		return m, nil
 	}
 	if watched {
@@ -420,7 +421,7 @@ func (m Model) forgetSelectedQuery() (tea.Model, tea.Cmd) {
 	}
 	rest, err := m.eng.Store.RemoveSearch(p.q)
 	if err != nil {
-		m.errText = provider.CleanText(err.Error())
+		m.errText = m.errorText(err)
 		return m, nil
 	}
 	m.searches = rest
@@ -437,6 +438,7 @@ func (m Model) forgetSelectedQuery() (tea.Model, tea.Cmd) {
 
 // openSearch — вхід на екран пошуку; спільний для «Пошуку нового» і клавіші «/».
 func (m Model) openSearch() (tea.Model, tea.Cmd) {
+	m.beginNav()
 	m.stack = append(m.stack, m.snapshot())
 	m.setScreen(screenSearch)
 	m.loadSearches()
@@ -474,6 +476,7 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 	case payloadQuery:
 		return m.runSearch(p.q)
 	case payloadHistory:
+		m.beginNav()
 		m.stack = append(m.stack, m.snapshot())
 		m.showHistory()
 		return m, nil
@@ -520,8 +523,8 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		m.status = i18n.TuiResolving
 		return m, m.resolveCmd(m.ref, p.num, req, m.eng.ResolveHints(m.ref, p.num))
 	case payloadStudio:
-		if err := m.eng.PinStudio(m.ref, p.src.Studio); err != nil {
-			m.errText = provider.CleanText(err.Error())
+		if err := m.eng.PinStudio(m.ref, p.src.Studio, p.src.Kind); err != nil {
+			m.errText = m.errorText(err)
 			return m, nil
 		}
 		req := m.beginNav()

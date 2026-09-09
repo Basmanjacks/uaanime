@@ -62,6 +62,15 @@ type app struct {
 	lib        *library.Library
 	cfg        *store.Config
 	dataDir    string
+	writer     io.Closer
+	debug      bool
+}
+
+func (a *app) Close() {
+	if a.writer != nil {
+		_ = a.writer.Close()
+		a.writer = nil
+	}
 }
 
 func newApp(readOnly bool) (*app, error) { return newAppWith(newTransport(), readOnly) }
@@ -101,10 +110,9 @@ var (
 )
 
 // newAppWith збирає застосунок поверх заданого транспорту (nil — мережа).
-// readOnly пропускає злиття журналу: команда, запущена ПІД ЧАС відтворення
-// (doctor — щоб побачити адресу пульта), інакше з'їла б журнал активної
-// сесії, а TUI зі старою бібліотекою в пам'яті перезаписав би відновлений
-// прогрес на Finish.
+// Readers never recover an active journal. Writers acquire their process lease
+// before loading state, otherwise even atomic saves could overwrite a newer
+// library with a stale in-memory snapshot.
 func newAppWith(rt http.RoundTripper, readOnly bool) (*app, error) {
 	client := httpx.NewClient(rt)
 
@@ -112,9 +120,22 @@ func newAppWith(rt http.RoundTripper, readOnly bool) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := store.Open(dir)
-	if err != nil {
-		return nil, err
+	var writer io.Closer
+	st := store.OpenReadOnly(dir)
+	if !readOnly {
+		writer, err = store.LockWriter(dir)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if writer != nil {
+				_ = writer.Close()
+			}
+		}()
+		st, err = store.Open(dir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	lib, err := st.LoadLibrary()
 	if err != nil {
@@ -130,20 +151,24 @@ func newAppWith(rt http.RoundTripper, readOnly bool) (*app, error) {
 			return nil, err
 		}
 	}
-	return &app{
+	a := &app{
 		provider:   anitube.New(client),
 		extractors: []extractor.Extractor{ashdi.New(client), tortuga.New(client), moonanime.New(client)},
 		store:      st,
 		lib:        lib,
 		cfg:        cfg,
 		dataDir:    dir,
-	}, nil
+		writer:     writer,
+	}
+	writer = nil // ownership passes to app until session finalization is done
+	return a, nil
 }
 
 // options — прапорці, спільні для всіх команд; кожна бере лише ті, що розуміє.
 type options struct {
 	json   bool
 	dryRun bool
+	debug  bool
 }
 
 // command — одна headless-команда. args завжди починається з імені команди,
@@ -163,9 +188,9 @@ var commands = map[string]command{
 	"doctor": {readOnly: true, minArgs: 1, maxArgs: 1, run: func(a *app, ctx context.Context, _ []string, opt options) int {
 		return a.cmdDoctor(ctx, opt.json)
 	}},
-	"export": {minArgs: 1, maxArgs: 1, run: func(a *app, _ context.Context, _ []string, _ options) int {
+	"export": {readOnly: true, minArgs: 1, maxArgs: 1, run: func(a *app, _ context.Context, _ []string, _ options) int {
 		if err := a.store.Export(stdout); err != nil {
-			errln(err)
+			a.printCommandError(err)
 			return 1
 		}
 		return 0
@@ -173,13 +198,13 @@ var commands = map[string]command{
 	"import": {minArgs: 2, maxArgs: 2, run: func(a *app, _ context.Context, args []string, _ options) int {
 		return a.cmdImport(args[1])
 	}},
-	"search": {minArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
+	"search": {readOnly: true, minArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
 		return a.cmdSearch(ctx, strings.Join(args[1:], " "), opt.json)
 	}},
-	"episodes": {minArgs: 2, maxArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
+	"episodes": {readOnly: true, minArgs: 2, maxArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
 		return a.cmdEpisodes(ctx, args[1], opt.json)
 	}},
-	"resolve": {minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
+	"resolve": {readOnly: true, minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
 		ep, ok := parseEpisode(args[2])
 		if !ok {
 			return 2
@@ -196,29 +221,34 @@ var commands = map[string]command{
 }
 
 func run(args []string) (code int) {
+	var opt options
 	// жоден panic не долітає до користувача — ані з TUI, ані з headless-команди
 	defer func() {
 		if r := recover(); r != nil {
-			errf(i18n.MsgInternalError+"\n", r)
+			errln(i18n.MsgInternalFailure)
+			if opt.debug {
+				errln(provider.CleanText(fmt.Sprint(r)))
+			}
 			code = 1
 		}
 	}()
 
 	var positional []string
-	var opt options
 	for _, a := range args {
 		switch a {
 		case "--json":
 			opt.json = true
 		case "--dry-run":
 			opt.dryRun = true
+		case "--debug":
+			opt.debug = true
 		default:
 			positional = append(positional, a)
 		}
 	}
 	// без аргументів — TUI (потрібен термінал)
 	if len(positional) == 0 {
-		return runTUI()
+		return runTUI(opt.debug)
 	}
 
 	cmd, ok := commands[positional[0]]
@@ -229,11 +259,13 @@ func run(args []string) (code int) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	a, err := newApp(cmd.readOnly)
+	a, err := newApp(cmd.readOnly || (positional[0] == "play" && opt.dryRun))
 	if err != nil {
-		errln(err)
+		errln(i18n.ErrorTextWithDebug(err, opt.debug))
 		return 1
 	}
+	defer a.Close()
+	a.debug = opt.debug
 	return cmd.run(a, ctx, positional, opt)
 }
 
@@ -267,12 +299,15 @@ func shellNeedsQuote(r rune) bool {
 	return !strings.ContainsRune("_@%+=:,./-", r)
 }
 
-func runTUI() (code int) {
+func runTUI(debug bool) (code int) {
 	// жоден panic не долітає до користувача: bubbletea відновлює термінал,
 	// а тут — останній рубіж
 	defer func() {
 		if r := recover(); r != nil {
-			errf(i18n.MsgInternalError+"\n", r)
+			errln(i18n.MsgInternalFailure)
+			if debug {
+				errln(provider.CleanText(fmt.Sprint(r)))
+			}
 			code = 1
 		}
 	}()
@@ -282,9 +317,11 @@ func runTUI() (code int) {
 	}
 	a, err := newApp(false)
 	if err != nil {
-		errln(err)
+		errln(i18n.ErrorTextWithDebug(err, debug))
 		return 1
 	}
+	defer a.Close()
+	a.debug = debug
 	// Сигнали ловить контекст, а не bubbletea: модель має встигнути закрити
 	// плеєр і злити журнал до виходу (див. ui.Run).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -294,6 +331,7 @@ func runTUI() (code int) {
 	run, err := startRemote(a.store, eng.Live, a.cfg.Remote)
 	defer func() { run.Close() }() // замикання: після перезапуску run уже інший
 	opts := ui.Options{
+		Debug:        debug,
 		Cfg:          a.cfg,
 		DataDir:      a.dataDir,
 		Remote:       run.info(err),
@@ -307,7 +345,7 @@ func runTUI() (code int) {
 		},
 	}
 	if err := ui.Run(ctx, eng, opts); err != nil {
-		errln(err)
+		a.printCommandError(err)
 		return 1
 	}
 	return 0
@@ -352,7 +390,7 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 	checkCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	if _, err := a.provider.Search(checkCtx, "аніме", 1); err != nil {
-		info.Message = err.Error()
+		info.Message = i18n.ErrorTextWithDebug(err, a.debug)
 	} else {
 		info.Alive = true
 		now := time.Now()
@@ -399,12 +437,12 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 func (a *app) cmdImport(path string) int {
 	f, err := os.Open(path)
 	if err != nil {
-		errln(err)
+		a.printCommandError(err)
 		return 1
 	}
 	defer func() { _ = f.Close() }()
 	if err := a.store.Import(f); err != nil {
-		errln(err)
+		a.printCommandError(err)
 		return 1
 	}
 	outln(i18n.MsgImported)
@@ -437,7 +475,7 @@ func titleID(r provider.TitleRef) string { return r.Provider + ":" + r.Slug }
 func (a *app) cmdSearch(ctx context.Context, q string, jsonOut bool) int {
 	page, err := a.provider.Search(ctx, q, 1)
 	if err != nil {
-		printCommandError(err)
+		a.printCommandError(err)
 		return 1
 	}
 	if jsonOut {
@@ -476,7 +514,7 @@ func (a *app) cmdEpisodes(ctx context.Context, id string, jsonOut bool) int {
 	}
 	eps, offline, err := a.engine().EpisodesCached(ctx, ref)
 	if err != nil {
-		printCommandError(err)
+		a.printCommandError(err)
 		return 1
 	}
 	if offline && !jsonOut {
@@ -505,7 +543,7 @@ func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) i
 		if err == nil {
 			err = fmt.Errorf("серія %d: порожній список потоків: %w", ep, errs.ErrNoStream)
 		}
-		printCommandError(err)
+		a.printCommandError(err)
 		return 1
 	}
 	if jsonOut {
@@ -517,7 +555,7 @@ func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) i
 	return 0
 }
 
-func printCommandError(err error) { errln(i18n.ErrorText(err)) }
+func (a *app) printCommandError(err error) { errln(i18n.ErrorTextWithDebug(err, a.debug)) }
 
 func (a *app) engine() *playback.Engine {
 	eng := a.engineWithoutPlayer()
@@ -561,7 +599,7 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		// Помилка не фатальна: без пульта play працює як досі, тому спершу
 		// звіт, а run (порожній або живий) закривається однаково.
 		run, err := startRemote(a.store, eng.Live, a.cfg.Remote)
-		run.reportRemoteErr(err)
+		run.reportRemoteErr(err, a.debug)
 		defer run.Close()
 		run.announce()
 	}
@@ -572,7 +610,7 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		res, err := eng.Resolve(resolveCtx, ref, ep, func(playback.Event) { outln(i18n.MsgTryingNext) })
 		cancel()
 		if err != nil {
-			errln(i18n.ErrorText(err))
+			a.printCommandError(err)
 			return 1
 		}
 		if res.PinFallback {
@@ -600,14 +638,23 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		// Пульт має бачити список серій і в headless: цикл послідовний, тож
 		// читання бібліотеки тут не порушує правила 10.
 		publishPlaylist(sigCtx, eng, ref, ep)
-		result, err := eng.Play(sigCtx, res)
+		result, err := eng.PlayWithObserver(sigCtx, res, func(err error) {
+			if err == nil {
+				errln(i18n.MsgJournalRecovered)
+			} else {
+				errln(i18n.MsgJournalFailed)
+				if a.debug {
+					errln(provider.CleanText(err.Error()))
+				}
+			}
+		})
 		if errors.Is(err, errs.ErrNoPlayer) {
 			errln(i18n.MsgNoPlayer)
 			errln(playerInstallHint())
 			return 1
 		}
 		if err != nil {
-			errf(i18n.MsgPlayerFailed+"\n", err)
+			a.printCommandError(err)
 			return 1
 		}
 		if result.PinnedStudio != "" {
@@ -619,7 +666,7 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 			outf(i18n.MsgProgressSaved+"\n", int(result.PositionSec)/60, int(result.PositionSec)%60)
 		}
 		if result.Reason == player.EndError {
-			errf(i18n.MsgPlayerFailed+"\n", result.Reason)
+			a.printCommandError(errs.ErrPlayer)
 			return 1
 		}
 		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
@@ -668,7 +715,7 @@ func printJSON(v any) int {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		errln(err)
+		errln(i18n.ErrorText(err))
 		return 1
 	}
 	return 0

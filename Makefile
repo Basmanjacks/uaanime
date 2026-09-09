@@ -5,6 +5,7 @@ build:
 
 test:
 	go test -race ./...
+	node --test internal/remote/page.test.mjs
 
 lint:
 	@test -z "$$(gofmt -l .)" || (gofmt -l . && exit 1)

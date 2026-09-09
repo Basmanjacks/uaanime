@@ -18,6 +18,7 @@ import (
 func TestEpisodesEscapeClearsAppliedFilterBeforeGoingBack(t *testing.T) {
 	m := newTestModel(t)
 	m.ref = testRefs("filtered-episodes", 1)[0]
+	m.episodesRef = m.ref
 	m.episodes = testEpisodes(3)
 	m.showEpisodes()
 	m = applyTestListFilter(t, m, "2")

@@ -9,7 +9,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -84,7 +83,7 @@ func TestSearchMoreRow(t *testing.T) {
 
 func TestHomeSlashOpensSearch(t *testing.T) {
 	m := newTestModel(t)
-	seedTestLibrary(&m, testRefs("slash", 1), library.StateWatching)
+	seedTestLibrary(&m, testRefs("slash", 1))
 
 	m, _ = pressTestKey(t, m, '/', "/")
 	if m.screen != screenSearch {

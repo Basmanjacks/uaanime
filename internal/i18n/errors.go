@@ -20,6 +20,8 @@ import (
 func ErrorText(err error) string {
 	var text string
 	switch {
+	case errors.Is(err, errs.ErrStoreBusy):
+		text = MsgStoreBusy
 	case errors.Is(err, errs.ErrOffline):
 		text = MsgOffline
 	case errors.Is(err, errs.ErrNoStream):
@@ -27,9 +29,20 @@ func ErrorText(err error) string {
 	case errors.Is(err, errs.ErrNoPlayer):
 		text = MsgNoPlayer
 	case errors.Is(err, errs.ErrPlayer):
-		text = fmt.Sprintf(MsgPlayerFailed, err)
+		text = MsgPlayerUnavailable
+	case errors.Is(err, errs.ErrProvider):
+		text = MsgSourceUnavailable
 	default:
-		text = fmt.Sprintf(MsgProviderFailed, err)
+		text = MsgOperationFailed
 	}
 	return provider.CleanText(text)
+}
+
+// ErrorTextWithDebug keeps detailed causes opt-in and terminal-safe.
+func ErrorTextWithDebug(err error, debug bool) string {
+	text := ErrorText(err)
+	if debug && err != nil {
+		text += fmt.Sprintf("\n%s", provider.CleanText(err.Error()))
+	}
+	return text
 }

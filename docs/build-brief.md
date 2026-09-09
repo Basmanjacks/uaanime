@@ -84,7 +84,7 @@ Release  { Studio string, Kind Kind }      // Kind: dub | voiceover | sub | mult
 Stream   { Host, Quality, URL, Headers map[string]string, TTL }
 
 Progress { TitleID, Episode, PositionSec, DurationSec, Completed bool, WatchedAt }
-Entry    { TitleID, State (watching|planned|completed), StudioPin, KindPin, LastEpisode }
+Entry    { TitleID, StudioPin, KindPin, LastEpisode, KnownEpisodes, Hidden }
 ```
 
 Ключове: **`Release` — це пара (студія, тип)**. Одна серія на українських сайтах часто має 3–5 варіантів озвучення від різних студій плюс саби. Це не деталь реалізації, це головна фіча.

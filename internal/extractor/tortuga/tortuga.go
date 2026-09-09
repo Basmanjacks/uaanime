@@ -40,11 +40,11 @@ var reFile = regexp.MustCompile(`file:\s*"([A-Za-z0-9+/=]+)"`)
 
 func decode(v string) (string, error) {
 	if !strings.HasSuffix(v, "==") {
-		return "", fmt.Errorf("tortuga: не вдалося декодувати file (хост змінив плеєр?): %w", errs.ErrNoStream)
+		return "", fmt.Errorf("tortuga: не вдалося декодувати file (хост змінив плеєр?): %w", errs.ErrProvider)
 	}
 	raw, err := base64.StdEncoding.DecodeString(v[:len(v)-2])
 	if err != nil || len(raw) < 2 {
-		return "", fmt.Errorf("tortuga: не вдалося декодувати file (хост змінив плеєр?): %w", errs.ErrNoStream)
+		return "", fmt.Errorf("tortuga: не вдалося декодувати file (хост змінив плеєр?): %w", errs.ErrProvider)
 	}
 	seed := raw[0]
 	out := make([]byte, len(raw)-1)
@@ -61,14 +61,14 @@ func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extra
 	}
 	m := reFile.FindSubmatch(body)
 	if m == nil {
-		return nil, fmt.Errorf("tortuga: у embed %q не знайдено file:\"…\" (хост змінив плеєр?): %w", embed, errs.ErrNoStream)
+		return nil, fmt.Errorf("tortuga: у embed %q не знайдено file:\"…\" (хост змінив плеєр?): %w", embed, errs.ErrProvider)
 	}
 	decoded, err := decode(string(m[1]))
 	if err != nil {
 		return nil, err
 	}
 	if !extractor.ValidStreamURL(decoded) {
-		return nil, fmt.Errorf("tortuga: підозрілий URL потоку: %w", errs.ErrNoStream)
+		return nil, fmt.Errorf("tortuga: підозрілий URL потоку: %w", errs.ErrProvider)
 	}
 	return []extractor.Stream{{
 		URL:     decoded,

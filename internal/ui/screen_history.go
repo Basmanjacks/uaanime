@@ -13,24 +13,7 @@ import (
 // showHistory — переглянуті тайтли, згруповані за найсвіжішим прогресом.
 func (m *Model) showHistory() {
 	m.setScreen(screenHistory)
-	sorted := make([]*library.Progress, len(m.eng.Lib.Progress))
-	copy(sorted, m.eng.Lib.Progress)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].WatchedAt.After(sorted[j].WatchedAt) })
-
-	type historyGroup struct {
-		newest *library.Progress
-		count  int
-	}
-	groups := make([]historyGroup, 0, len(sorted))
-	groupByTitle := make(map[string]int, len(sorted))
-	for _, p := range sorted {
-		if index, ok := groupByTitle[p.TitleID]; ok {
-			groups[index].count++
-			continue
-		}
-		groupByTitle[p.TitleID] = len(groups)
-		groups = append(groups, historyGroup{newest: p, count: 1})
-	}
+	groups := groupHistory(m.eng.Lib.Progress)
 
 	now := time.Now()
 	var items []item
@@ -61,6 +44,38 @@ func (m *Model) showHistory() {
 	_ = m.setItems(items, 0)
 }
 
+type historyGroup struct {
+	newest *library.Progress
+	count  int
+	index  int
+}
+
+func groupHistory(progress []*library.Progress) []historyGroup {
+	var groups []historyGroup
+	byTitle := make(map[string]int)
+	for i, p := range progress {
+		if index, ok := byTitle[p.TitleID]; ok {
+			g := &groups[index]
+			g.count++
+			if p.WatchedAt.After(g.newest.WatchedAt) {
+				g.newest, g.index = p, i
+			}
+		} else {
+			byTitle[p.TitleID] = len(groups)
+			groups = append(groups, historyGroup{newest: p, count: 1, index: i})
+		}
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].newest.WatchedAt.Equal(groups[j].newest.WatchedAt) {
+			// Match sorting all progress stably before grouping: ties belong
+			// to the first newest record, not the title's first older record.
+			return groups[i].index < groups[j].index
+		}
+		return groups[i].newest.WatchedAt.After(groups[j].newest.WatchedAt)
+	})
+	return groups
+}
+
 // titleName: тайтли, зіграні headless-командою, ще не мають назви — показуємо слаг.
 func titleName(t *library.LocalTitle) string {
 	if t.Name != "" {
@@ -79,15 +94,4 @@ func (m *Model) titleByID(id string) *library.LocalTitle {
 		}
 	}
 	return nil
-}
-
-func stateLabel(s library.State) string {
-	switch s {
-	case library.StateCompleted:
-		return i18n.TuiStateDone
-	case library.StatePlanned:
-		return i18n.TuiStatePlanned
-	default:
-		return i18n.TuiStateWatching
-	}
 }

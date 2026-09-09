@@ -50,6 +50,7 @@ type RemoteInfo struct {
 // пульта і два хуки, які живуть по той бік пакетної межі (детекція плеєра —
 // шов для тестів cmd; перезапуск пульта — слухач і remote.json).
 type Options struct {
+	Debug   bool
 	Cfg     *store.Config // nil → store.DefaultConfig() (тести)
 	DataDir string        // каталог даних для екрана «Про»; "" → store.DataDir()
 	Remote  RemoteInfo
@@ -111,10 +112,11 @@ type Model struct {
 	pendingReq int
 	reqID      int
 
-	// Блоки каталогу й лічильники нових серій живуть у моделі, а не в списку:
-	// список перебудовується на кожному переході, а ці дані переживають його.
+	// Блоки каталогу живуть у моделі, а не в списку: список перебудовується на
+	// кожному переході, а картки переживають його. epsScratch — навпаки,
+	// одноразовий кеш читань з диска на одну перебудову екрана.
 	catalog     map[provider.CatalogKind][]provider.TitleCard
-	badges      map[string]int
+	epsScratch  map[string][]provider.Episode
 	homeSpacers bool
 
 	// searches — нещодавні запити, як їх бачить екран пошуку. Не у view: історія
@@ -126,6 +128,9 @@ type Model struct {
 	playCancel      context.CancelFunc
 	playTitleID     string
 	playPinned      string
+	playGen         int
+	journalEvents   <-chan error
+	journalWarning  bool
 	quitting        bool
 	pendingBaseline *bookmarkBaselineMsg
 
@@ -164,7 +169,7 @@ const (
 	// homeContinueRows — скільки тайтлів пропонуємо продовжити. Три — це те,
 	// між чим людина справді обирає; довший список уже дублює закладки.
 	homeContinueRows = 3
-	// maxBadgeProbes — стеля на кількість тайтлів, які перевіряємо у фоні.
+	// maxBadgeProbes — стеля на кількість тайтлів, чий список серій оновлюємо у фоні.
 	maxBadgeProbes = 20
 	badgeWorkers   = 4
 )
@@ -197,17 +202,17 @@ func New(eng *playback.Engine, opts Options) Model {
 	in.SetVirtualCursor(false)
 
 	m := Model{
-		eng:     eng,
-		list:    l,
-		input:   in,
-		ic:      ic,
-		catalog: map[provider.CatalogKind][]provider.TitleCard{},
-		badges:  map[string]int{},
-		cfg:     opts.Cfg,
-		remote:  opts.Remote,
-		opts:    opts,
-		now:     time.Now,
-		randN:   rand.IntN,
+		eng:        eng,
+		list:       l,
+		input:      in,
+		ic:         ic,
+		catalog:    map[provider.CatalogKind][]provider.TitleCard{},
+		epsScratch: map[string][]provider.Episode{},
+		cfg:        opts.Cfg,
+		remote:     opts.Remote,
+		opts:       opts,
+		now:        time.Now,
+		randN:      rand.IntN,
 	}
 	m.loadCachedCatalog()
 	m.showHome()
@@ -271,7 +276,7 @@ func (m Model) Init() tea.Cmd {
 			cmds = append(cmds, m.catalogCmd(kind))
 		}
 	}
-	if cmd := m.badgesCmd(); cmd != nil {
+	if cmd := m.libraryEpisodesCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if cmd := m.remoteRequestCmd(); cmd != nil {

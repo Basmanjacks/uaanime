@@ -106,16 +106,11 @@ func (m *Model) publishPlaylist() {
 	if title != nil && title.Name != "" {
 		name = title.Name
 	}
-	rows := make([]playback.EpisodeInfo, 0, len(episodes))
-	for _, ep := range episodes {
-		row := playback.EpisodeInfo{Number: ep.Number, Current: ep.Number == current}
-		if title != nil {
-			if p := m.eng.Lib.ProgressFor(title.ID, ep.Number); p != nil {
-				row.Watched, row.PositionSec = p.Completed, p.PositionSec
-			}
-		}
-		rows = append(rows, row)
+	titleID := ""
+	if title != nil {
+		titleID = title.ID
 	}
+	rows := playback.BuildEpisodeInfo(episodes, titleID, m.eng.Lib.Progress, current)
 	live.SetPlaylist(m.ref, name, rows)
 }
 

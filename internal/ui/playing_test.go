@@ -45,7 +45,7 @@ func playInBackground(cmd tea.Cmd) <-chan tea.Msg {
 // Enter, після якого відтворення лишається у фоні.
 func startJourneyPlayback(t *testing.T, m Model, tr *trace, sess *playertest.Session) (Model, <-chan tea.Msg) {
 	t.Helper()
-	if err := m.eng.PinStudio(journeyRef, "FANVOXUA"); err != nil {
+	if err := m.eng.PinStudio(journeyRef, "FANVOXUA", ""); err != nil {
 		t.Fatalf("PinStudio: %v", err)
 	}
 	m = press(t, m, tr, '/', "/")

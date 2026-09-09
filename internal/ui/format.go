@@ -121,31 +121,24 @@ func (m *Model) remainingLabel() string {
 	if !ok {
 		return ""
 	}
-	completed := map[int]bool{}
-	var sum float64
-	samples := 0
+	// Порожній ID — тайтл із пошуку, якого ще немає в бібліотеці: прогресу
+	// нема, залишок дорівнює всьому списку.
+	titleID := ""
 	if title := m.eng.Lib.TitleByRef(m.ref); title != nil {
-		for _, p := range m.eng.Lib.Progress {
-			if p == nil || p.TitleID != title.ID {
-				continue
-			}
-			if p.Completed {
-				completed[p.Episode] = true
-			}
-			if p.DurationSec > 0 {
-				sum += p.DurationSec
-				samples++
-			}
-		}
+		titleID = title.ID
 	}
-	remaining := 0
-	for _, ep := range episodes {
-		if !completed[ep.Number] {
-			remaining++
-		}
-	}
+	remaining := m.eng.Lib.StatusOf(titleID, episodes).Remaining
 	if remaining == 0 {
 		return ""
+	}
+	var sum float64
+	samples := 0
+	for _, p := range m.eng.Lib.Progress {
+		if p == nil || p.TitleID != titleID || p.DurationSec <= 0 {
+			continue
+		}
+		sum += p.DurationSec
+		samples++
 	}
 	label := i18n.RemainingEpisodes(remaining)
 	if samples == 0 {

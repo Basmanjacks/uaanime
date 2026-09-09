@@ -12,6 +12,7 @@ import (
 // Рядки й картки йдуть один в один: індекс картки == індекс рядка, тому
 // курсор після довантаження ставиться простою арифметикою.
 func (m *Model) searchRows() []item {
+	m.epsScratch = map[string][]provider.Episode{}
 	items := make([]item, 0, len(m.cards)+1)
 	for _, c := range m.cards {
 		items = append(items, item{
@@ -64,6 +65,9 @@ func (m *Model) rememberSearch(q string) {
 	}
 }
 
+// titleStateBadge — статус тайтла, який уже в бібліотеці. У рядку пошуку meta
+// зайнята даними картки, тож статус має рівно одне поле: беремо сам підпис,
+// без окремого бейджа новинок.
 func (m *Model) titleStateBadge(ref provider.TitleRef) string {
 	title := m.eng.Lib.TitleByRef(ref)
 	if title == nil {
@@ -73,7 +77,8 @@ func (m *Model) titleStateBadge(ref provider.TitleRef) string {
 	if entry == nil || entry.Hidden {
 		return ""
 	}
-	return stateLabel(entry.State)
+	meta, _ := statusMeta(m.titleStatus(title))
+	return meta
 }
 
 // applySearchPage — перша сторінка замінює результати, наступні дозаписуються.

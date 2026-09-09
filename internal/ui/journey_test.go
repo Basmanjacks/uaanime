@@ -13,7 +13,6 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/playertest"
@@ -278,7 +277,7 @@ func TestJourneySearchToPlaybackAndBack(t *testing.T) {
 	if title == nil {
 		t.Fatal("тайтл не збережено")
 	}
-	if e := lib.EntryLookup(title.ID); e == nil || e.StudioPin != chosen || e.State != library.StateWatching {
+	if e := lib.EntryLookup(title.ID); e == nil || e.StudioPin != chosen {
 		t.Errorf("entry = %+v, want пін %q і watching", e, chosen)
 	}
 	for ep := 1; ep <= 2; ep++ {
@@ -299,8 +298,9 @@ func TestJourneySearchToPlaybackAndBack(t *testing.T) {
 	if len(rows) != 1 || rows[0].title != fmt.Sprintf(i18n.TuiContinuePfx, journeyRef.Name, 3) {
 		t.Errorf("«Продовжити» = %+v, want серію 3", rows)
 	}
-	if libraryRow(t, m, journeyRef.Name).meta != i18n.TuiStateWatching {
-		t.Error("тайтл має бути в закладках як «переглядаєш»")
+	// Серії 1 і 2 завершені, 3 — на 30 с: у закладках видно, скільки лишилось.
+	if want := i18n.RemainingEpisodes(journeyEpisodes - 2); libraryRow(t, m, journeyRef.Name).meta != want {
+		t.Errorf("рядок закладки = %q, want %q", libraryRow(t, m, journeyRef.Name).meta, want)
 	}
 
 	// повторний перегляд серії 3 не питає студію знову і стартує з 30 с
@@ -332,7 +332,7 @@ func TestJourneyInterruptDuringPlaybackFlushesProgress(t *testing.T) {
 	m, _, st := journeyModel(t, sess)
 	tr := &trace{}
 
-	if err := m.eng.PinStudio(journeyRef, "FANVOXUA"); err != nil {
+	if err := m.eng.PinStudio(journeyRef, "FANVOXUA", ""); err != nil {
 		t.Fatal(err)
 	}
 	m = press(t, m, tr, '/', "/")
@@ -355,8 +355,7 @@ func TestJourneyInterruptDuringPlaybackFlushesProgress(t *testing.T) {
 		t.Errorf("підказки клавіш немає (статус %q):\n%s", m.status, plain)
 	}
 
-	done := make(chan tea.Msg, 1)
-	go func() { done <- playCmd() }()
+	done := playInBackground(playCmd)
 	<-sess.Sampled // журнал уже містить позицію
 
 	// Ctrl+C: перша фаза — лише скасування сесії, застосунок ще живий

@@ -73,15 +73,13 @@ func (m *Model) commitPending(req int) {
 }
 
 func (m *Model) back() {
-	if m.pending != nil {
-		m.pending = nil
-		m.pendingReq = 0
-		m.nextReq()
+	wasPending := m.pending != nil
+	m.beginNav()
+	if wasPending {
 		m.status = ""
 		return
 	}
 
-	m.nextReq()
 	if len(m.stack) == 0 {
 		m.showHome()
 		return

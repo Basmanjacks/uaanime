@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/Basmanjacks/uaanime/internal/library"
@@ -19,9 +20,30 @@ type Backup struct {
 }
 
 func (s *Store) Export(w io.Writer) error {
-	lib, err := s.LoadLibrary()
+	lib, err := OpenReadOnly(s.dir).LoadLibrary()
 	if err != nil {
 		return err
+	}
+	// Overlay a journal snapshot in memory, without consuming an active session's
+	// journal or persisting a library owned by another process.
+	var j Journal
+	if found, err := readJSON(s.journalPath(), &j); err != nil {
+		return err
+	} else if found {
+		hasTitle := func() bool {
+			return slices.ContainsFunc(lib.Titles, func(t *library.LocalTitle) bool { return t.ID == j.TitleID })
+		}
+		if !hasTitle() {
+			// Begin may have persisted a new title after our first read, before
+			// Run wrote this journal. Reload once; never export orphan progress.
+			lib, err = OpenReadOnly(s.dir).LoadLibrary()
+			if err != nil {
+				return err
+			}
+		}
+		if hasTitle() {
+			lib.RecordPosition(j.TitleID, j.Episode, j.PositionSec, j.DurationSec, j.UpdatedAt)
+		}
 	}
 	cfg, err := s.LoadConfig()
 	if err != nil {
