@@ -17,18 +17,24 @@ uaanime → Продовжити → Enter → грає
 
 ## Встановлення
 
-**macOS:**
+**macOS і Linux (Homebrew):**
 
 ```bash
 brew tap Basmanjacks/uaanime
 brew install --cask Basmanjacks/uaanime/uaanime
 ```
 
-Homebrew 6 не додає сторонні tap автоматично, тому перший рядок обов'язковий.
-Хочеш коротке ім'я надалі — виконай `brew trust basmanjacks/uaanime`, і далі
-працюватиме просто `brew install --cask uaanime`.
+Одна команда на обидві системи: Homebrew 6 підтримує casks і на Linux. Сторонні
+tap воно автоматично не додає, тому перший рядок обов'язковий. Хочеш коротке ім'я
+надалі — виконай `brew trust basmanjacks/uaanime`, і далі працюватиме просто
+`brew install --cask uaanime`. Якщо ти ставив uaanime раніше формулою
+(`brew install …` без `--cask`), перейди на cask:
 
-Для відтворення потрібен VLC або mpv. Якщо плеєра ще немає:
+```bash
+brew uninstall uaanime && brew install --cask Basmanjacks/uaanime/uaanime
+```
+
+Для відтворення потрібен VLC або mpv. Якщо плеєра ще немає, на macOS:
 
 ```bash
 brew install --cask vlc
@@ -39,13 +45,7 @@ brew install mpv
 VLC, встановлений вручну з сайту VideoLAN у `/Applications/VLC.app`, теж працює —
 перевстановлювати або передавати його під керування Homebrew не потрібно.
 
-**Linux** (Linuxbrew, формула):
-
-```bash
-brew install Basmanjacks/uaanime/uaanime
-```
-
-Або встанови через Go / візьми tarball з Releases:
+**Без Homebrew** — через Go або tarball з Releases:
 
 ```bash
 go install github.com/Basmanjacks/uaanime/cmd/uaanime@latest

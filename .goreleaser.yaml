@@ -26,25 +26,10 @@ changelog:
 # Homebrew tap: потребує репозиторію Basmanjacks/homebrew-uaanime
 # і токен HOMEBREW_TAP_GITHUB_TOKEN у секретах релізного workflow.
 #
-# ⚠️ `brews` застарів у GoReleaser v2 (з 2.10) і буде видалений у v3!
-# Тримається на піні `version: "~> v2"` у .github/workflows/release.yml.
-# Формула потрібна для Linuxbrew, бо cask — лише для macOS.
-brews:
-  - repository:
-      owner: Basmanjacks
-      name: homebrew-uaanime
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
-    homepage: https://github.com/Basmanjacks/uaanime
-    description: "Дивись аніме українською з термінала"
-    caveats: |
-      Для відтворення потрібен VLC або mpv.
-      Встанови один із них пакетним менеджером системи.
-      Перевірка: uaanime doctor
-    install: bin.install "uaanime"
-    skip_upload: auto
-
+# Один cask на всі платформи: Homebrew 6.0 (2026-06-11) вміє casks на Linux, а
+# GoReleaser генерує в ньому і `on_macos`, і `on_linux` з відповідними URL. Тому
+# застарілої формули (`brews`, видаляється в GoReleaser v3) тут більше немає.
+#
 # Cask ставить лише uaanime. VLC/mpv лишаються зовнішніми плеєрами: hard dependency
 # конфліктує з VLC.app, установленим вручну й тому невідомим Homebrew.
 homebrew_casks:
@@ -57,17 +42,30 @@ homebrew_casks:
     description: "Дивись аніме українською з термінала"
     caveats: |
       Для відтворення потрібен VLC або mpv.
-      Встановлення VLC: brew install --cask vlc
-      Встановлення mpv: brew install mpv
+      macOS: brew install --cask vlc (або brew install mpv)
+      Linux: постав VLC чи mpv пакетним менеджером системи.
       Перевірка: uaanime doctor
     binaries:
       - uaanime
     # Бінарник не підписаний і не нотаризований, тож macOS вішає на нього карантин
     # і відмовляється запускати. Знімаємо атрибут одразу після встановлення.
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/uaanime"]
-          end
+    #
+    # Чому `custom_block`, а не `hooks.post.install`: GoReleaser досі загортає хук у
+    # `postflight`, який Homebrew 6 задепрекейтив на користь декларативного
+    # `postflight_steps` (`brew` друкує попередження на кожній операції з cask).
+    # Блок потрапляє в тіло cask дослівно, тому пишемо нову stanza самі.
+    #
+    # `{{ }}` тут заборонені: GoReleaser проганяє весь згенерований cask через
+    # Go-шаблон, тож `{{staged_path}}` зламав би реліз. Замість токена — chdir у
+    # staged_path (там `base` за замовчуванням саме staged_path) і відносне ім'я.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "uaanime"],
+              chdir: ".",
+              writable_paths: ["uaanime"],
+              must_succeed: false
+        end
+      end
     skip_upload: auto
