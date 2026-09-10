@@ -604,6 +604,9 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		run.announce()
 	}
 
+	eng.Live.BeginChain(ref)
+	defer eng.Live.EndChain()
+
 	for {
 		outf(i18n.MsgResolving+"\n", ep)
 		resolveCtx, cancel := context.WithTimeout(sigCtx, 60*time.Second)
@@ -669,22 +672,10 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 			a.printCommandError(errs.ErrPlayer)
 			return 1
 		}
-		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
-		// без автоплею, «стоп» уриває ланцюжок навіть з ним
-		switch {
-		case result.Intent == playback.IntentStop:
+		if sigCtx.Err() != nil || result.Intent == playback.IntentStop {
 			return 0
-		case result.Intent == playback.IntentPlay && result.Requested.Episode > 0:
-			// адресний запит із пульта: серія названа явно, список не потрібен
-			ep = result.Requested.Episode
-			continue
-		case result.Intent == playback.IntentNext:
-		case result.StopAfter:
-			// «досидіти й зупинитись» уриває ланцюжок так само, як «стоп»,
-			// але вже після того, як серія догралася
-			return 0
-		case result.Reason == player.EndEOF && eng.Autoplay:
-		default:
+		}
+		if result.Intent == playback.IntentNone && (result.Reason != player.EndEOF || (result.SessionLimit.Enabled && result.SessionLimit.Remaining == 0) || (!result.SessionLimit.Enabled && !eng.Autoplay)) {
 			return 0
 		}
 
@@ -694,7 +685,7 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		if err != nil {
 			break
 		}
-		next, ok := playback.NextEpisodeNumber(episodes, ep)
+		next, ok := playback.ContinueEpisode(result, nil, sigCtx.Err() != nil, ref, ep, episodes, eng.Autoplay)
 		if !ok {
 			break
 		}

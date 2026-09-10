@@ -151,7 +151,9 @@ func TestHomeBookmarkOrder(t *testing.T) {
 		t.Helper()
 		var out []string
 		for _, row := range sectionRows(t, m, i18n.TuiBlockLibrary) {
-			out = append(out, row.title)
+			if row.role == "lib" {
+				out = append(out, row.title)
+			}
 		}
 		return out
 	}

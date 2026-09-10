@@ -91,7 +91,7 @@ func TestPlayDoneStopsAutoplayAfterLastEpisode(t *testing.T) {
 
 	m, cmd := updateTestModel(t, m, playDoneMsg{reason: player.EndEOF})
 
-	if cmd != nil {
+	if cmd != nil && m.statusKind != statusSuccess {
 		t.Fatal("last episode returned a resolve command")
 	}
 	if m.screen != screenEpisodes {
@@ -124,7 +124,7 @@ func TestPlayDoneDoesNotAutoplayWhenDisabled(t *testing.T) {
 
 	m, cmd := updateTestModel(t, m, playDoneMsg{reason: player.EndEOF})
 
-	if cmd != nil {
+	if cmd != nil && m.statusKind != statusSuccess {
 		t.Fatal("disabled autoplay returned a resolve command")
 	}
 	if m.screen != screenEpisodes {

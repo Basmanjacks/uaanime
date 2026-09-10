@@ -7,7 +7,17 @@
 <meta name="theme-color" content="#0b0b0f">
 <title>{{.Title}}</title>
 <style>
-:root { --accent: #d97757; --bg: #0b0b0f; --fg: #e8e8ea; --dim: #8b8b94; --panel: #1a1a21 }
+:root { color-scheme: dark light; --accent: #d97757; --on-accent: #0b0b0f; --bg: #0b0b0f; --fg: #e8e8ea; --dim: #8b8b94; --panel: #1a1a21 }
+@media (prefers-color-scheme: light) {
+ :root { --accent: #a94324; --on-accent: #fff; --bg: #faf8f4; --fg: #252321; --dim: #69635c; --panel: #ebe6de; color-scheme: light }
+}
+button:focus-visible, select:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px }
+#connection { color: var(--accent); min-height: 20px; font-size: 13px }
+#session, #seek { width: 100%; accent-color: var(--accent) }
+#session { font: inherit; padding: 12px; border: 1px solid var(--dim); border-radius: 10px; background: var(--panel); color: var(--fg) }
+#sessionhint, #remaining { margin: 0; font-size: 13px; color: var(--dim) }
+#seek { min-height: 44px; margin: 0 }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap }
 * { box-sizing: border-box }
 html { height: 100% }
 body {
@@ -25,16 +35,14 @@ h1 { margin: 0; font-size: 20px; font-weight: 600; overflow-wrap: anywhere }
 #time, #vol { color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums }
 #vol { white-space: nowrap }
 /* Смуга тонка, а палець ні: клікабельна зона — обгортка з полями. */
-#seek { padding: 12px 0 }
-#bar { height: 6px; border-radius: 3px; background: var(--panel); overflow: hidden }
-#fill { height: 100%; width: 0; background: var(--accent) }
+#seek { padding: 0 }
 button {
   font: inherit; font-size: 17px; font-weight: 600; color: var(--fg);
   background: var(--panel); border: 0; border-radius: 14px; padding: 18px; width: 100%;
 }
 button:disabled { opacity: .35 }
 button:active:enabled { filter: brightness(1.35) }
-#pause { height: 24vh; min-height: 96px; font-size: 26px; background: var(--accent); color: #0b0b0f }
+#pause { height: 24vh; min-height: 96px; font-size: 26px; background: var(--accent); color: var(--on-accent) }
 .row { display: flex; gap: 10px }
 /* Чотири кроки перемотки мусять влізти в 320 пікселів ширини. */
 .seekrow button { padding: 16px 2px; font-size: 15px }
@@ -55,9 +63,11 @@ button:active:enabled { filter: brightness(1.35) }
 </style>
 <h1 id="title">{{.Idle}}</h1>
 <div id="ep"></div>
+<div id="connection" role="status" aria-live="polite">{{.Reconnecting}}</div>
 <div id="meta"><span id="time">00:00 / 00:00</span><span id="vol"></span></div>
-<div id="seek"><div id="bar"><div id="fill"></div></div></div>
-<button id="pause" disabled>{{.Pause}}</button>
+<label class="sr-only" for="seek">{{.Seek}}</label>
+<input id="seek" type="range" min="0" max="0" value="0" step="1" disabled>
+<button id="pause" aria-pressed="false" disabled>{{.Pause}}</button>
 <div class="row seekrow">
   <button id="back30" disabled>{{.Back30}}</button>
   <button id="back" disabled>{{.Back}}</button>
@@ -65,18 +75,22 @@ button:active:enabled { filter: brightness(1.35) }
   <button id="forward30" disabled>{{.Forward30}}</button>
 </div>
 <div class="row volrow">
-  <button id="voldown" disabled>−</button>
+  <button id="voldown" aria-label="{{.VolumeDown}}" disabled>−</button>
   <span id="vollabel">{{.Volume}}</span>
-  <button id="volup" disabled>+</button>
+  <button id="volup" aria-label="{{.VolumeUp}}" disabled>+</button>
 </div>
 <button id="next" disabled>{{.Next}}</button>
-<button id="stopafter" disabled>{{.StopAfter}}</button>
+<button id="stopafter" aria-pressed="false" disabled>{{.StopAfter}}</button>
+<label for="session">{{.Session}}</label>
+<select id="session" aria-describedby="sessionhint remaining" disabled><option value="0">{{.SessionOff}}</option>{{range .SessionOptions}}<option value="{{.}}">{{.}}</option>{{end}}</select>
+<p id="remaining" aria-live="polite"></p>
+<p id="sessionhint">{{.SessionHint}}</p>
 <div class="row">
-  <button id="epsbtn">{{.Episodes}} ▾</button>
+  <button id="epsbtn" aria-expanded="false" aria-controls="eps" disabled>{{.Episodes}} ▾</button>
   <button id="stop" disabled>{{.Stop}}</button>
 </div>
 <div id="eps" hidden></div>
-<div id="labels"><span id="l-idle">{{.Idle}}</span><span id="l-episode">{{.Episode}}</span><span id="l-play">{{.Play}}</span><span id="l-pause">{{.Pause}}</span><span id="l-vol">{{.VolumeFmt}}</span><span id="l-stopafter">{{.StopAfter}}</span><span id="l-episodes">{{.Episodes}}</span><span id="l-noplaylist">{{.NoPlaylist}}</span><span id="l-offline">{{.Offline}}</span></div>
+<div id="labels"><span id="l-idle">{{.Idle}}</span><span id="l-episode">{{.Episode}}</span><span id="l-play">{{.Play}}</span><span id="l-pause">{{.Pause}}</span><span id="l-vol">{{.VolumeFmt}}</span><span id="l-stopafter">{{.StopAfter}}</span><span id="l-episodes">{{.Episodes}}</span><span id="l-noplaylist">{{.NoPlaylist}}</span><span id="l-remaining">{{.SessionRemaining}}</span><span id="l-reconnecting">{{.Reconnecting}}</span><span id="l-offline">{{.Offline}}</span></div>
 <script>
 const BASE = {{.Base}};
 const CMDS = ["pause", "back", "forward", "back30", "forward30", "voldown", "volup", "next", "stopafter", "stop"];
@@ -86,6 +100,8 @@ const L = (k) => $("l-" + k).textContent;
 // думати секунди, а тап по «Пауза» у цей час губитися не має. Дві команди
 // поспіль — інша річ: друга чекає, поки кнопки знову ввімкнуться.
 let busy = false;
+let connected = false;
+let dragging = false;
 let live = false;
 let dur = 0;
 let timer = 0;
@@ -104,12 +120,21 @@ function mmss(v) {
   return String(m).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
 }
 function enable(on) {
-  for (const id of CMDS) { $(id).disabled = !on || busy; }
+  $("epsbtn").disabled = busy || !connected;
+  $("session").disabled = !on || busy || !connected;
+  $("seek").disabled = !on || busy || !connected || dur <= 0;
+  for (const id of CMDS) { $(id).disabled = !on || busy || !connected; }
   for (const row of $("eps").children) {
-    if (row.tagName === "BUTTON") { row.disabled = busy; }
+    if (row.tagName === "BUTTON") { row.disabled = busy || !connected; }
   }
 }
+function connection(on) {
+ connected = on;
+ $("connection").textContent = on ? "" : L("reconnecting");
+ enable(live);
+}
 function stopAfter(on) {
+  $("stopafter").setAttribute("aria-pressed", String(on));
   $("stopafter").classList.toggle("on", on);
   $("stopafter").textContent = on ? L("stopafter") + " ●" : L("stopafter");
 }
@@ -120,7 +145,9 @@ function idle() {
   $("ep").textContent = "";
   $("time").textContent = "00:00 / 00:00";
   $("vol").textContent = "";
-  $("fill").style.width = "0%";
+  $("seek").max = "0"; $("seek").value = "0"; dragging = false;
+  $("session").value = "0"; $("remaining").textContent = "";
+  $("pause").setAttribute("aria-pressed", "false");
   $("pause").textContent = L("play");
   stopAfter(false);
   enable(false);
@@ -134,12 +161,16 @@ function render(st) {
   dur = Number(st.duration_sec) || 0;
   const v = Number(st.volume_pct);
   $("title").textContent = st.title || L("idle");
-  $("ep").textContent = st.episode > 0 ? L("episode").replace("%d", st.episode) : "";
+  $("ep").textContent = L("episode").replace("%d", st.episode) + (st.studio ? " · " + st.studio : "");
   $("time").textContent = mmss(p) + " / " + mmss(dur);
   // Гучності може не бути зовсім (плеєр мовчить) — тоді рядок порожній, бо
   // нуль тут читався б як «звук вимкнено».
   $("vol").textContent = v >= 0 ? L("vol").replace("%d", Math.round(v)) : "";
-  $("fill").style.width = (dur > 0 ? Math.min(100, (p * 100) / dur) : 0) + "%";
+  if (!dragging) { $("seek").max = String(Math.max(0,dur)); $("seek").value = String(Math.min(dur,Math.max(0,p))); }
+  $("seek").setAttribute("aria-valuetext", mmss($("seek").value) + " / " + mmss(dur));
+  $("pause").setAttribute("aria-pressed", String(!!st.paused));
+  $("session").value = String(st.session_limited ? st.session_remaining : 0);
+  $("remaining").textContent = st.session_limited ? L("remaining").replace("%d", st.session_remaining) : "";
   $("pause").textContent = st.paused ? L("play") : L("pause");
   stopAfter(!!st.stop_after);
   enable(true);
@@ -151,16 +182,19 @@ function syncEps(st) {
   if (epsOpen && gen !== epsGen) { loadEps(); }
 }
 async function loadEps() {
-  if (epsBusy) { return; }
+  if (epsBusy || !connected) { return; }
   epsBusy = true;
+  const gen = commandGen;
   try {
     const r = await fetch(BASE + "episodes");
-    if (!r.ok) { return; }
+    if (gen !== commandGen) { return; }
+    if (!r.ok) { connection(false); return; }
     const pl = await r.json();
+    if (gen !== commandGen) { return; }
     epsGen = Number(pl.gen) || 0;
     drawEps(pl.episodes || []);
   } catch (e) {
-    epsGen = -1;
+    if (gen === commandGen) { epsGen = -1; connection(false); }
   } finally {
     epsBusy = false;
   }
@@ -179,7 +213,7 @@ function drawEps(list) {
     const n = Number(e.number) || 0;
     const sec = Number(e.position_sec) || 0;
     const row = document.createElement("button");
-    row.disabled = busy;
+    row.disabled = busy || !connected;
     const name = document.createElement("span");
     const pos = document.createElement("span");
     row.className = e.current ? "current" : "";
@@ -195,15 +229,17 @@ function drawEps(list) {
   }
 }
 function toggleEps() {
+  if (!connected || busy) { return; }
   epsOpen = !epsOpen;
   $("eps").hidden = !epsOpen;
+  $("epsbtn").setAttribute("aria-expanded", String(epsOpen));
   $("epsbtn").textContent = L("episodes") + (epsOpen ? " ▴" : " ▾");
   if (epsOpen) { loadEps(); }
 }
 async function call(path, method) {
   const command = method === "POST";
   if (command) {
-    if (busy) { return; }
+    if (busy || !connected) { return; }
     busy = true;
     commandGen++;
     enable(false);
@@ -224,12 +260,12 @@ async function call(path, method) {
     }
     const st = await r.json();
     if (gen !== commandGen) { return; }
-    if (!r.ok) { $("ep").textContent = st.error || ""; enable(live); return; }
+    if (!r.ok) { connection(false); return; }
+    if (!command && path === "status") { connection(true); }
     render(st);
   } catch (e) {
     if (gen !== commandGen) { return; }
-    $("title").textContent = L("offline");
-    enable(live);
+    connection(false);
   } finally {
     if (command) {
       busy = false;
@@ -253,16 +289,17 @@ for (const id of CMDS) {
   $(id).addEventListener("click", () => call(id, "POST"));
 }
 $("epsbtn").addEventListener("click", toggleEps);
-$("seek").addEventListener("click", (e) => {
-  if (!live || dur <= 0 || busy) { return; }
-  // Частка рахується від рамки самої смуги, а не від цілі події: тап по
-  // заповненій частині приходить із ціллю #fill, і зсув усередині цілі дав би
-  // на середині смуги 25 % замість 50 %.
-  const rect = $("bar").getBoundingClientRect();
-  if (rect.width <= 0) { return; }
-  const f = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
-  call("seek/" + Math.round(f * dur), "POST");
+$("session").addEventListener("change", () => call("session/" + $("session").value, "POST"));
+$("seek").addEventListener("input", () => {
+  dragging = true;
+  $("seek").setAttribute("aria-valuetext", mmss($("seek").value) + " / " + mmss(dur));
 });
+$("seek").addEventListener("change", () => {
+  dragging = false;
+  if (!live || dur <= 0 || busy || !connected) { return; }
+  call("seek/" + Math.round(Number($("seek").value)), "POST");
+});
+$("seek").addEventListener("pointercancel", () => { dragging = false; });
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { poll(); } });
 idle();
 poll();

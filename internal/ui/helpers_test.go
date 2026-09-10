@@ -97,6 +97,9 @@ func filterMatchesFromCmd(cmd tea.Cmd) (tea.Msg, bool) {
 		return nil, false
 	}
 	msg := cmd()
+	if _, ok := msg.(filterResultMsg); ok {
+		return msg, true
+	}
 	if _, ok := msg.(list.FilterMatchesMsg); ok {
 		return msg, true
 	}

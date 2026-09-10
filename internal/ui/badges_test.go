@@ -142,7 +142,11 @@ func TestSearchBookmarkRefreshRestoresFilteredItems(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("bookmark refresh returned no filtering command")
 	}
-	m, _ = updateTestModel(t, m, cmd())
+	filterMsg, ok := filterMatchesFromCmd(cmd)
+	if !ok {
+		t.Fatal("no filter result")
+	}
+	m, _ = updateTestModel(t, m, filterMsg)
 	selected, ok := m.list.SelectedItem().(item)
 	if !ok {
 		t.Fatal("bookmark refresh left the filtered selection empty")
@@ -314,7 +318,14 @@ func TestBookmarkAddedFetchesFreshBaseline(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("BookmarkAdded returned no reconcile command")
 	}
-	msg, ok := cmd().(bookmarkBaselineMsg)
+	var msg bookmarkBaselineMsg
+	ok := false
+	for _, result := range collectMsgs(cmd, 100*time.Millisecond) {
+		if v, found := result.(bookmarkBaselineMsg); found {
+			msg = v
+			ok = true
+		}
+	}
 	if !ok {
 		t.Fatalf("reconcile command message = %T, want bookmarkBaselineMsg", msg)
 	}

@@ -64,20 +64,53 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m.requestQuit()
 	}
-	if key == "esc" && m.pending != nil && m.screen != screenPlaying {
-		m.back()
-		return m, nil
-	}
 
 	// під час фільтрації всі клавіші належать списку
-	if m.screen != screenSearch && m.list.SettingFilter() {
+	if m.list.SettingFilter() && m.overlay == overlayNone {
+		// Acceptance applies the query, even if its asynchronous result has
+		// not arrived. Bubbles otherwise decides using the previous matches.
+		if key == "enter" && m.list.FilterValue() != "" {
+			m.list.SetFilterState(list.FilterApplied)
+			m.list.FilterInput.Blur()
+			return m, nil
+		}
+		query := m.list.FilterValue()
 		var cmd tea.Cmd
 		m.list, cmd = m.list.Update(msg)
+		if m.list.FilterValue() != query {
+			m.filterGen++
+		}
+		if m.screen == screenHistory && (m.list.FilterState() == list.Unfiltered || m.list.FilterValue() == "" && !m.list.SettingFilter()) {
+			cmd = tea.Batch(cmd, m.resetHistoryFilter())
+		}
 		return m, cmd
+	}
+	if m.overlay != overlayNone {
+		return m.overlayKey(msg, key)
+	}
+	if m.screen != screenSearch || !m.input.Focused() {
+		if key == "?" {
+			m.openOverlay(overlayHelp)
+			return m, nil
+		}
+		if key == "B" && m.screen == screenPlaying {
+			m.openOverlay(overlayBudget)
+			return m, nil
+		}
+		if key == "U" && m.screen != screenPlaying {
+			return m.undoWatched()
+		}
+		if key == "W" && m.screen == screenEpisodes {
+			return m.watchedBefore()
+		}
+		if key == "esc" && m.pending != nil && m.screen != screenPlaying {
+			m.back()
+			return m, nil
+		}
 	}
 	if (key == "m" || key == "M") && !m.list.SettingFilter() && (m.screen != screenSearch || !m.input.Focused()) {
 		switch m.screen {
-		case screenHome, screenSearch, screenEpisodes:
+		case screenHome, screenSearch, screenEpisodes, screenBookmarks:
 			return m.bookmarkSelected()
 		}
 	}
@@ -93,6 +126,8 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 		m.pendingEp = p.num
 		req := m.nextReq()
 		m.status = i18n.TuiResolving
+		m.statusKind = statusLoading
+		m.statusGen++
 		return m, m.studiosCmd(m.ref, p.num, req)
 	}
 
@@ -179,15 +214,24 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 			return m.forgetSelectedQuery()
 		}
 
-	case screenEpisodes, screenHistory:
+	case screenEpisodes, screenHistory, screenBookmarks:
 		switch key {
 		case "esc":
 			if m.list.FilterState() == list.FilterApplied {
+				if m.screen == screenHistory {
+					return m, m.resetHistoryFilter()
+				}
 				m.list.ResetFilter()
 				return m, nil
 			}
 			m.back()
 			return m, nil
+		case "/":
+			if m.screen == screenHistory {
+				m.historyFiltering = true
+				m.historyAll = m.historyRows()
+				_ = m.setItems(m.visibleHistoryRows(), -1)
+			}
 		case "enter":
 			return m.openSelected()
 		case "x", "X":
@@ -232,8 +276,17 @@ const (
 // раніше, лише скасовує сесію — вихід робить playDoneMsg після Finish.
 func (m Model) playingKey(key string) (tea.Model, tea.Cmd) {
 	if key == "esc" {
+		m.endChain()
 		if m.playCancel != nil {
+			m.endChain()
+			m.liveFrozen = true
 			m.playCancel()
+		} else {
+			m.beginNav()
+			if _, ok := m.currentEpisodes(); ok {
+				return m, m.showEpisodes()
+			}
+			m.showHome()
 		}
 		return m, nil
 	}
@@ -241,28 +294,41 @@ func (m Model) playingKey(key string) (tea.Model, tea.Cmd) {
 	if key == "." {
 		// Прапорець живе в Live — спільне джерело істини для TUI і пульта.
 		// Конфіг не чіпаємо: це бажання на цю серію, а не налаштування.
-		on := !live.StopAfter()
-		live.SetStopAfter(on)
+		if err := live.ToggleStopAfter(); err != nil {
+			m.errText = m.errorText(err)
+			return m, nil
+		}
 		m.errText = ""
 		m.status = i18n.TuiStopAfterOff
-		if on {
+		m.statusKind = statusInfo
+		m.statusGen++
+		if live.Limit().Enabled {
 			m.status = i18n.TuiStopAfterOn
+			m.statusKind = statusInfo
+			m.statusGen++
 		}
+
 		return m, m.liveSnapshotCmd(m.liveGen)
 	}
 	var err error
 	switch key {
 	case "space":
+		m.freezeLive()
 		err = live.TogglePause()
 	case "left":
+		m.freezeLive()
 		err = live.Seek(-seekStep)
 	case "right":
+		m.freezeLive()
 		err = live.Seek(seekStep)
 	case "shift+left":
+		m.freezeLive()
 		err = live.Seek(-seekStepBig)
 	case "shift+right":
+		m.freezeLive()
 		err = live.Seek(seekStepBig)
 	case "n", "N":
+		m.freezeLive()
 		err = live.Next()
 	case "+", "=":
 		err = live.AddVolume(volumeStep)
@@ -280,9 +346,13 @@ func (m Model) playingKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.errText = ""
+	var restore tea.Cmd
+	if key == "n" || key == "N" {
+		restore = m.closeOverlay()
+	}
 	// Знімок без затримки: рядок стану має відповісти на клавішу одразу, а не
 	// на наступному тіку.
-	return m, m.liveSnapshotCmd(m.liveGen)
+	return m, tea.Batch(restore, m.liveSnapshotCmd(m.liveGen))
 }
 
 func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
@@ -326,6 +396,10 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 	switch m.screen {
 	case screenHome:
 		m.refreshHome()
+	case screenBookmarks:
+		f := m.snapshot()
+		m.epsScratch = map[string][]provider.Episode{}
+		refreshCmd = m.restoreRows(f)
 	case screenSearch:
 		// setItems завершується list.Select, а той працює у видимому
 		// (відфільтрованому) просторі — тому тут саме Index(), не GlobalIndex():
@@ -335,6 +409,8 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 	}
 	if result == library.BookmarkAdded {
 		m.status = i18n.TuiBookmarkAdded
+		m.statusKind = statusSuccess
+		m.statusGen++
 		title := m.eng.Lib.TitleByRef(ref)
 		if title == nil {
 			return m, refreshCmd
@@ -342,6 +418,8 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 		return m, tea.Batch(refreshCmd, m.bookmarkBaselineCmd(title.ID, ref, baseline))
 	} else {
 		m.status = i18n.TuiBookmarkRemoved
+		m.statusKind = statusSuccess
+		m.statusGen++
 	}
 	return m, refreshCmd
 }
@@ -372,8 +450,12 @@ func (m Model) toggleWatched() (tea.Model, tea.Cmd) {
 	}
 	if watched {
 		m.status = fmt.Sprintf(i18n.TuiEpMarked, p.num)
+		m.statusKind = statusSuccess
+		m.statusGen++
 	} else {
 		m.status = fmt.Sprintf(i18n.TuiEpUnmarked, p.num)
+		m.statusKind = statusSuccess
+		m.statusGen++
 	}
 	// Пульт показує ті самі позначки, що й список: нова публікація — щоб
 	// телефон не лишився з попереднім станом серії.
@@ -401,8 +483,10 @@ func (m Model) runSearch(q string) (tea.Model, tea.Cmd) {
 	}
 	m.input.SetValue(q)
 	m.input.Blur()
-	m.status = i18n.TuiSearching
 	req := m.beginNav()
+	m.status = i18n.TuiSearching
+	m.statusKind = statusLoading
+	m.statusGen++
 	m.query = q
 	m.page, m.hasMore = 0, false
 	return m, m.searchCmd(q, 1, req)
@@ -446,6 +530,8 @@ func (m Model) openSearch() (tea.Model, tea.Cmd) {
 	_ = m.setItems(rows, firstRow(rows))
 	m.errText = ""
 	m.status = ""
+	m.statusKind = statusInfo
+	m.statusGen++
 	m.query = ""
 	m.cards, m.page, m.hasMore = nil, 0, false
 	m.input.SetValue("")
@@ -461,6 +547,8 @@ func (m Model) openTitle(ref provider.TitleRef) (tea.Model, tea.Cmd) {
 	m.pendingReq = req
 	m.ref = ref
 	m.status = i18n.TuiSearching
+	m.statusKind = statusLoading
+	m.statusGen++
 	return m, m.episodesCmd(ref, req, true)
 }
 
@@ -475,6 +563,15 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		return m.openSearch()
 	case payloadQuery:
 		return m.runSearch(p.q)
+	case payloadBookmarks:
+		m.beginNav()
+		m.stack = append(m.stack, m.snapshot())
+		m.showBookmarks()
+		return m, nil
+	case payloadHistoryMore:
+		first := m.historyShown
+		m.historyShown += 20
+		return m, m.setItems(m.visibleHistoryRows(), first)
 	case payloadHistory:
 		m.beginNav()
 		m.stack = append(m.stack, m.snapshot())
@@ -490,8 +587,11 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		m.stack = append(m.stack, m.snapshot())
 		m.showSettingValue(p.id)
 		m.errText, m.status = "", ""
+		m.statusKind = statusInfo
+		m.statusGen++
 		return m, nil
 	case payloadResume:
+		m.beginChain(p.ref)
 		snap := m.snapshot()
 		req := m.beginNav()
 		m.pending = &snap
@@ -499,6 +599,8 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		m.ref = p.ref
 		m.pendingEp = p.ep
 		m.status = i18n.TuiResolving
+		m.statusKind = statusLoading
+		m.statusGen++
 		// серії підтягнемо у фоні, щоб після перегляду показати список
 		return m, tea.Batch(
 			m.resolveCmd(p.ref, p.ep, req, m.eng.ResolveHints(p.ref, p.ep)),
@@ -509,6 +611,8 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		refs := m.rouletteCandidates()
 		if len(refs) == 0 {
 			m.status = i18n.TuiRouletteEmpty
+			m.statusKind = statusInfo
+			m.statusGen++
 			return m, nil
 		}
 		return m.openTitle(refs[m.randN(len(refs))])
@@ -516,11 +620,16 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		// Довантаження — теж навігаційна дія: свій req, старі відповіді летять у смітник.
 		req := m.beginNav()
 		m.status = i18n.TuiSearching
+		m.statusKind = statusLoading
+		m.statusGen++
 		return m, m.searchCmd(m.query, m.page+1, req)
 	case payloadEp:
+		m.beginChain(m.ref)
 		req := m.beginNav()
 		m.pendingEp = p.num
 		m.status = i18n.TuiResolving
+		m.statusKind = statusLoading
+		m.statusGen++
 		return m, m.resolveCmd(m.ref, p.num, req, m.eng.ResolveHints(m.ref, p.num))
 	case payloadStudio:
 		if err := m.eng.PinStudio(m.ref, p.src.Studio, p.src.Kind); err != nil {
@@ -529,6 +638,8 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		}
 		req := m.beginNav()
 		m.status = i18n.TuiResolving
+		m.statusKind = statusLoading
+		m.statusGen++
 		// підказки знімаються ПІСЛЯ PinStudio: новий пін має потрапити у вибір
 		return m, m.resolveCmd(m.ref, m.pendingEp, req, m.eng.ResolveHints(m.ref, m.pendingEp))
 	}

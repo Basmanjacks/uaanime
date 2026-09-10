@@ -1,6 +1,7 @@
 package ui
 
 import (
+	tea "charm.land/bubbletea/v2"
 	"fmt"
 	"sort"
 	"strings"
@@ -13,6 +14,13 @@ import (
 // showHistory — переглянуті тайтли, згруповані за найсвіжішим прогресом.
 func (m *Model) showHistory() {
 	m.setScreen(screenHistory)
+	m.historyShown = 20
+	m.historyFiltering = false
+	m.historyAll = m.historyRows()
+	_ = m.setItems(m.visibleHistoryRows(), 0)
+}
+
+func (m *Model) historyRows() []item {
 	groups := groupHistory(m.eng.Lib.Progress)
 
 	now := time.Now()
@@ -35,13 +43,11 @@ func (m *Model) showHistory() {
 				i18n.Episodes(group.count),
 				humanDate(p.WatchedAt, now),
 			}, " · "),
+			role:    "history",
 			payload: payloadResume{ref: t.Sources[0], ep: p.Episode},
 		})
-		if len(items) == 20 {
-			break
-		}
 	}
-	_ = m.setItems(items, 0)
+	return items
 }
 
 type historyGroup struct {
@@ -94,4 +100,31 @@ func (m *Model) titleByID(id string) *library.LocalTitle {
 		}
 	}
 	return nil
+}
+
+func (m *Model) visibleHistoryRows() []item {
+	if m.historyFiltering {
+		return m.historyAll
+	}
+	n := min(max(20, m.historyShown), len(m.historyAll))
+	rows := append([]item(nil), m.historyAll[:n]...)
+	if n < len(m.historyAll) {
+		rows = append(rows, item{title: i18n.TuiHistoryMore, payload: payloadHistoryMore{}})
+	}
+	return rows
+}
+func (m *Model) resetHistoryFilter() tea.Cmd {
+	key := m.selectedKey()
+	m.list.ResetFilter()
+	m.historyFiltering = false
+	m.historyAll = m.historyRows()
+	for i, it := range m.historyAll {
+		if it.key() == key {
+			m.historyShown = max(m.historyShown, ((i/20)+1)*20)
+			break
+		}
+	}
+	cmd := m.setItems(m.visibleHistoryRows(), -1)
+	m.selectKey(key, m.list.Index())
+	return cmd
 }

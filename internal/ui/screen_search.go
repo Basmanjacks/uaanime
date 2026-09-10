@@ -91,6 +91,8 @@ func (m *Model) applySearchPage(msg searchDoneMsg) tea.Cmd {
 			m.hasMore = false
 			m.setDelegate(false)
 			m.status = i18n.TuiNothingFound
+			m.statusKind = statusInfo
+			m.statusGen++
 			// Запит без результатів не запам'ятовуємо: повторювати його немає сенсу.
 			rows := m.recentRows()
 			return m.setItems(rows, firstRow(rows))

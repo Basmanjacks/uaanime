@@ -686,3 +686,67 @@ func TestJourneyRemotePlaylistSwitchesHeadlessEpisode(t *testing.T) {
 		t.Errorf("серія 1 = %+v, want 40 с", p)
 	}
 }
+
+func TestJourneySessionLimitOverridesAutoplay(t *testing.T) {
+	remoteEnv(t)
+	held := playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440})
+	held.Hold = true
+	dir, _, fp := journeyEnv(t, held, playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}), playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}))
+	writeConfig(t, dir, `{"autoplay":"never","remote":"on"}`)
+	done := make(chan error, 1)
+	go func() {
+		st, code, err := remoteCommand(dir, remoteBase(remoteIdentity(t, dir)), "session/2")
+		held.Release()
+		if err == nil && (code != http.StatusOK || !st.SessionLimited || st.SessionRemaining != 2) {
+			err = fmt.Errorf("session/2: %d %+v", code, st)
+		}
+		done <- err
+	}()
+	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")
+	mustExit(t, 0, code, out, errOut)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fp.Starts()); n != 2 {
+		t.Fatalf("starts=%d want2; %s", n, out)
+	}
+}
+
+func TestJourneyManualNextPreservesSessionAllowance(t *testing.T) {
+	remoteEnv(t)
+	held := playertest.NewSession(player.EndQuit, []float64{40}, []float64{1440})
+	held.Hold = true
+	dir, _, fp := journeyEnv(t, held, playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}), playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}), playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}))
+	writeConfig(t, dir, `{"autoplay":"never","remote":"on"}`)
+	done := make(chan error, 1)
+	go func() {
+		defer held.Release()
+		base := remoteBase(remoteIdentity(t, dir))
+		for _, command := range []string{"session/2", "next"} {
+			_, code, err := remoteCommand(dir, base, command)
+			if err == nil && code != http.StatusOK {
+				err = fmt.Errorf("%s: %d", command, code)
+			}
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")
+	mustExit(t, 0, code, out, errOut)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := len(fp.Starts()); n != 3 {
+		t.Fatalf("starts=%d want3 (manual replacement + two completed episodes); %s", n, out)
+	}
+	lib := loadLibrary(t, dir)
+	title := lib.TitleByRef(fixtureRef(t))
+	for _, n := range []int{2, 3} {
+		if p := lib.ProgressFor(title.ID, n); p == nil || !p.Completed {
+			t.Fatalf("episode%d notcompleted: %+v", n, p)
+		}
+	}
+}

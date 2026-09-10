@@ -464,7 +464,7 @@ func TestStopAfterTogglesBothWays(t *testing.T) {
 
 // Новий маршрут без захисту від CSRF — це той самий чужий сайт, що керує плеєром.
 func TestCrossOriginPostIsForbiddenOnNewPaths(t *testing.T) {
-	for _, cmd := range []string{"back30", "forward30", "volup", "voldown", "stopafter", "seek/42"} {
+	for _, cmd := range []string{"back30", "forward30", "volup", "voldown", "stopafter", "seek/42", "session/2"} {
 		c := playingCtl()
 		h := newTestHandler(t, c)
 		rec := doReq(t, h, http.MethodPost, base(cmd), lanHost, map[string]string{"Sec-Fetch-Site": "cross-site"})
@@ -488,7 +488,7 @@ func TestStatusJSONFields(t *testing.T) {
 	}
 	want := []string{
 		"playing", "title", "episode", "position_sec", "duration_sec", "paused",
-		"volume_pct", "stop_after", "playlist_gen",
+		"volume_pct", "stop_after", "playlist_gen", "studio", "session_limited", "session_remaining",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {
@@ -693,17 +693,12 @@ func TestPageIDsUsedByScriptExist(t *testing.T) {
 	}
 }
 
-// Позиція тапу по смузі рахується від рамки смуги. offsetX дав би зсув
-// відносно цілі події, тобто відносно #fill при тапі по заповненій частині:
-// тап посередині 50-відсоткової смуги перемотав би на 25 %.
-func TestSeekBarUsesBoundingRect(t *testing.T) {
-	body := do(t, newTestHandler(t, playingCtl()), http.MethodGet, "/r/"+testToken).Body.String()
-
-	if !strings.Contains(body, "getBoundingClientRect") {
-		t.Error("смуга перемотки не міряє себе через getBoundingClientRect")
-	}
-	if strings.Contains(body, "offsetX") {
-		t.Error("смуга перемотки рахує позицію через offsetX — це зсув відносно цілі події")
+func TestSeekUsesAccessibleNativeRange(t *testing.T) {
+	body := do(t, newTestHandler(t, playingCtl()), http.MethodGet, base("")).Body.String()
+	for _, want := range []string{`type="range"`, `for="seek"`, `aria-valuetext`, `addEventListener("change"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing accessible seek %q", want)
+		}
 	}
 }
 
@@ -905,7 +900,7 @@ func TestPlayPathParsing(t *testing.T) {
 	c.playlist = testPlaylist()
 	h := newTestHandler(t, c)
 	bad := []string{
-		"play/7/0", "play/a/2", "play/7", "play//2", "play/7/", "play/",
+		"play/a/2", "play/7", "play//2", "play/7/", "play/",
 		"play", "play/7/2/3", "play/7/-2", "play/7/+2", "play/7/2.0",
 		"play/1234567/2", "play/7/12345", "play/7/abc", "play/%207/2",
 	}
@@ -965,5 +960,49 @@ func TestPlaylistMethodsAndCSRF(t *testing.T) {
 	}
 	if len(c.plays) != 0 {
 		t.Fatalf("контролер викликано попри 405/403: %v", c.plays)
+	}
+}
+
+func (f *fakeCtl) SetSessionLimit(n int) error {
+	if err := f.record(fmt.Sprintf("session/%d", n)); err != nil {
+		return err
+	}
+	f.st.SessionLimited, f.st.SessionRemaining = n > 0, n
+	return nil
+}
+
+func TestSessionLimitRoutes(t *testing.T) {
+	for _, n := range []int{0, 1, 2, 12} {
+		c := playingCtl()
+		rec := do(t, newTestHandler(t, c), http.MethodPost, base(fmt.Sprintf("session/%d", n)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("session/%d: %d", n, rec.Code)
+		}
+		st := decodeStatus(t, rec)
+		if st.SessionLimited != (n > 0) || st.SessionRemaining != n {
+			t.Fatalf("session/%d: %+v", n, st)
+		}
+	}
+	for _, path := range []string{"session/13", "session/-1", "session/+1", "session/", "session/1/2", "session/1.0", "session/999"} {
+		if rec := do(t, newTestHandler(t, playingCtl()), http.MethodPost, base(path)); rec.Code != http.StatusNotFound {
+			t.Errorf("%s: %d", path, rec.Code)
+		}
+	}
+	c := playingCtl()
+	c.cmdErr = ErrNotPlaying
+	if rec := do(t, newTestHandler(t, c), http.MethodPost, base("session/2")); rec.Code != http.StatusConflict {
+		t.Fatalf("idle: %d", rec.Code)
+	}
+	if rec := do(t, newTestHandler(t, playingCtl()), http.MethodGet, base("session/2")); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET: %d", rec.Code)
+	}
+}
+
+func TestPlayEpisodeZero(t *testing.T) {
+	c := playingCtl()
+	c.playlist = testPlaylist()
+	rec := do(t, newTestHandler(t, c), http.MethodPost, base("play/7/0"))
+	if rec.Code != http.StatusOK || len(c.plays) != 1 || c.plays[0][1] != 0 {
+		t.Fatalf("zero: %d %v", rec.Code, c.plays)
 	}
 }

@@ -20,12 +20,13 @@ type LocalTitle struct {
 // «переглядаєш» / «переглянуто» рахуються з журналу прогресу (див. StatusOf),
 // бо збережений стан розходився з ним при кожній ручній позначці.
 type Entry struct {
-	TitleID       string        `json:"title_id"`
-	StudioPin     string        `json:"studio_pin,omitempty"`
-	KindPin       provider.Kind `json:"kind_pin,omitempty"`
-	LastEpisode   int           `json:"last_episode,omitempty"`
-	KnownEpisodes int           `json:"known_episodes,omitempty"`
-	Hidden        bool          `json:"hidden,omitempty"`
+	ReleaseBaseline *ReleaseBaseline `json:"release_baseline,omitempty"`
+	TitleID         string           `json:"title_id"`
+	StudioPin       string           `json:"studio_pin,omitempty"`
+	KindPin         provider.Kind    `json:"kind_pin,omitempty"`
+	LastEpisode     int              `json:"last_episode,omitempty"`
+	KnownEpisodes   int              `json:"known_episodes,omitempty"`
+	Hidden          bool             `json:"hidden,omitempty"`
 }
 
 type BookmarkResult int
@@ -98,6 +99,7 @@ func (l *Library) Normalize(clean func(string) string) (dropped int) {
 			continue
 		}
 		e.StudioPin = clean(e.StudioPin)
+		e.ReleaseBaseline = normalizeBaseline(e.ReleaseBaseline, clean)
 		// Порожній KindPin означає «пін не стоїть» — саме це й потрібно,
 		// коли на диску опинилося щось невідоме: гадати тип заборонено.
 		if e.KindPin != "" && !provider.ValidKind(e.KindPin) {

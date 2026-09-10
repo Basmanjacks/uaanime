@@ -38,6 +38,8 @@ func (m Model) View() tea.View {
 		title = m.currentTitleName()
 	case screenStudio:
 		title = i18n.TuiStudioTitle
+	case screenBookmarks:
+		title = i18n.TuiBookmarksTitle
 	case screenHistory:
 		title = i18n.TuiHistoryItem
 	case screenSettings:
@@ -47,6 +49,12 @@ func (m Model) View() tea.View {
 	default:
 		title = i18n.TuiAppTitle
 	}
+	if m.overlay == overlayHelp {
+		title = i18n.TuiHelpTitle
+	}
+	if m.overlay == overlayBudget {
+		title = i18n.TuiBudgetTitle
+	}
 	// Жоден рядок не має бути ширшим за термінал: перенесення зсуває кадр і
 	// ховає нижній рядок. Заголовок і підказка/статус обрізаються тут, список
 	// обрізає делегат, а банер має власний fallback.
@@ -55,7 +63,7 @@ func (m Model) View() tea.View {
 	}
 
 	var body string
-	if m.screen == screenHome {
+	if m.screen == screenHome && m.overlay == overlayNone {
 		if m.bannerVisible() {
 			body = m.brandHeader()
 		} else {
@@ -64,10 +72,15 @@ func (m Model) View() tea.View {
 	} else {
 		body = styleTitle.Render(title) + "\n"
 	}
-	if m.screen == screenSearch {
+	if m.overlay == overlayBudget {
+		for _, line := range m.budgetNoteLines() {
+			body += styleRemote.Render(line) + "\n"
+		}
+	}
+	if m.screen == screenSearch && m.overlay == overlayNone {
 		body += "  " + m.input.View() + "\n"
 	}
-	if m.screen == screenPlaying {
+	if m.screen == screenPlaying && m.overlay == overlayNone {
 		if line := m.liveLine(); line != "" {
 			if m.w > 0 {
 				line = truncate(line, m.w-2)
@@ -88,7 +101,14 @@ func (m Model) View() tea.View {
 		if len(m.list.Items()) == 0 {
 			// Не даємо bubbles показати англійське «No items.» і тримаємо
 			// геометрію сталою навіть до появи результатів.
-			listView = lipgloss.NewStyle().Height(m.listHeight()).Render(styleStatus.Render(""))
+			empty := ""
+			if m.screen == screenBookmarks {
+				empty = i18n.TuiBookmarksEmpty
+				if m.w > 0 {
+					empty = truncate(empty, m.w-2)
+				}
+			}
+			listView = lipgloss.NewStyle().Height(m.listHeight()).Render(styleStatus.Render(empty))
 		}
 		body += listView + "\n"
 	}
@@ -102,10 +122,16 @@ func (m Model) View() tea.View {
 	// Помилки й статуси несуть текст ззовні (шляхи, адреси, відповіді сайту):
 	// чистимо в одному місці замість кожного продюсера.
 	switch {
-	case m.errText != "":
-		body += styleErr.Render(fit(provider.CleanText(m.errText)))
 	case m.journalWarning:
 		body += styleErr.Render(fit(i18n.MsgJournalFailed))
+	case m.overlay == overlayBudget:
+		body += styleHint.Render(fit(m.actionHint()))
+	case m.overlay == overlayHelp:
+		body += styleHint.Render(fit(m.actionHint()))
+	case m.errText != "":
+		body += styleErr.Render(fit(provider.CleanText(m.errText)))
+	case m.baselineWarning:
+		body += styleErr.Render(fit(i18n.TuiBaselineFailed))
 	case m.status != "":
 		body += styleStatus.Render(fit(provider.CleanText(m.status)))
 	default:
@@ -169,14 +195,49 @@ func metaTail(parts []string) string {
 // якій гучності грає. Гучність показується завжди, коли плеєр її повідомив:
 // це єдине підтвердження, що клавіші «+»/«−» справді дійшли.
 func (m Model) liveLine() string {
-	parts := make([]string, 0, 2)
-	if eta := m.etaLine(); eta != "" {
-		parts = append(parts, eta)
+	if !m.live.Playing {
+		return ""
 	}
-	if m.live.Playing && m.live.VolumePct >= 0 {
-		parts = append(parts, fmt.Sprintf(i18n.TuiVolume, int(math.Round(m.live.VolumePct))))
+	pos := m.displayPosition()
+	clock := func(v float64) string { return fmt.Sprintf("%02d:%02d", int(v)/60, int(v)%60) }
+	parts := []string{fmt.Sprintf(i18n.TuiEpisodeNo, m.pendingEp), clock(pos)}
+	if m.live.DurationSec > 0 {
+		parts[1] += " / " + clock(m.live.DurationSec)
+	}
+	if m.live.Paused {
+		parts = append(parts, i18n.TuiPaused)
+	}
+	if m.live.SessionLimited {
+		parts = append(parts, fmt.Sprintf(i18n.TuiBudgetRemaining, m.live.SessionRemaining))
+	}
+	if m.w > 0 && lipgloss.Width(strings.Join(parts, metaSep)) > m.w-2 && m.live.DurationSec > 0 {
+		parts[1] = clock(pos)
+	}
+	if m.w > 0 && lipgloss.Width(strings.Join(parts, metaSep)) > m.w-2 {
+		parts[0] = fmt.Sprintf(i18n.TuiEpisodeShort, m.pendingEp)
+		if m.live.SessionLimited {
+			parts[len(parts)-1] = fmt.Sprintf(i18n.TuiBudgetShort, m.live.SessionRemaining)
+		}
+	}
+	extras := []string{}
+	if m.live.VolumePct >= 0 {
+		extras = append(extras, fmt.Sprintf(i18n.TuiVolume, int(math.Round(m.live.VolumePct))))
+	}
+	if eta := m.etaLine(); eta != "" {
+		extras = append(extras, eta)
+	}
+	if m.live.Studio != "" {
+		extras = append(extras, m.live.Studio)
+	}
+	for _, extra := range extras {
+		line := strings.Join(append(parts, extra), metaSep)
+		if m.w > 0 && lipgloss.Width(line) > m.w-2 {
+			continue
+		}
+		parts = append(parts, extra)
 	}
 	return strings.Join(parts, metaSep)
+
 }
 
 // etaLine — коли серія закінчиться при поточній позиції. Без відомої
@@ -187,7 +248,7 @@ func (m Model) etaLine() string {
 	if !m.live.Playing || m.live.DurationSec <= 0 {
 		return ""
 	}
-	left := max(m.live.DurationSec-m.live.PositionSec, 0)
+	left := max(m.live.DurationSec-m.displayPosition(), 0)
 	at := m.now().Add(time.Duration(left * float64(time.Second))).Format("15:04")
 	if m.live.Paused {
 		return fmt.Sprintf(i18n.TuiFinishAtPaused, at)
@@ -251,30 +312,4 @@ func (m Model) remoteQR(usedRows int) (string, bool) {
 	return styleQR.Render(block), true
 }
 
-// hintPlayingNarrow — ширина, нижче якої повна підказка «Грає» вже не влазить
-// і починає обрізатися на півслові.
-const hintPlayingNarrow = 76
-
-func (m Model) hint() string {
-	switch m.screen {
-	case screenSearch:
-		return i18n.TuiHintSearch
-	case screenPlaying:
-		if m.w > 0 && m.w < hintPlayingNarrow {
-			return i18n.TuiHintPlayingNarrow
-		}
-		return i18n.TuiHintPlaying
-	case screenEpisodes:
-		return i18n.TuiHintEpisodes
-	case screenStudio:
-		return i18n.TuiHintStudio
-	case screenHistory:
-		return i18n.TuiHintList
-	case screenSettings:
-		return i18n.TuiHintSettings
-	case screenSettingValue:
-		return i18n.TuiHintSettingsPick
-	default:
-		return i18n.TuiHintHome
-	}
-}
+func (m Model) hint() string { return m.actionHint() }

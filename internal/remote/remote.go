@@ -47,12 +47,15 @@ var pageHTML string
 // Status — усе, що пульт показує на екрані. Значення лише скалярні: сторінка
 // має рендеритися з одного JSON без додаткових запитів.
 type Status struct {
-	Playing     bool    `json:"playing"`
-	Title       string  `json:"title"`
-	Episode     int     `json:"episode"`
-	PositionSec float64 `json:"position_sec"`
-	DurationSec float64 `json:"duration_sec"`
-	Paused      bool    `json:"paused"`
+	Studio           string  `json:"studio"`
+	SessionLimited   bool    `json:"session_limited"`
+	SessionRemaining int     `json:"session_remaining"`
+	Playing          bool    `json:"playing"`
+	Title            string  `json:"title"`
+	Episode          int     `json:"episode"`
+	PositionSec      float64 `json:"position_sec"`
+	DurationSec      float64 `json:"duration_sec"`
+	Paused           bool    `json:"paused"`
 	// VolumePct — 0..100; VolumeUnknown, коли плеєр не назвав гучність
 	// (нічого не грає або доріжки немає) — 0 там означало б тишу.
 	VolumePct float64 `json:"volume_pct"`
@@ -109,6 +112,7 @@ type Controller interface {
 	// ToggleStopAfter — перемикач без аргументу: сторінка не надсилає бажаний
 	// стан, бо між опитуванням і тапом його міг змінити TUI.
 	ToggleStopAfter() error
+	SetSessionLimit(int) error
 	// Episodes — список серій відкритого тайтлу; порожній Playlist (Gen 0) —
 	// не помилка, а «зараз показувати нічого».
 	Episodes() (Playlist, error)
@@ -160,6 +164,8 @@ type handler struct {
 }
 
 type pageData struct {
+	Session, SessionOff, SessionHint, SessionRemaining, VolumeDown, VolumeUp, Seek, Reconnecting string
+	SessionOptions                                                                               []int
 	// Base — "/r/<token>/" (або "/" у відкритому режимі), із похилою рискою в
 	// кінці: JS клеїть BASE + "status". Тип JSStr і підстановка в шаблоні БЕЗ лапок (`const BASE = {{.Base}};`):
 	// усередині лапок html/template екранує кожну "/" як "\/", а в позиції
@@ -221,24 +227,26 @@ func newHandler(token string, open bool, c Controller) (http.Handler, error) {
 	// кожен запит з телефона — це просто копія байтів.
 	var buf bytes.Buffer
 	data := pageData{
-		Base:       template.JSStr(base),
-		Title:      i18n.RemotePageTitle,
-		Idle:       i18n.RemoteIdle,
-		Episode:    i18n.RemoteEpisodeFmt,
-		Play:       i18n.RemotePlay,
-		Pause:      i18n.RemotePause,
-		Back:       i18n.RemoteBack,
-		Forward:    i18n.RemoteForward,
-		Back30:     i18n.RemoteBack30,
-		Forward30:  i18n.RemoteForward30,
-		Volume:     i18n.RemoteVolume,
-		VolumeFmt:  i18n.RemoteVolumeFmt,
-		Next:       i18n.RemoteNext,
-		StopAfter:  i18n.RemoteStopAfter,
-		Episodes:   i18n.RemoteEpisodes,
-		NoPlaylist: i18n.RemoteNoPlaylist,
-		Stop:       i18n.RemoteStop,
-		Offline:    i18n.RemoteOffline,
+		Session: i18n.RemoteSession, SessionOff: i18n.RemoteSessionOff, SessionHint: i18n.RemoteSessionHint, SessionRemaining: i18n.RemoteSessionRemaining, VolumeDown: i18n.RemoteVolumeDown, VolumeUp: i18n.RemoteVolumeUp, Seek: i18n.RemoteSeek, Reconnecting: i18n.RemoteReconnecting,
+		SessionOptions: []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+		Base:           template.JSStr(base),
+		Title:          i18n.RemotePageTitle,
+		Idle:           i18n.RemoteIdle,
+		Episode:        i18n.RemoteEpisodeFmt,
+		Play:           i18n.RemotePlay,
+		Pause:          i18n.RemotePause,
+		Back:           i18n.RemoteBack,
+		Forward:        i18n.RemoteForward,
+		Back30:         i18n.RemoteBack30,
+		Forward30:      i18n.RemoteForward30,
+		Volume:         i18n.RemoteVolume,
+		VolumeFmt:      i18n.RemoteVolumeFmt,
+		Next:           i18n.RemoteNext,
+		StopAfter:      i18n.RemoteStopAfter,
+		Episodes:       i18n.RemoteEpisodes,
+		NoPlaylist:     i18n.RemoteNoPlaylist,
+		Stop:           i18n.RemoteStop,
+		Offline:        i18n.RemoteOffline,
 	}
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return nil, err
@@ -313,6 +321,10 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "stop":
 		h.onPost(w, r, h.ctrl.Stop)
 	default:
+		if n, ok := parseSessionLimit(suffix); ok {
+			h.onPost(w, r, func() error { return h.ctrl.SetSessionLimit(n) })
+			return
+		}
 		if sec, ok := parseSeekTo(suffix); ok {
 			h.onPost(w, r, func() error { return h.ctrl.SeekTo(sec) })
 			return
@@ -358,7 +370,7 @@ func parsePlay(suffix string) (gen, n int, ok bool) {
 	if gen, ok = parseDigits(genText, maxGenDigits); !ok {
 		return 0, 0, false
 	}
-	if n, ok = parseDigits(epText, maxEpisodeDigits); !ok || n == 0 {
+	if n, ok = parseDigits(epText, maxEpisodeDigits); !ok {
 		return 0, 0, false
 	}
 	return gen, n, true
@@ -561,4 +573,13 @@ func (s *Server) Close(ctx context.Context) error {
 	err := s.srv.Shutdown(ctx)
 	<-s.served
 	return err
+}
+
+func parseSessionLimit(suffix string) (int, bool) {
+	text, ok := strings.CutPrefix(suffix, "session/")
+	if !ok {
+		return 0, false
+	}
+	n, ok := parseDigits(text, 2)
+	return n, ok && n <= 12
 }

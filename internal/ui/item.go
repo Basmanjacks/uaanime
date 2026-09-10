@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"strconv"
+
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -42,11 +44,22 @@ func (i item) key() string {
 	}
 	switch payload := i.payload.(type) {
 	case payloadResume:
-		return "resume:" + payload.ref.Provider + ":" + payload.ref.Slug
+		role := i.role
+		if role == "" {
+			role = "resume"
+		}
+		return role + ":" + payload.ref.Provider + ":" + payload.ref.Slug
 	case payloadTitle:
 		if i.role != "" {
 			return i.role + ":" + payload.ref.Provider + ":" + payload.ref.Slug
 		}
+		return "title:" + payload.ref.Provider + ":" + payload.ref.Slug
+	case payloadEp:
+		return "ep:" + i.role + ":" + strconv.Itoa(payload.num)
+	case payloadBookmarks:
+		return "bookmarks"
+	case payloadHistoryMore:
+		return "history:more"
 	case payloadSearch:
 		return "search"
 	case payloadRoulette:
@@ -76,8 +89,11 @@ type (
 		ref     provider.TitleRef
 		epAired int
 	}
-	payloadMore   struct{} // «показати ще» — наступна сторінка результатів
-	payloadSearch struct{}
+	payloadBookmarks   struct{}
+	payloadHistoryMore struct{}
+	payloadBudget      struct{ n int }
+	payloadMore        struct{} // «показати ще» — наступна сторінка результатів
+	payloadSearch      struct{}
 	// payloadRoulette — «Що подивитись?»: тайтл обирається в момент натискання,
 	// а не при побудові рядка, інакше «випадковий» вибір застигав би до
 	// наступного перемальовування домівки.
