@@ -66,7 +66,7 @@ type (
 	}
 	// libraryEpisodesMsg — кеш списків серій бібліотеки оновлено; рядки домівки
 	// перечитають його самі.
-	libraryEpisodesMsg struct{}
+	libraryEpisodesMsg struct{ seeds []playback.ReleaseSeed }
 	// nyaOffMsg — час кота вийшов; банер повертається до сезонного.
 	nyaOffMsg           struct{}
 	bookmarkBaselineMsg struct {
@@ -74,6 +74,7 @@ type (
 		ref         provider.TitleRef
 		provisional int
 		maxEp       int
+		eps         []provider.Episode
 		err         error
 	}
 )

@@ -44,6 +44,7 @@ func (m *Model) episodeRows() []item {
 			title:   fmt.Sprintf(i18n.TuiEpisodeNo, ep.Number),
 			meta:    meta,
 			badge:   badge,
+			role:    m.ref.Provider + ":" + m.ref.Slug,
 			payload: payloadEp{num: ep.Number},
 		})
 	}

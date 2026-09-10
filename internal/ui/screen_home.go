@@ -15,6 +15,10 @@ import (
 // заголовок читається як помилка, а не як структура.
 func (m *Model) showHome() {
 	m.setScreen(screenHome)
+	m.rebuildHome()
+}
+
+func (m *Model) rebuildHome() {
 	m.epsScratch = map[string][]provider.Episode{}
 	m.errText = ""
 	m.homeSpacers = m.list.Height() >= 16
@@ -34,7 +38,8 @@ func (m *Model) showHome() {
 			items = sectionGap(items, 1, m.homeSpacers)
 		}
 		items = append(items, item{header: true, title: i18n.TuiBlockLibrary})
-		items = append(items, lib...)
+		items = append(items, lib[:min(5, len(lib))]...)
+		items = append(items, item{title: fmt.Sprintf(i18n.TuiAllBookmarks, len(lib)), payload: payloadBookmarks{}})
 		own += len(lib)
 	}
 
@@ -55,8 +60,12 @@ func (m *Model) showHome() {
 	_ = m.setItems(items, firstRow(items))
 	if own == 0 {
 		m.status = i18n.TuiEmptyLibrary
+		m.statusKind = statusInfo
+		m.statusGen++
 	} else {
 		m.status = ""
+		m.statusKind = statusInfo
+		m.statusGen++
 	}
 }
 
@@ -94,6 +103,14 @@ func (m *Model) bookmarkRows() []item {
 		}
 		status := m.titleStatus(t)
 		meta, badge := statusMeta(status)
+		if !m.newsDisabled[e.TitleID] {
+			if studio, n := m.eng.Lib.PreferredFresh(e.TitleID, m.titleEpisodes(t), m.eng.Prefs); n > 0 {
+				badge = fmt.Sprintf(i18n.TuiStudioNews, n, studio)
+				if m.screen == screenBookmarks && status.Fresh != n {
+					meta += metaSep + i18n.NewEpisodes(status.Fresh)
+				}
+			}
+		}
 		rows = append(rows, row{
 			it: item{
 				title:   titleName(t),
@@ -314,16 +331,20 @@ func statusMeta(s library.Status) (meta, badge string) {
 // перемалювати чужий список фоновим повідомленням — це вкрасти в людини те,
 // на що вона зараз дивиться.
 func (m *Model) refreshHome() {
-	if m.screen != screenHome {
+	if m.overlay != overlayNone || m.screen != screenHome {
 		return
 	}
-	cursor, errText := m.list.GlobalIndex(), m.errText
+	cursor, errText := m.list.Index(), m.errText
+	status, kind, gen := m.status, m.statusKind, m.statusGen
 	selectedKey := ""
 	if selected, ok := m.list.SelectedItem().(item); ok {
 		selectedKey = selected.key()
 	}
 	m.showHome()
 	m.errText = errText
+	if status != "" && kind != statusInfo {
+		m.status, m.statusKind, m.statusGen = status, kind, gen
+	}
 	if len(m.list.Items()) == 0 {
 		return
 	}

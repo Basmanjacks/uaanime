@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"charm.land/bubbles/v2/list"
@@ -32,6 +33,7 @@ const (
 	screenHistory
 	screenSettings
 	screenSettingValue
+	screenBookmarks
 )
 
 // RemoteInfo — стан веб-пульта після (пере)запуску. Err — фатально: пульт не
@@ -96,6 +98,31 @@ func (v view) clone() view {
 }
 
 type Model struct {
+	bootstrapRefs    []provider.TitleRef
+	bootstrapPending bool
+	deferredEpisodes *episodeRequest
+	deferredBookmark *bookmarkRequest
+	badgeScheduled   *atomic.Bool
+	newsDisabled     map[string]bool
+	baselineWarning  bool
+
+	initialRemote    bool
+	overlay          overlayKind
+	overlayFrame     *frame
+	historyAll       []item
+	historyShown     int
+	historyFiltering bool
+	filterGen        int
+	restoreSelection *frame
+	pendingUI        tea.Cmd
+	undo             *playback.WatchedUndo
+	statusKind       statusKind
+	statusGen        int
+	liveAt           time.Time
+	liveFrozen       bool
+	localTicking     bool
+	chainActive      bool
+
 	eng   *playback.Engine
 	list  list.Model
 	input textinput.Model
@@ -175,6 +202,10 @@ const (
 )
 
 func New(eng *playback.Engine, opts Options) Model {
+	initialRemote := eng.Live != nil
+	if eng.Live == nil {
+		eng.Live = &playback.Live{}
+	}
 	if opts.Cfg == nil {
 		opts.Cfg = store.DefaultConfig()
 	}
@@ -202,18 +233,21 @@ func New(eng *playback.Engine, opts Options) Model {
 	in.SetVirtualCursor(false)
 
 	m := Model{
-		eng:        eng,
-		list:       l,
-		input:      in,
-		ic:         ic,
-		catalog:    map[provider.CatalogKind][]provider.TitleCard{},
-		epsScratch: map[string][]provider.Episode{},
-		cfg:        opts.Cfg,
-		remote:     opts.Remote,
-		opts:       opts,
-		now:        time.Now,
-		randN:      rand.IntN,
+		badgeScheduled: &atomic.Bool{},
+		initialRemote:  initialRemote,
+		eng:            eng,
+		list:           l,
+		input:          in,
+		ic:             ic,
+		catalog:        map[provider.CatalogKind][]provider.TitleCard{},
+		epsScratch:     map[string][]provider.Episode{},
+		cfg:            opts.Cfg,
+		remote:         opts.Remote,
+		opts:           opts,
+		now:            time.Now,
+		randN:          rand.IntN,
 	}
+	m.prepareBootstrap()
 	m.loadCachedCatalog()
 	m.showHome()
 	return m
@@ -276,10 +310,12 @@ func (m Model) Init() tea.Cmd {
 			cmds = append(cmds, m.catalogCmd(kind))
 		}
 	}
-	if cmd := m.libraryEpisodesCmd(); cmd != nil {
+	if cmd := m.bootstrapCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	} else if cmd := m.libraryEpisodesCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
-	if cmd := m.remoteRequestCmd(); cmd != nil {
+	if cmd := m.remoteRequestCmd(); m.initialRemote && cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if len(cmds) == 0 {

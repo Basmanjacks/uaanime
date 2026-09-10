@@ -31,10 +31,10 @@ func TestHistoryStableNewestAndLimit(t *testing.T) {
 	original := append([]*library.Progress(nil), m.eng.Lib.Progress...)
 	m.showHistory()
 	items := homeItems(t, m)
-	if len(items) != 20 {
-		t.Fatalf("rows = %d, want 20", len(items))
+	if len(items) != 21 {
+		t.Fatalf("rows = %d, want 20 plus More", len(items))
 	}
-	for i, row := range items {
+	for i, row := range items[:20] {
 		if row.payload.(payloadResume).ref.Slug != fmt.Sprintf("title-%d", i) {
 			t.Errorf("row %d = %#v", i, row.payload)
 		}

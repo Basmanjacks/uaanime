@@ -63,14 +63,17 @@ const VolumeUnknown = -1.0
 // Snapshot — стан сесії для пульта. Лише значення: у пульта немає доступу
 // ні до бібліотеки, ні до самої сесії.
 type Snapshot struct {
-	Playing     bool
-	Title       string
-	Episode     int
-	PositionSec float64
-	DurationSec float64
-	Paused      bool
-	VolumePct   float64
-	StopAfter   bool
+	Playing          bool
+	Title            string
+	Episode          int
+	PositionSec      float64
+	DurationSec      float64
+	Paused           bool
+	VolumePct        float64
+	StopAfter        bool
+	Studio           string
+	SessionLimited   bool
+	SessionRemaining int
 }
 
 // ErrNotPlaying — команда пульта, коли нічого не грає.
@@ -81,13 +84,17 @@ var ErrNotPlaying = errors.New("зараз нічого не грає")
 // НІКОЛИ не торкається Lib: пульт живе на горутинах net/http, а бібліотека —
 // лише на горутині Update (правило 10 AGENTS.md).
 type Live struct {
-	mu        sync.Mutex
-	sess      player.Session
-	title     string
-	episode   int
-	intent    Intent
-	requested PlayRequest
-	stopAfter bool
+	mu          sync.Mutex
+	sess        player.Session
+	title       string
+	episode     int
+	intent      Intent
+	requested   PlayRequest
+	studio      string
+	chainRef    provider.TitleRef
+	chainActive bool
+	limit       SessionLimit
+	finished    bool
 
 	// playlist — те, що пульт показує списком серій; playlistSeq монотонний і
 	// НЕ скидається при очищенні: інакше наступна публікація віддала б
@@ -107,7 +114,7 @@ func (l *Live) Snapshot() (Snapshot, error) {
 		return idleSnapshot(), nil
 	}
 	l.mu.Lock()
-	sess, title, episode, stopAfter := l.sess, l.title, l.episode, l.stopAfter
+	sess, title, episode, studio, limit := l.sess, l.title, l.episode, l.studio, l.limit
 	l.mu.Unlock()
 	if sess == nil {
 		return idleSnapshot(), nil
@@ -131,14 +138,17 @@ func (l *Live) Snapshot() (Snapshot, error) {
 		volume = VolumeUnknown
 	}
 	return Snapshot{
-		Playing:     true,
-		Title:       title,
-		Episode:     episode,
-		PositionSec: pos,
-		DurationSec: dur,
-		Paused:      paused,
-		VolumePct:   volume,
-		StopAfter:   stopAfter,
+		Playing:          true,
+		Title:            title,
+		Episode:          episode,
+		PositionSec:      pos,
+		DurationSec:      dur,
+		Paused:           paused,
+		VolumePct:        volume,
+		StopAfter:        limit.Enabled && limit.Remaining == 1,
+		Studio:           studio,
+		SessionLimited:   limit.Enabled,
+		SessionRemaining: limit.Remaining,
 	}, nil
 }
 
@@ -196,24 +206,18 @@ func (l *Live) AddVolume(delta float64) error {
 	return sess.SetVolume(min(max(current+delta, 0), 100))
 }
 
-// SetStopAfter/StopAfter — «досидіти цю серію й зупинитись». Прапорець живе
-// тут, а не в конфізі: це разове бажання, спільне для TUI і пульта.
+// SetStopAfter retains the old one-episode control as a view of the budget.
 func (l *Live) SetStopAfter(on bool) {
-	if l == nil {
-		return
+	n := 0
+	if on {
+		n = 1
 	}
-	l.mu.Lock()
-	l.stopAfter = on
-	l.mu.Unlock()
+	_ = l.SetSessionLimit(n)
 }
 
 func (l *Live) StopAfter() bool {
-	if l == nil {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.stopAfter
+	limit := l.Limit()
+	return limit.Enabled && limit.Remaining == 1
 }
 
 // Next просить наступну серію: намір записується, сесія закривається, і далі
@@ -246,13 +250,17 @@ func (l *Live) end(intent Intent) error {
 
 // set відкриває вікно на нову сесію. Намір скидається на кожному старті, щоб
 // залишок від Run, який помер до Finish, не протік у наступну серію.
-func (l *Live) set(sess player.Session, title string, episode int) {
+func (l *Live) set(sess player.Session, ref provider.TitleRef, title string, episode int, studio string) {
 	if l == nil {
 		return
 	}
 	l.mu.Lock()
-	l.sess, l.title, l.episode = sess, title, episode
-	l.intent, l.requested, l.stopAfter = IntentNone, PlayRequest{}, false
+	if !l.chainActive || !l.chainRef.Same(ref) {
+		l.limit = SessionLimit{}
+	}
+	l.chainRef, l.chainActive = ref, true
+	l.sess, l.title, l.episode, l.studio = sess, title, episode, studio
+	l.intent, l.requested, l.finished = IntentNone, PlayRequest{}, false
 	l.mu.Unlock()
 }
 
@@ -399,17 +407,4 @@ func pushRequest(ch chan PlayRequest, req PlayRequest) {
 		default:
 		}
 	}
-}
-
-// takeStopAfter віддає прапорець рівно один раз: він стосується сесії, що
-// щойно завершилася, і не має пережити її в наступну.
-func (l *Live) takeStopAfter() bool {
-	if l == nil {
-		return false
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	stopAfter := l.stopAfter
-	l.stopAfter = false
-	return stopAfter
 }

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -32,6 +33,9 @@ func (m *Model) searchCmd(q string, page, req int) tea.Cmd {
 }
 
 func (m *Model) episodesCmd(ref provider.TitleRef, req int, navigate bool) tea.Cmd {
+	if m.deferEpisodeRequest(ref, req, navigate) {
+		return nil
+	}
 	eng := m.eng
 	return asyncCmd(30*time.Second, func(ctx context.Context) tea.Msg {
 		eps, offline, err := eng.EpisodesCached(ctx, ref)
@@ -40,12 +44,16 @@ func (m *Model) episodesCmd(ref provider.TitleRef, req int, navigate bool) tea.C
 }
 
 func (m *Model) bookmarkBaselineCmd(titleID string, ref provider.TitleRef, provisional int) tea.Cmd {
+	if m.bootstrapPending {
+		m.deferredBookmark = &bookmarkRequest{titleID, ref, provisional}
+		return nil
+	}
 	eng := m.eng
 	return asyncCmd(30*time.Second, func(ctx context.Context) tea.Msg {
 		eps, err := eng.EpisodesFresh(ctx, ref)
 		return bookmarkBaselineMsg{
 			titleID: titleID, ref: ref, provisional: provisional,
-			maxEp: maxEpisodeNumber(eps), err: err,
+			maxEp: maxEpisodeNumber(eps), eps: eps, err: err,
 		}
 	})
 }
@@ -89,52 +97,69 @@ func (m *Model) catalogCmd(kind provider.CatalogKind) tea.Cmd {
 // послідовних запитів тривали б довше, ніж людина дивиться на домівку, а
 // двадцять одночасних виглядали б для сайту як атака.
 func (m *Model) libraryEpisodesCmd() tea.Cmd {
-	if m.eng == nil || m.eng.Provider == nil || m.eng.Lib == nil {
+	if m.eng == nil || m.eng.Provider == nil || m.eng.Store == nil || m.badgeScheduled.Load() || m.bootstrapPending {
 		return nil
 	}
-	var refs []provider.TitleRef
-	for _, e := range m.eng.Lib.Entries {
-		// Стан більше не фільтрує: переглянутий тайтл теж має дізнатися,
-		// що вийшла нова серія.
-		if e.Hidden {
-			continue
-		}
-		t := m.titleByID(e.TitleID)
-		if t == nil || len(t.Sources) == 0 {
-			continue
-		}
-		refs = append(refs, t.Sources[0])
-		if len(refs) == maxBadgeProbes {
-			break
-		}
-	}
+	refs := m.visibleRefs()
 	if len(refs) == 0 {
 		return nil
 	}
-
+	if !m.badgeScheduled.CompareAndSwap(false, true) {
+		return nil
+	}
 	eng := m.eng
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-
+		cursor := eng.Store.LoadBadgeCursor()
+		sort.Slice(refs, func(i, j int) bool { return refKey(refs[i]) < refKey(refs[j]) })
+		start := sort.Search(len(refs), func(i int) bool { return refKey(refs[i]) > cursor })
+		ordered := append(append([]provider.TitleRef{}, refs[start:]...), refs[:start]...)
+		jobsList := make([]provider.TitleRef, 0, maxBadgeProbes)
+		for _, ref := range ordered {
+			_, fresh, found := eng.Store.LoadEpisodes(ref)
+			if found && fresh {
+				continue
+			}
+			jobsList = append(jobsList, ref)
+			if len(jobsList) == maxBadgeProbes {
+				break
+			}
+		}
+		var mu sync.Mutex
+		var seeds []playback.ReleaseSeed
 		var wg sync.WaitGroup
 		jobs := make(chan provider.TitleRef)
-		for range badgeWorkers {
+		for range min(badgeWorkers, len(jobsList)) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for ref := range jobs {
-					// Помилка нічого не ламає: лишається те, що вже в кеші.
-					_, _, _ = eng.EpisodesCached(ctx, ref)
+					eps, _, err := eng.EpisodesCached(ctx, ref)
+					if err == nil {
+						mu.Lock()
+						seeds = append(seeds, playback.ReleaseSeed{Ref: ref, Episodes: eps})
+						mu.Unlock()
+					}
 				}
 			}()
 		}
-		for _, ref := range refs {
-			jobs <- ref
+		last := ""
+	queue:
+		for _, ref := range jobsList {
+			select {
+			case jobs <- ref:
+				last = refKey(ref)
+			case <-ctx.Done():
+				break queue
+			}
 		}
 		close(jobs)
 		wg.Wait()
-		return libraryEpisodesMsg{}
+		if last != "" {
+			_ = eng.Store.SaveBadgeCursor(last)
+		}
+		return libraryEpisodesMsg{seeds: seeds}
 	}
 }
 

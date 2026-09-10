@@ -1,15 +1,16 @@
 package ui
 
 import (
+	"charm.land/bubbles/v2/list"
 	"errors"
 	"fmt"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/player"
 )
 
 // ---- update ----
@@ -21,13 +22,71 @@ func (m *Model) rejectStale(req int) bool { return req != m.reqID }
 // failNav — навігація не відбулась: відкладений кадр викидаємо, щоб Esc не
 // повертав у нікуди, а причину показуємо людською мовою.
 func (m *Model) failNav(err error) {
+	m.pendingUI = m.closeOverlay()
 	m.pending = nil
 	m.pendingReq = 0
 	m.errText = m.errorText(err)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.update(msg)
+	out := updated.(Model)
+	if !out.quitting && out.statusKind == statusSuccess && out.statusGen != m.statusGen {
+		gen := out.statusGen
+		cmd = tea.Batch(cmd, tea.Tick(3*time.Second, func(time.Time) tea.Msg { return statusExpiredMsg{gen} }))
+	}
+	if out.pendingUI != nil {
+		cmd = tea.Batch(cmd, out.pendingUI)
+		out.pendingUI = nil
+	}
+	return out, guardFilter(cmd, out.filterGen)
+}
+func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case bootstrapMsg:
+		m.bootstrapPending = false
+		m.seedReleases(msg.seeds)
+		var cmds []tea.Cmd
+		if r := m.deferredEpisodes; r != nil {
+			m.deferredEpisodes = nil
+			if r.req == m.reqID {
+				cmds = append(cmds, m.episodesCmd(r.ref, r.req, r.navigate))
+			}
+		}
+		if r := m.deferredBookmark; r != nil {
+			m.deferredBookmark = nil
+			cmds = append(cmds, m.bookmarkBaselineCmd(r.titleID, r.ref, r.provisional))
+		}
+		cmds = append(cmds, m.libraryEpisodesCmd())
+		m.refreshLibraryLists()
+		return m, tea.Batch(cmds...)
+	case statusExpiredMsg:
+		if msg.gen == m.statusGen && m.statusKind == statusSuccess {
+			m.status = ""
+			m.statusKind = statusInfo
+			m.statusGen++
+			m.statusKind = statusInfo
+		}
+		return m, nil
+	case filterResultMsg:
+		if msg.gen != m.filterGen {
+			return m, nil
+		}
+		return m.update(msg.matches)
+	case list.FilterMatchesMsg:
+		var cmd tea.Cmd
+		m.list, cmd = m.list.Update(msg)
+		if f := m.restoreSelection; f != nil {
+			m.selectKey(f.selectedKey, f.cursor)
+			m.restoreSelection = nil
+		}
+		return m, cmd
+	case localTickMsg:
+		if msg.gen != m.liveGen || m.playCancel == nil {
+			return m, nil
+		}
+		return m, m.localTickCmd()
+
 	case tea.WindowSizeMsg:
 		oldHomeSpacers := m.homeSpacers
 		m.w, m.h = msg.Width, msg.Height
@@ -45,10 +104,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = ""
+		m.statusKind = statusInfo
+		m.statusGen++
 		if msg.err != nil {
 			m.failNav(msg.err)
 			return m, nil
 		}
+		_ = m.closeOverlay()
 		return m, m.applySearchPage(msg)
 
 	case catalogMsg:
@@ -59,7 +121,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case libraryEpisodesMsg:
-		m.refreshHome()
+		m.seedReleases(msg.seeds)
+		m.refreshLibraryLists()
 		return m, nil
 
 	case bookmarkBaselineMsg:
@@ -67,10 +130,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pendingBaseline = &msg
 			return m, nil
 		}
-		status := m.status
+		status, kind, gen := m.status, m.statusKind, m.statusGen
 		m.applyBookmarkBaseline(msg)
 		if m.errText == "" {
-			m.status = status
+			m.status, m.statusKind, m.statusGen = status, kind, gen
 		}
 		return m, nil
 
@@ -80,17 +143,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.err != nil {
 			m.status = ""
+			m.statusKind = statusInfo
+			m.statusGen++
 			m.failNav(msg.err)
 			return m, nil
 		}
+		m.pendingUI = m.closeOverlay()
 		m.ref = msg.ref
 		m.episodes, m.episodesRef = msg.eps, msg.ref
+		m.seedReleases([]playback.ReleaseSeed{{Ref: msg.ref, Episodes: msg.eps}})
 		// Список приїхав — пульт має його побачити навіть тоді, коли на екран
 		// серій ми не заходимо («Продовжити» йде з navigate:false).
 		m.publishPlaylist()
 		if !msg.navigate {
 			if msg.offline {
 				m.status = i18n.MsgOfflineCache
+				m.statusKind = statusWarning
+				m.statusGen++
 			}
 			if m.screen == screenEpisodes {
 				return m, m.setItems(m.episodeRows(), -1)
@@ -101,15 +170,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if st := m.eng.Lib.StatusOf(title.ID, msg.eps); st.Kind == library.StatusPlanned {
 				// Відкриття ще не початого тайтлу означає ознайомлення з наявними
 				// серіями; у перегляді бейдж навмисно очищає лише сам перегляд.
-				if err := m.eng.MarkSeen(msg.ref, maxEpisodeNumber(msg.eps)); err != nil {
+				if err := errors.Join(m.eng.MarkSeen(msg.ref, maxEpisodeNumber(msg.eps)), m.eng.AcknowledgeReleases(msg.ref, msg.eps)); err != nil {
 					m.errText = m.errorText(err)
 				}
 			}
 		}
 		if msg.offline {
 			m.status = i18n.MsgOfflineCache
+			m.statusKind = statusWarning
+			m.statusGen++
 		} else {
 			m.status = ""
+			m.statusKind = statusInfo
+			m.statusGen++
 		}
 		m.commitPending(msg.req)
 		return m, m.showEpisodes()
@@ -119,7 +192,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = ""
+		m.statusKind = statusInfo
+		m.statusGen++
 		if msg.err != nil {
+			m.endChain()
 			m.failNav(msg.err)
 			var cmd tea.Cmd
 			if m.screen == screenPlaying {
@@ -133,6 +209,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errText = m.errorText(msg.err)
 			return m, cmd
 		}
+		m.pendingUI = m.closeOverlay()
 		m.commitPending(msg.req)
 		res := msg.res
 		// Одноразове питання: кілька студій і жодного піна. Після EOF автоплей
@@ -155,10 +232,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = ""
+		m.statusKind = statusInfo
+		m.statusGen++
 		if msg.err != nil {
 			m.failNav(msg.err)
 			return m, nil
 		}
+		_ = m.closeOverlay()
 		m.commitPending(msg.req)
 		m.stack = append(m.stack, m.snapshot())
 		m.showStudioChoice(msg.choices)
@@ -172,6 +252,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.journalCmd()
 
 	case playDoneMsg:
+		_ = m.closeOverlay()
 		if m.pendingBaseline != nil {
 			m.applyBookmarkBaseline(*m.pendingBaseline)
 			m.pendingBaseline = nil
@@ -180,47 +261,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetLive()
 		// Finish синхронний: журнал зливається в бібліотеку тут, на горутині
 		// Update, а не у фоновій команді.
-		result, err := m.eng.Finish(msg.reason, m.playTitleID, m.pendingEp)
+		result, err := m.eng.FinishRun(msg.reason, m.playTitleID, m.pendingEp, msg.err)
 		result.PinnedStudio = m.playPinned
 		m.playTitleID, m.playPinned = "", ""
 		// Журнал уже злитий у бібліотеку — публікуємо список із новою позначкою
 		// «переглянуто» і без підсвіченої серії.
 		m.publishPlaylist()
 		err = errors.Join(msg.err, err)
-		// намір пульта сильніший за налаштування: «наступна» йде далі навіть
-		// без автоплею, «стоп» уриває ланцюжок навіть з ним
-		chain, requested := false, 0
-		switch {
-		case m.quitting || err != nil || result.Intent == playback.IntentStop:
-		case result.Intent == playback.IntentPlay:
-			// Адресний запит: ціль названа явно, тому наступну серію не рахуємо.
-			// Ref звіряємо, бо між публікацією списку і запитом ми могли піти на
-			// інший тайтл, і номер серії сам по собі вже нічого не означає.
-			if result.Requested.Ref.Same(m.ref) {
-				requested = result.Requested.Episode
-			}
-		case result.Intent == playback.IntentNext:
-			chain = true
-		case result.StopAfter:
-			// «досидіти й зупинитись» сильніше за автоплей — і тільки за нього
-		case result.Reason == player.EndEOF && m.eng.Autoplay:
-			chain = true
-		}
-		if requested > 0 {
+		episodes, _ := m.currentEpisodes()
+		if next, ok := playback.ContinueEpisode(result, err, m.quitting, m.ref, m.pendingEp, episodes, m.eng.Autoplay); ok {
 			req := m.nextReq()
-			m.pendingEp = requested
+			m.pendingEp = next
 			m.status = i18n.TuiResolving
-			return m, m.resolveCmd(m.ref, requested, req, m.eng.ResolveHints(m.ref, requested))
+			m.statusKind = statusLoading
+			m.statusGen++
+			m.statusKind = statusLoading
+			return m, m.resolveCmd(m.ref, next, req, m.eng.ResolveHints(m.ref, next))
 		}
-		if chain {
-			episodes, _ := m.currentEpisodes()
-			if next, ok := playback.NextEpisodeNumber(episodes, m.pendingEp); ok {
-				req := m.nextReq()
-				m.pendingEp = next
-				m.status = i18n.TuiResolving
-				return m, m.resolveCmd(m.ref, next, req, m.eng.ResolveHints(m.ref, next))
-			}
-		}
+		m.endChain()
 		// Choose the return screen before assigning feedback: showHome clears
 		// old messages, but must not erase this session's finalization failure.
 		var cmd tea.Cmd
@@ -234,9 +292,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errText = m.errorText(err)
 		case result.Completed:
 			m.status = fmt.Sprintf(i18n.MsgEpisodeDone, m.pendingEp)
+			m.statusKind = statusSuccess
+			m.statusGen++
 		case result.PositionSec > 0:
 			m.status = fmt.Sprintf(i18n.MsgProgressSaved,
 				int(result.PositionSec)/60, int(result.PositionSec)%60)
+			m.statusKind = statusSuccess
+			m.statusGen++
 		}
 		// Друга фаза виходу: журнал уже злитий, тепер можна завершувати.
 		if m.quitting {
@@ -263,7 +325,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
+	query := m.list.FilterValue()
 	m.list, cmd = m.list.Update(msg)
+	// Paste and other text input messages can change a query without a key.
+	if m.list.FilterValue() != query {
+		m.filterGen++
+	}
 	return m, cmd
 }
 
@@ -283,10 +350,14 @@ func (m Model) updateRemotePlay(msg remotePlayMsg) (tea.Model, tea.Cmd) {
 	if m.playCancel != nil {
 		return m, rearm
 	}
+	m.pendingUI = m.closeOverlay()
+	m.beginChain(m.ref)
 	req := m.beginNav()
 	m.pendingEp = msg.req.Episode
 	m.errText = ""
 	m.status = i18n.TuiResolving
+	m.statusKind = statusLoading
+	m.statusGen++
 	return m, tea.Batch(rearm,
 		m.resolveCmd(m.ref, msg.req.Episode, req, m.eng.ResolveHints(m.ref, msg.req.Episode)))
 }
@@ -302,6 +373,10 @@ func (m Model) updateLive(msg liveMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.err == nil {
 		m.live = msg.snap
+		m.liveAt = m.now()
+		m.liveFrozen = false
+	} else {
+		m.freezeLive()
 	}
 	// Поза сесією нічого не переозброюємо: цикл живе рівно стільки, скільки гра.
 	if m.playCancel == nil {
@@ -315,7 +390,8 @@ func (m Model) updateLive(msg liveMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.liveTicking = true
-		return m, m.liveTickCmd(msg.gen)
+		m.localTicking = true
+		return m, tea.Batch(m.liveTickCmd(msg.gen), m.localTickCmd())
 	}
 	// Сесії ще немає: Live.set стається після Player.Start. Перепитуємо, поки
 	// вона не з'явиться, але не нескінченно.
@@ -333,6 +409,9 @@ func (m *Model) resetLive() int {
 	m.liveGen++
 	m.live = playback.Snapshot{}
 	m.liveTicking, m.liveRetries = false, 0
+	m.localTicking = false
+	m.liveAt = time.Time{}
+	m.liveFrozen = true
 	return m.liveGen
 }
 
@@ -340,8 +419,9 @@ func (m *Model) applyBookmarkBaseline(msg bookmarkBaselineMsg) {
 	if msg.err != nil {
 		return
 	}
+	m.seedReleases([]playback.ReleaseSeed{{Ref: msg.ref, Episodes: msg.eps}})
 	_ = m.eng.ReconcileKnown(msg.ref, msg.provisional, msg.maxEp)
-	m.refreshHome()
+	m.refreshLibraryLists()
 }
 
 func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
@@ -349,8 +429,12 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	// Помилка (немає плеєра, не записалась бібліотека) лишає екран як був.
 	titleID, pinned, err := m.eng.Begin(res)
 	if err != nil {
+		m.endChain()
 		m.errText = m.errorText(err)
 		return m, nil
+	}
+	if !m.chainActive {
+		m.beginChain(m.ref)
 	}
 	if m.screen == screenStudio && len(m.stack) > 0 {
 		m.stack = m.stack[:len(m.stack)-1]
@@ -363,8 +447,12 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	// Статус лишається порожнім навмисно: екран «Грає» тепер керований, і
 	// внизу корисніша підказка з клавішами, ніж «плеєр запущено».
 	m.status = ""
+	m.statusKind = statusInfo
+	m.statusGen++
 	if res.PinFallback {
 		m.status = fmt.Sprintf(i18n.TuiStudioFallback, m.studioPin(), res.Source.Studio)
+		m.statusKind = statusWarning
+		m.statusGen++
 	}
 	cmd, cancel := m.playCmd(res, titleID)
 	m.playCancel = cancel
@@ -380,6 +468,8 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 // скасовують сесію: сам вихід робить обробник playDoneMsg, коли Finish уже
 // злив журнал. Інакше вихід гонився б із завершенням плеєра.
 func (m Model) requestQuit() (tea.Model, tea.Cmd) {
+	m.endChain()
+	m.freezeLive()
 	if m.playCancel != nil {
 		m.quitting = true
 		m.playCancel()

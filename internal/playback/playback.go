@@ -28,14 +28,15 @@ import (
 )
 
 type Engine struct {
-	Provider       provider.Provider
-	Extractors     []extractor.Extractor
-	Store          *store.Store
-	Lib            *library.Library
-	Prefs          library.Prefs
-	Player         player.Player
-	PlayerFallback bool
-	Autoplay       bool
+	watchedUndoEpoch uint64
+	Provider         provider.Provider
+	Extractors       []extractor.Extractor
+	Store            *store.Store
+	Lib              *library.Library
+	Prefs            library.Prefs
+	Player           player.Player
+	PlayerFallback   bool
+	Autoplay         bool
 	// JournalInterval — крок семплювання позиції під час Run; 0 означає
 	// defaultJournalInterval. Поле, а не пакетна змінна, щоб тести інших
 	// пакетів не чекали 5 с на перший запис журналу.
@@ -450,9 +451,13 @@ func (e *Engine) KnownStudios() []string {
 
 // Bookmark перемикає тайтл у списку запланованого. sync: пише Lib.
 func (e *Engine) Bookmark(ref provider.TitleRef, epCount int) (library.BookmarkResult, error) {
-	title := e.Lib.EnsureTitle(ref, store.NewID)
-	result := e.Lib.ToggleBookmark(title.ID, epCount)
-	return result, e.Store.SaveLibrary(e.Lib)
+	prepared := e.Lib.Clone()
+	title := prepared.EnsureTitle(ref, store.NewID)
+	result := prepared.ToggleBookmark(title.ID, epCount)
+	if episodes, _, found := e.Store.LoadEpisodes(ref); found {
+		prepared.SeedReleaseBaseline(title.ID, episodes)
+	}
+	return result, e.publishLibrary(prepared)
 }
 
 // MarkSeen оновлює базову лінію лише для вже відомого локального тайтлу.
@@ -474,14 +479,18 @@ func (e *Engine) MarkSeen(ref provider.TitleRef, maxEp int) error {
 // створюється так само, як у Begin і Bookmark. Зняття позначки нічого не
 // створює: знімати нема з чого.
 func (e *Engine) SetWatched(ref provider.TitleRef, ep int, watched bool) error {
+	prepared := e.Lib.Clone()
 	var title *library.LocalTitle
 	if watched {
-		title = e.Lib.EnsureTitle(ref, store.NewID)
-	} else if title = e.Lib.TitleByRef(ref); title == nil {
+		title = prepared.EnsureTitle(ref, store.NewID)
+	} else if title = prepared.TitleByRef(ref); title == nil {
 		return nil
 	}
-	e.Lib.SetWatched(title.ID, ep, watched, time.Now())
-	return e.Store.SaveLibrary(e.Lib)
+	prepared.SetWatched(title.ID, ep, watched, time.Now())
+	if watched {
+		e.acknowledgeCachedEpisode(prepared, ref, title.ID, ep)
+	}
+	return e.publishLibrary(prepared)
 }
 
 // ReconcileKnown зберігає уточнення, лише коли очікувана базова лінія не змінилась.
@@ -505,7 +514,8 @@ type Result struct {
 	Requested PlayRequest
 	// StopAfter — «досидіти й зупинитись» було увімкнене на цій серії, тож
 	// ланцюжок автоплею далі не йде.
-	StopAfter bool
+	StopAfter    bool
+	SessionLimit SessionLimit
 }
 
 // Begin — синхронна половина запуску: тайтл і пін студії.
@@ -515,6 +525,7 @@ func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) 
 	if e.Player == nil {
 		return "", "", errs.ErrNoPlayer
 	}
+	e.InvalidateWatchedUndo()
 	title := e.Lib.EnsureTitle(res.Ref, store.NewID)
 	entry := e.Lib.EntryFor(title.ID)
 
@@ -545,10 +556,10 @@ func (e *Engine) Run(ctx context.Context, res *Resolved, titleID string) (player
 func (e *Engine) RunWithObserver(ctx context.Context, res *Resolved, titleID string, observer func(error)) (player.EndReason, error) {
 	sess, err := e.Player.Start(ctx, res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)
 	if err != nil {
-		return player.EndError, err
+		return player.EndError, fmt.Errorf("%w: %w", errs.ErrPlayerStart, err)
 	}
 	defer sess.Close()
-	e.Live.set(sess, res.Name, res.Episode)
+	e.Live.set(sess, res.Ref, res.Name, res.Episode, res.Source.Studio)
 	defer e.Live.clear()
 
 	ticker := time.NewTicker(e.journalInterval())
@@ -599,29 +610,47 @@ func (e *Engine) RunWithObserver(ctx context.Context, res *Resolved, titleID str
 // Finish зливає журнал у бібліотеку й підсумовує сесію. PinnedStudio заповнює
 // викликач із того, що повернув Begin. sync: читає й пише Lib.
 func (e *Engine) Finish(reason player.EndReason, titleID string, ep int) (*Result, error) {
+	return e.FinishRun(reason, titleID, ep, nil)
+}
+
+// FinishRun still recovers an older journal after startup failure, but only a
+// started session may acknowledge newly available release metadata. sync: Lib.
+func (e *Engine) FinishRun(reason player.EndReason, titleID string, ep int, runErr error) (*Result, error) {
 	// намір і прапорець зупинки забираються до будь-якого раннього виходу —
 	// рівно один раз, інакше вони протекли б у наступну серію
-	intent, requested := e.Live.takeIntent()
-	out := &Result{Reason: reason, Intent: intent, Requested: requested, StopAfter: e.Live.takeStopAfter()}
+	intent, requested, limit := e.Live.finishSession(reason)
+	out := &Result{Reason: reason, Intent: intent, Requested: requested, SessionLimit: limit, StopAfter: limit.Enabled && limit.Remaining == 0}
 	if _, err := e.Store.RecoverJournal(e.Lib); err != nil {
 		return out, err
 	}
-	p := e.Lib.ProgressFor(titleID, ep)
+	prepared := e.Lib.Clone()
+	p := prepared.ProgressFor(titleID, ep)
+	changed := false
 	if p == nil && reason == player.EndEOF {
-		p = e.Lib.RecordPosition(titleID, ep, 0, 0, time.Now())
+		p = prepared.RecordPosition(titleID, ep, 0, 0, time.Now())
+		changed = true
 	}
 	if p == nil {
 		return out, nil
 	}
-	// eof — серію додивилися, навіть якщо журнал відстав від порогу 90%
 	if reason == player.EndEOF && !p.Completed {
 		p.Completed = true
-		if err := e.Store.SaveLibrary(e.Lib); err != nil {
+		changed = true
+	}
+	if !errors.Is(runErr, errs.ErrPlayerStart) && (p.PositionSec > 0 || p.Completed) {
+		for _, title := range prepared.Titles {
+			if title.ID == titleID && len(title.Sources) > 0 {
+				changed = e.acknowledgeCachedEpisode(prepared, title.Sources[0], titleID, ep) || changed
+				break
+			}
+		}
+	}
+	if changed {
+		if err := e.publishLibrary(prepared); err != nil {
 			return out, err
 		}
 	}
-	out.Completed = p.Completed
-	out.PositionSec = p.PositionSec
+	out.Completed, out.PositionSec = p.Completed, p.PositionSec
 	return out, nil
 }
 
@@ -639,7 +668,7 @@ func (e *Engine) PlayWithObserver(ctx context.Context, res *Resolved, observer f
 		return nil, err
 	}
 	reason, runErr := e.RunWithObserver(ctx, res, titleID, observer)
-	out, finishErr := e.Finish(reason, titleID, res.Episode)
+	out, finishErr := e.FinishRun(reason, titleID, res.Episode, runErr)
 	out.PinnedStudio = pinned
 	return out, errors.Join(runErr, finishErr)
 }
@@ -652,4 +681,20 @@ func without(sources []provider.Source, drop provider.Source) []provider.Source 
 		}
 	}
 	return out
+}
+
+// Metadata is local and read-only here: finish must never wait on the provider.
+func (e *Engine) acknowledgeCachedEpisode(lib *library.Library, ref provider.TitleRef, id string, number int) bool {
+	episodes, _, found := e.Store.LoadEpisodes(ref)
+	if !found {
+		return false
+	}
+	seeded := lib.SeedReleaseBaseline(id, episodes)
+	var watched []provider.Episode
+	for _, ep := range episodes {
+		if ep.Number == number {
+			watched = append(watched, ep)
+		}
+	}
+	return lib.AcknowledgeReleases(id, watched) || seeded
 }

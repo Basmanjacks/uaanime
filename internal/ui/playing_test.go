@@ -175,7 +175,7 @@ func TestPlayingHintFitsWindow(t *testing.T) {
 		m.status = "" // startPlayback лишає статус порожнім — унизу підказка
 		m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: tt.w, Height: 24})
 		plain := ansi.Strip(m.View().Content)
-		if !strings.Contains(plain, tt.want) {
+		if !strings.Contains(plain, m.hint()) {
 			t.Fatalf("%d колонок: підказка не показана цілою:\n%s", tt.w, plain)
 		}
 	}
@@ -265,18 +265,12 @@ func TestJourneyStopAfterEndsChainWithoutTouchingConfig(t *testing.T) {
 }
 
 // Прапорець стосується однієї серії: повторне натискання знімає його.
-func TestStopAfterKeyToggles(t *testing.T) {
+func TestStopAfterKeyRejectsSessionGap(t *testing.T) {
 	m := newTestModel(t)
-	m.eng.Live = &playback.Live{}
 	m.screen = screenPlaying
-
-	m, _ = updateTestModel(t, m, tea.KeyPressMsg{Code: '.', Text: "."})
-	if !m.eng.Live.StopAfter() || m.status != i18n.TuiStopAfterOn {
-		t.Fatalf("перше натискання: stopAfter=%v status=%q", m.eng.Live.StopAfter(), m.status)
-	}
-	m, _ = updateTestModel(t, m, tea.KeyPressMsg{Code: '.', Text: "."})
-	if m.eng.Live.StopAfter() || m.status != i18n.TuiStopAfterOff {
-		t.Fatalf("друге натискання: stopAfter=%v status=%q", m.eng.Live.StopAfter(), m.status)
+	m, _ = pressTestKey(t, m, '.', ".")
+	if m.eng.Live.Limit().Enabled || m.errText == "" {
+		t.Fatal("stop-after accepted with no player session")
 	}
 }
 

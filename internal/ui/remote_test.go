@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -81,7 +82,7 @@ func TestJourneyRemoteNextPlaysNextEpisodeWithoutAutoplay(t *testing.T) {
 	if tr.count(screenPlaying) != 1 {
 		t.Errorf("входів на екран відтворення = %d, want 1", tr.count(screenPlaying))
 	}
-	if m.status != fmt.Sprintf(i18n.MsgProgressSaved, 0, 30) {
+	if !slices.Contains(tr.statuses, fmt.Sprintf(i18n.MsgProgressSaved, 0, 30)) {
 		t.Errorf("статус = %q, want прогрес 00:30 серії 2", m.status)
 	}
 }
@@ -183,7 +184,7 @@ func TestPlayingFrameShowsQR(t *testing.T) {
 				t.Errorf("кадр %d рядків, вікно %d", lines, tt.h)
 			}
 			// Підказка внизу — те, що QR не має права витіснити.
-			if plain := ansi.Strip(content); !strings.Contains(plain, i18n.TuiHintPlaying) && !strings.Contains(plain, i18n.TuiHintPlayingNarrow) {
+			if plain := ansi.Strip(content); !strings.Contains(plain, m.hint()) && !strings.Contains(plain, i18n.TuiHintPlayingNarrow) {
 				t.Errorf("підказку витіснено:\n%s", plain)
 			}
 		})

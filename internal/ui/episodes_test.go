@@ -107,7 +107,7 @@ func TestEpisodesHintFitsMinimumWidth(t *testing.T) {
 	if !strings.Contains(i18n.TuiHintEpisodes, "X ") {
 		t.Fatal("підказка не згадує клавішу x")
 	}
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, i18n.TuiHintEpisodes) {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, m.hint()) {
 		t.Fatalf("підказку обрізано у вікні 80 колонок:\n%s", view)
 	}
 }

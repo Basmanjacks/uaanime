@@ -25,15 +25,18 @@ func (c remoteControl) Status() (remote.Status, error) {
 		return remote.Status{}, err
 	}
 	return remote.Status{
-		Playing:     snap.Playing,
-		Title:       snap.Title,
-		Episode:     snap.Episode,
-		PositionSec: snap.PositionSec,
-		DurationSec: snap.DurationSec,
-		Paused:      snap.Paused,
-		VolumePct:   snap.VolumePct,
-		StopAfter:   snap.StopAfter,
-		PlaylistGen: c.live.CurrentGen(),
+		Studio:           snap.Studio,
+		SessionLimited:   snap.SessionLimited,
+		SessionRemaining: snap.SessionRemaining,
+		Playing:          snap.Playing,
+		Title:            snap.Title,
+		Episode:          snap.Episode,
+		PositionSec:      snap.PositionSec,
+		DurationSec:      snap.DurationSec,
+		Paused:           snap.Paused,
+		VolumePct:        snap.VolumePct,
+		StopAfter:        snap.StopAfter,
+		PlaylistGen:      c.live.CurrentGen(),
 	}, nil
 }
 
@@ -67,14 +70,8 @@ func (c remoteControl) AddVolume(delta float64) error {
 	return mapRemoteErr(c.live.AddVolume(delta))
 }
 
-// ToggleStopAfter перемикає «досидіти цю серію й зупинитись». Прапорець живе в
-// Live, тому TUI і пульт бачать один стан; помилки тут немає навіть коли нічого
-// не грає — Live скидає прапорець на старті наступної сесії, а свіжий Status в
-// ехо-відповіді й так покаже пультові справжній стан.
-func (c remoteControl) ToggleStopAfter() error {
-	c.live.SetStopAfter(!c.live.StopAfter())
-	return nil
-}
+func (c remoteControl) ToggleStopAfter() error      { return mapRemoteErr(c.live.ToggleStopAfter()) }
+func (c remoteControl) SetSessionLimit(n int) error { return mapRemoteErr(c.live.SetSessionLimit(n)) }
 
 // publishPlaylist готує список серій для пульта перед запуском серії. Живе в
 // headless-циклі, який виконується послідовно, тому читання бібліотеки тут

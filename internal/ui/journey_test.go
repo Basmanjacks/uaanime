@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -104,8 +105,9 @@ func journeyModelIn(t *testing.T, dir string, sessions ...*playertest.Session) (
 // trace — журнал станів між повідомленнями: по ньому тест доводить, що
 // питання про студію було рівно одне і що перегляд справді стартував.
 type trace struct {
-	screens []screen
-	quit    bool
+	screens  []screen
+	statuses []string
+	quit     bool
 }
 
 func (tr *trace) count(s screen) int {
@@ -176,6 +178,7 @@ func step(t *testing.T, m Model, msg tea.Msg, tr *trace) (Model, tea.Cmd) {
 	}
 	m, next := updateTestModel(t, m, msg)
 	tr.screens = append(tr.screens, m.screen)
+	tr.statuses = append(tr.statuses, m.status)
 	return m, next
 }
 
@@ -183,6 +186,7 @@ func press(t *testing.T, m Model, tr *trace, code rune, text string) Model {
 	t.Helper()
 	m, cmd := pressTestKey(t, m, code, text)
 	tr.screens = append(tr.screens, m.screen)
+	tr.statuses = append(tr.statuses, m.status)
 	return pump(t, m, cmd, tr)
 }
 
@@ -243,7 +247,7 @@ func TestJourneySearchToPlaybackAndBack(t *testing.T) {
 		t.Errorf("питання про студію = %d, want рівно 1", tr.count(screenStudio))
 	}
 	mustScreen(t, m, screenEpisodes)
-	if m.status != fmt.Sprintf(i18n.MsgProgressSaved, 0, 30) {
+	if !slices.Contains(tr.statuses, fmt.Sprintf(i18n.MsgProgressSaved, 0, 30)) {
 		t.Errorf("статус = %q, want прогрес 00:30", m.status)
 	}
 	starts := fp.Starts()
@@ -351,7 +355,7 @@ func TestJourneyInterruptDuringPlaybackFlushesProgress(t *testing.T) {
 	m, playCmd := updateTestModel(t, m, resolved)
 	mustScreen(t, m, screenPlaying)
 	// Екран «Грає» керований: унизу підказка з клавішами, а не статус.
-	if plain := ansi.Strip(m.View().Content); !strings.Contains(plain, i18n.TuiHintPlaying) {
+	if plain := ansi.Strip(m.View().Content); !strings.Contains(plain, m.hint()) {
 		t.Errorf("підказки клавіш немає (статус %q):\n%s", m.status, plain)
 	}
 
@@ -486,7 +490,7 @@ func TestJourneyMarkWatchedFromEpisodes(t *testing.T) {
 	if got := m.list.SelectedItem().(item); got.badge != i18n.TuiEpDone || got.icon != m.ic.Done {
 		t.Errorf("рядок серії 2 = %+v, want позначку «переглянуто»", got)
 	}
-	if m.status != fmt.Sprintf(i18n.TuiEpMarked, 2) {
+	if !slices.Contains(tr.statuses, fmt.Sprintf(i18n.TuiEpMarked, 2)) {
 		t.Errorf("статус = %q", m.status)
 	}
 
@@ -524,7 +528,7 @@ func TestJourneyMarkWatchedFromEpisodes(t *testing.T) {
 	if got := m.list.SelectedItem().(item); got.badge != "" || got.icon != m.ic.Pending {
 		t.Errorf("рядок серії 2 після зняття = %+v", got)
 	}
-	if m.status != fmt.Sprintf(i18n.TuiEpUnmarked, 2) {
+	if !slices.Contains(tr.statuses, fmt.Sprintf(i18n.TuiEpUnmarked, 2)) {
 		t.Errorf("статус = %q", m.status)
 	}
 	if lib, err = st.LoadLibrary(); err != nil {

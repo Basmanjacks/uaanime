@@ -4,26 +4,33 @@ import (
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // frame — кадр стека «назад»: що показував список і на чому стояв курсор,
 // плюс стан екрана однією структурою (див. view).
 type frame struct {
-	screen screen
-	items  []item
-	cursor int
+	screen           screen
+	items            []item
+	cursor           int
+	selectedKey      string
+	filterText       string
+	filterState      list.FilterState
+	historyShown     int
+	historyFiltering bool
 	view
 }
 
 // ---- побудова екранів ----
 
 func (m *Model) setItems(items []item, cursor int) tea.Cmd {
+	m.filterGen++
 	current := m.list.Index()
 	li := make([]list.Item, len(items))
 	for i, it := range items {
 		li[i] = it
 	}
-	cmd := m.list.SetItems(li)
+	cmd := guardFilter(m.list.SetItems(li), m.filterGen)
 	if len(items) == 0 {
 		return cmd
 	}
@@ -43,10 +50,11 @@ func (m *Model) snapshot() frame {
 		}
 	}
 	return frame{
-		screen: m.screen,
-		items:  items,
-		cursor: m.list.GlobalIndex(),
-		view:   m.clone(),
+		screen:      m.screen,
+		items:       items,
+		cursor:      m.list.Index(),
+		selectedKey: m.selectedKey(), filterText: m.list.FilterValue(), filterState: m.list.FilterState(), historyShown: m.historyShown, historyFiltering: m.historyFiltering,
+		view: m.clone(),
 	}
 }
 
@@ -60,6 +68,9 @@ func (m *Model) nextReq() int {
 func (m *Model) beginNav() int {
 	m.pending = nil
 	m.pendingReq = 0
+	m.statusGen++
+	m.statusKind = statusInfo
+	m.status = ""
 	return m.nextReq()
 }
 
@@ -73,6 +84,9 @@ func (m *Model) commitPending(req int) {
 }
 
 func (m *Model) back() {
+	if m.playCancel == nil && m.chainActive {
+		m.endChain()
+	}
 	wasPending := m.pending != nil
 	m.beginNav()
 	if wasPending {
@@ -87,35 +101,15 @@ func (m *Model) back() {
 
 	f := m.stack[len(m.stack)-1]
 	m.stack = m.stack[:len(m.stack)-1]
-	if f.screen == screenHome {
-		m.showHome()
-		if len(m.list.Items()) > 0 {
-			// Секції могли перебудуватись, поки нас не було, — сповзаємо
-			// із заголовка, якщо збережений індекс потрапив саме на нього.
-			m.list.Select(max(0, min(f.cursor, len(m.list.Items())-1)))
-			m.skipHeaders(1)
-		}
-		return
-	}
-
 	m.view = f.view
-	// Статус кадру — минуле («додано в закладки», «Шукаю…»): повернення
-	// назад показує підказку, а не відповідь на дію, якої вже немає.
 	m.status = ""
 	m.setScreen(f.screen)
-	// setScreen скидає делегата в однорядковий — картки пошуку повертаємо
-	// у двох рядках, інакше після Esc список раптом міняє вигляд.
-	if f.screen == screenSearch && len(f.cards) > 0 {
-		m.setDelegate(true)
-	}
-	_ = m.setItems(f.items, -1)
-	if len(f.items) > 0 {
-		m.list.Select(f.cursor)
-	}
+	m.pendingUI = m.restoreRows(f)
 	if f.screen == screenSearch {
 		m.input.SetValue(f.query)
 		m.input.Blur()
 	}
+
 }
 
 func (m *Model) setDelegate(twoLine bool) {
@@ -125,6 +119,8 @@ func (m *Model) setDelegate(twoLine bool) {
 // setScreen — єдине місце, де застосовується конфігурація списку, залежна від
 // екрана. Інакше налаштування протікають між екранами: список один на всіх.
 func (m *Model) setScreen(s screen) {
+	m.filterGen++
+	m.restoreSelection = nil
 	m.screen = s
 	// Плейлист пульта належить тайтлу, а не сесії: тільки ці три екрани ним
 	// володіють. Чистимо саме тут, бо back() відновлює пошук чи історію в обхід
@@ -163,7 +159,7 @@ func isHeaderAt(items []list.Item, i int) bool {
 // секції. Якщо в цьому напрямку рядків більше немає (курсор уперся в край
 // списку) — відходимо назад до найближчого рядка у зворотному напрямку.
 func (m *Model) skipHeaders(dir int) {
-	items := m.list.Items()
+	items := m.list.VisibleItems()
 	if dir == 0 || len(items) == 0 {
 		return
 	}
@@ -200,7 +196,7 @@ func navDirection(key string) int {
 const chromeBase = 4
 
 func (m *Model) chromeHeight() int {
-	if m.bannerVisible() {
+	if m.overlay == overlayNone && m.bannerVisible() {
 		return brandChromeHeight
 	}
 	return chromeBase
@@ -208,7 +204,10 @@ func (m *Model) chromeHeight() int {
 
 func (m *Model) listHeight() int {
 	n := m.h - m.chromeHeight()
-	if m.screen == screenSearch {
+	if m.overlay == overlayBudget {
+		n -= len(m.budgetNoteLines())
+	}
+	if m.screen == screenSearch && m.overlay == overlayNone {
 		n--
 	}
 	return max(1, n)
@@ -243,4 +242,44 @@ func (m *Model) selectFirstRow() bool {
 	}
 	m.list.Select(i)
 	return true
+}
+
+// restoreRows rebuilds domain-backed lists before restoring their visible selection.
+func (m *Model) restoreRows(f frame) tea.Cmd {
+	m.list.ResetFilter()
+	var rows []item
+	switch m.screen {
+	case screenHome:
+		m.rebuildHome()
+		m.selectKey(f.selectedKey, f.cursor)
+		return nil
+	case screenBookmarks:
+		m.epsScratch = map[string][]provider.Episode{}
+		rows = m.bookmarkRows()
+	case screenHistory:
+		m.historyShown = f.historyShown
+		m.historyFiltering = f.historyFiltering
+		m.historyAll = m.historyRows()
+		rows = m.visibleHistoryRows()
+	case screenEpisodes:
+		rows = m.episodeRows()
+	case screenSearch:
+		m.setDelegate(len(m.cards) > 0)
+		rows = m.searchRows()
+		if len(m.cards) == 0 {
+			rows = m.recentRows()
+		}
+	default:
+		rows = f.items
+	}
+	if f.filterState != list.Unfiltered {
+		m.list.FilterInput.SetValue(f.filterText)
+		m.list.SetFilterState(f.filterState)
+		cmd := m.setItems(rows, f.cursor)
+		m.restoreSelection = &f
+		return cmd
+	}
+	cmd := m.setItems(rows, f.cursor)
+	m.selectKey(f.selectedKey, f.cursor)
+	return cmd
 }
