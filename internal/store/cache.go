@@ -36,7 +36,11 @@ func cacheKey(parts ...string) string {
 // Кеш метаданих (списки серій) з TTL. URL потоків сюди не потрапляють ніколи —
 // вони протухають. Ключ — (provider, slug): спільний кеш за назвою отруював би
 // дані одного сайту іншим.
-const episodesTTL = 6 * time.Hour
+//
+// Година, а не шість: фоновий цикл TUI перепитує лише протухлі записи, тож TTL
+// і є затримкою, з якою нова серія доходить до бейджів домівки. Шість годин
+// ховали її навіть після перезапуску застосунку.
+const episodesTTL = time.Hour
 
 type episodesCache struct {
 	FetchedAt time.Time          `json:"fetched_at"`

@@ -45,7 +45,7 @@ func (m Model) actions() []action {
 	case screenPlaying:
 		a = []action{{"Space", i18n.TuiActionPause}, {"Esc", i18n.TuiActionStop}, {"?", i18n.TuiActionHelp}, {"←/→", i18n.TuiActionSeek}, {"Shift+←/→", i18n.TuiActionSeekBig}, {"N", i18n.TuiActionNext}, {"+/−", i18n.TuiActionVolume}, {".", i18n.TuiActionStopAfter}, {"B", i18n.TuiActionBudget}}
 	case screenEpisodes:
-		a = []action{{"Enter", i18n.TuiActionPlay}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionFilter}, {"M", i18n.TuiActionBookmark}, {"S", i18n.TuiActionStudio}, {"X", i18n.TuiActionWatched}, {"W", i18n.TuiActionBulk}}
+		a = []action{{"Enter", i18n.TuiActionPlay}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionFilter}, {"M", i18n.TuiActionBookmark}, {"S", i18n.TuiActionStudio}, {"X", i18n.TuiActionWatched}, {"W", i18n.TuiActionBulk}, {"R", i18n.TuiActionRefresh}}
 	case screenSettings:
 		a = []action{{"Enter", i18n.TuiActionPick}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"←/→", i18n.TuiActionChange}}
 	case screenSettingValue, screenStudio:
@@ -58,7 +58,7 @@ func (m Model) actions() []action {
 			a = append(a, action{"M", i18n.TuiActionBookmark})
 		}
 	case screenHome:
-		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionSearch}, {"M", i18n.TuiActionBookmark}, {",", i18n.TuiActionSettings}, {"Q", i18n.TuiActionQuit}}
+		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionSearch}, {"M", i18n.TuiActionBookmark}, {",", i18n.TuiActionSettings}, {"Q", i18n.TuiActionQuit}, {"R", i18n.TuiActionRefresh}}
 	default:
 		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}}
 		if m.list.FilteringEnabled() {
@@ -66,6 +66,9 @@ func (m Model) actions() []action {
 		}
 		if m.screen == screenBookmarks || m.screen == screenSearch {
 			a = append(a, action{"M", i18n.TuiActionBookmark})
+		}
+		if m.screen == screenBookmarks {
+			a = append(a, action{"R", i18n.TuiActionRefresh})
 		}
 	}
 	if m.eng.WatchedUndoAvailable(m.undo) {

@@ -98,6 +98,9 @@ func journeyModelIn(t *testing.T, dir string, sessions ...*playertest.Session) (
 		JournalInterval: time.Millisecond,
 	}
 	m := New(eng, Options{})
+	// pump виконує команди синхронно: тік фонового циклу заблокував би його на
+	// десять хвилин, а самопереозброєння — назавжди.
+	m.refreshEvery = 0
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	return m, fp, st
 }
@@ -229,11 +232,29 @@ func TestJourneySearchToPlaybackAndBack(t *testing.T) {
 		t.Error("до першого перегляду заголовок має показувати «озвучка: авто»")
 	}
 
-	// Enter на серії 1 → дві студії дубляжу без піна → питання рівно один раз
+	// Enter на серії 1 → дві студії дубляжу без піна → питання рівно один раз.
+	// Пікер показує всі пари серії, і саби теж: людина має бачити весь вибір,
+	// а «гратиме» стоїть на дубляжі.
 	m = press(t, m, tr, tea.KeyEnter, "")
 	mustScreen(t, m, screenStudio)
-	if got := len(m.list.Items()); got != 2 {
-		t.Fatalf("варіантів студій = %d, want 2 (саби не пропонуються, коли є дубляж)", got)
+	if got := len(m.list.Items()); got != 3 {
+		t.Fatalf("варіантів релізів = %d, want 3 (два дубляжі й саби)", got)
+	}
+	subs, willPlay := 0, 0
+	for _, li := range m.list.Items() {
+		it := li.(item)
+		if it.payload.(payloadStudio).src.Kind == provider.KindSub {
+			subs++
+			if it.badge == i18n.TuiPickWillPlay {
+				t.Errorf("саби не мають бути «гратиме», коли є дубляж: %+v", it)
+			}
+		}
+		if it.badge == i18n.TuiPickWillPlay {
+			willPlay++
+		}
+	}
+	if subs != 1 || willPlay != 1 {
+		t.Fatalf("рядків сабів = %d, «гратиме» = %d, want 1 і 1", subs, willPlay)
 	}
 	chosen := m.list.SelectedItem().(item).title
 
@@ -525,7 +546,7 @@ func TestJourneyMarkWatchedFromEpisodes(t *testing.T) {
 	mustScreen(t, m, screenEpisodes)
 	selectTestItem(t, &m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 2 })
 	m = press(t, m, tr, 'x', "x")
-	if got := m.list.SelectedItem().(item); got.badge != "" || got.icon != m.ic.Pending {
+	if got := m.list.SelectedItem().(item); got.badge == i18n.TuiEpDone || got.icon != m.ic.Pending {
 		t.Errorf("рядок серії 2 після зняття = %+v", got)
 	}
 	if !slices.Contains(tr.statuses, fmt.Sprintf(i18n.TuiEpUnmarked, 2)) {

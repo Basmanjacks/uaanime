@@ -488,7 +488,7 @@ func TestStatusJSONFields(t *testing.T) {
 	}
 	want := []string{
 		"playing", "title", "episode", "position_sec", "duration_sec", "paused",
-		"volume_pct", "stop_after", "playlist_gen", "studio", "session_limited", "session_remaining",
+		"volume_pct", "stop_after", "playlist_gen", "studio", "kind", "session_limited", "session_remaining",
 	}
 	for _, k := range want {
 		if _, ok := got[k]; !ok {

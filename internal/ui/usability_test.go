@@ -100,7 +100,7 @@ func TestUsabilityFilteredHistoryBackAndStaleResults(t *testing.T) {
 	key := m.selectedKey()
 	model, _ := m.openTitle(m.list.SelectedItem().(item).payload.(payloadResume).ref)
 	m = model.(Model)
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: m.ref, eps: testEpisodes(1), req: m.reqID, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: m.ref, eps: testEpisodes(1), req: m.reqID, purpose: epsOpen})
 	var cmd tea.Cmd
 	m, cmd = pressTestKey(t, m, tea.KeyEsc, "")
 	msg, ok := filterMatchesFromCmd(cmd)
@@ -179,7 +179,7 @@ func TestUsabilityBackRebuildsHistoryAndUsesVisibleFallback(t *testing.T) {
 	want := m.list.VisibleItems()[4].(item).key()
 	model, _ := m.openTitle(selected.ref)
 	m = model.(Model)
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: m.ref, eps: testEpisodes(1), req: m.reqID, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: m.ref, eps: testEpisodes(1), req: m.reqID, purpose: epsOpen})
 	for i, title := range m.eng.Lib.Titles {
 		if title.ID == selected.ref.Slug {
 			m.eng.Lib.Titles = append(m.eng.Lib.Titles[:i], m.eng.Lib.Titles[i+1:]...)

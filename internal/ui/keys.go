@@ -114,6 +114,12 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 			return m.bookmarkSelected()
 		}
 	}
+	if (key == "r" || key == "R") && !m.list.SettingFilter() && m.overlay == overlayNone {
+		switch m.screen {
+		case screenHome, screenBookmarks, screenEpisodes:
+			return m.refreshNow()
+		}
+	}
 	if (key == "s" || key == "S") && !m.list.SettingFilter() && (m.screen != screenSearch || !m.input.Focused()) && m.screen == screenEpisodes {
 		it, ok := m.list.SelectedItem().(item)
 		if !ok {
@@ -549,7 +555,34 @@ func (m Model) openTitle(ref provider.TitleRef) (tea.Model, tea.Cmd) {
 	m.status = i18n.TuiSearching
 	m.statusKind = statusLoading
 	m.statusGen++
-	return m, m.episodesCmd(ref, req, true)
+	return m, m.episodesCmd(ref, req, epsOpen)
+}
+
+// refreshNow — клавіша r: примусове оновлення повз TTL. На екрані серій — цей
+// тайтл, на домівці й у закладках — уся бібліотека з каталогом. Поки одна
+// операція (ручна, після перегляду чи фоновий пробіг) ще пише кеш, друга не
+// стартує: людина бачить «Уже оновлюю…», а не два паралельні запити до сайту.
+func (m Model) refreshNow() (tea.Model, tea.Cmd) {
+	if m.playCancel != nil || m.pending != nil || m.bootstrapPending || m.eng.Provider == nil || m.eng.Store == nil {
+		return m, nil
+	}
+	if m.refreshBusy != 0 || m.badgeScheduled.Load() {
+		m.status = i18n.TuiRefreshingAlready
+		m.statusKind = statusInfo
+		m.statusGen++
+		return m, nil
+	}
+	m.refreshGen++
+	m.refreshBusy = m.refreshGen
+	m.errText = ""
+	m.status = i18n.TuiRefreshing
+	m.statusKind = statusLoading
+	m.statusGen++
+	if m.screen == screenEpisodes {
+		return m, m.episodesCmd(m.ref, m.reqID, epsManual)
+	}
+	m.freshBefore = m.libraryFreshTotal()
+	return m, m.refreshAllCmd(m.refreshGen)
 }
 
 func (m Model) openSelected() (tea.Model, tea.Cmd) {
@@ -604,7 +637,7 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		// серії підтягнемо у фоні, щоб після перегляду показати список
 		return m, tea.Batch(
 			m.resolveCmd(p.ref, p.ep, req, m.eng.ResolveHints(p.ref, p.ep)),
-			m.episodesCmd(p.ref, req, false))
+			m.episodesCmd(p.ref, req, epsResume))
 	case payloadTitle:
 		return m.openTitle(p.ref)
 	case payloadRoulette:
@@ -632,7 +665,15 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		m.statusGen++
 		return m, m.resolveCmd(m.ref, p.num, req, m.eng.ResolveHints(m.ref, p.num))
 	case payloadStudio:
-		if err := m.eng.PinStudio(m.ref, p.src.Studio, p.src.Kind); err != nil {
+		// Пара є в серії, але її хост без екстрактора: пінувати нічого —
+		// резолв усе одно обійде її, і людина не зрозуміє, чому.
+		if p.unplayable {
+			m.status = i18n.TuiPickUnplayable
+			m.statusKind = statusWarning
+			m.statusGen++
+			return m, nil
+		}
+		if err := m.eng.PinStudio(m.ref, p.src.Studio, p.pinKind); err != nil {
 			m.errText = m.errorText(err)
 			return m, nil
 		}

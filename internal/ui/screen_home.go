@@ -102,10 +102,11 @@ func (m *Model) bookmarkRows() []item {
 			continue
 		}
 		status := m.titleStatus(t)
-		meta, badge := statusMeta(status)
+		meta, badge, warn := statusMeta(status)
 		if !m.newsDisabled[e.TitleID] {
-			if studio, n := m.eng.Lib.PreferredFresh(e.TitleID, m.titleEpisodes(t), m.eng.Prefs); n > 0 {
-				badge = fmt.Sprintf(i18n.TuiStudioNews, n, studio)
+			news := m.eng.Lib.PreferredFresh(e.TitleID, m.titleEpisodes(t), m.eng.Prefs)
+			if n := news.Preferred + news.SubOnly; n > 0 {
+				badge, warn = newsBadge(news)
 				if m.screen == screenBookmarks && status.Fresh != n {
 					meta += metaSep + i18n.NewEpisodes(status.Fresh)
 				}
@@ -113,11 +114,12 @@ func (m *Model) bookmarkRows() []item {
 		}
 		rows = append(rows, row{
 			it: item{
-				title:   titleName(t),
-				meta:    meta,
-				badge:   badge,
-				role:    "lib",
-				payload: payloadTitle{ref: t.Sources[0]},
+				title:     titleName(t),
+				meta:      meta,
+				badge:     badge,
+				badgeWarn: warn,
+				role:      "lib",
+				payload:   payloadTitle{ref: t.Sources[0]},
 			},
 			fresh:     status.Fresh > 0,
 			left:      status.Kind != library.StatusDone,
@@ -190,21 +192,32 @@ func (m *Model) continueRows(limit int) []item {
 		}
 		// Список серій, а не самий журнал: без нього «остання завершена + 1»
 		// пропонувала серію, якої на сайті ще немає.
-		ep, pos, ok := m.eng.Lib.ResumeIn(id, m.titleEpisodes(t))
+		episodes := m.titleEpisodes(t)
+		ep, pos, ok := m.eng.Lib.ResumeIn(id, episodes)
 		if !ok {
 			continue
 		}
-		at := ""
-		if pos > 0 {
-			at = fmt.Sprintf(i18n.TuiEpAt, int(pos)/60, int(pos)%60)
-		}
-		rows = append(rows, item{
+		it := item{
 			icon:       m.ic.Play,
 			title:      fmt.Sprintf(i18n.TuiContinuePfx, titleName(t), ep),
-			meta:       at,
 			iconAccent: true,
 			payload:    payloadResume{ref: t.Sources[0], ep: ep},
-		})
+		}
+		if pos > 0 {
+			it.meta = fmt.Sprintf(i18n.TuiEpAt, int(pos)/60, int(pos)%60)
+		}
+		// У якій озвучці відкриється плеєр — видно ще до Enter. Токен типу
+		// в бейджі живе найдовше при обрізанні; саби без запиту — червоним.
+		pin := m.pinFor(id)
+		if chosen := m.willPlay(episodes, ep, pin); chosen != nil {
+			if it.meta != "" {
+				it.meta += metaSep
+			}
+			it.meta += chosen.Studio
+			it.badge = i18n.KindShort(chosen.Kind)
+			it.badgeWarn = chosen.Kind == provider.KindSub && !library.WantsSub(pin, m.eng.Prefs)
+		}
+		rows = append(rows, it)
 	}
 	return rows
 }
@@ -299,6 +312,23 @@ func (m *Model) titleEpisodes(t *library.LocalTitle) []provider.Episode {
 	return eps
 }
 
+// libraryFreshTotal — сума «нових серій» по видимих записах бібліотеки з тим
+// самим StatusOf, що й бейджі рядків: різниця до/після ручного оновлення й є
+// чесним «+N нових серій» у статусі. Scratch скидається — кеш на диску щойно
+// перезаписано.
+func (m *Model) libraryFreshTotal() int {
+	m.epsScratch = map[string][]provider.Episode{}
+	total := 0
+	// Той самий набір, що й оновлюється (visibleRefs): дубль запису на один
+	// тайтл рахується один раз, як і запитується.
+	for _, ref := range m.visibleRefs() {
+		if t := m.eng.Lib.TitleByRef(ref); t != nil {
+			total += m.titleStatus(t).Fresh
+		}
+	}
+	return total
+}
+
 // titleStatus — стан тайтла для рядка списку: рахується з журналу і списку
 // серій, ніде не зберігається.
 func (m *Model) titleStatus(t *library.LocalTitle) library.Status {
@@ -307,22 +337,44 @@ func (m *Model) titleStatus(t *library.LocalTitle) library.Status {
 
 // statusMeta — підпис рядка бібліотеки й бейдж новинок. Одне джерело чисел із
 // заголовком екрана серій: «залишилась 1 серія» там і тут означає те саме.
-func statusMeta(s library.Status) (meta, badge string) {
+// Серії лише з субтитрами ніколи не ховаються за загальним «+N нових»: саме
+// через це людина вмикала серію й отримувала саби.
+func statusMeta(s library.Status) (meta, badge string, warn bool) {
 	if s.Fresh > 0 {
-		badge = i18n.NewEpisodes(s.Fresh)
+		switch {
+		case s.FreshSubOnly == s.Fresh:
+			badge, warn = fmt.Sprintf(i18n.TuiFreshOnlySubs, s.Fresh), true
+		case s.FreshSubOnly > 0:
+			badge = fmt.Sprintf(i18n.TuiFreshMixed, i18n.NewEpisodes(s.Fresh-s.FreshSubOnly), s.FreshSubOnly)
+		default:
+			badge = i18n.NewEpisodes(s.Fresh)
+		}
 	}
 	switch {
 	case s.Kind == library.StatusDone:
-		return i18n.TuiStateDone, ""
+		return i18n.TuiStateDone, "", false
 	case s.Kind == library.StatusPlanned:
 		if s.Total == 0 {
-			return i18n.TuiStatePlanned, badge
+			return i18n.TuiStatePlanned, badge, warn
 		}
-		return fmt.Sprintf(i18n.TuiStatePlannedWith, i18n.Episodes(s.Total)), badge
+		return fmt.Sprintf(i18n.TuiStatePlannedWith, i18n.Episodes(s.Total)), badge, warn
 	case s.Total == 0:
-		return i18n.TuiStateWatching, badge
+		return i18n.TuiStateWatching, badge, warn
 	default:
-		return i18n.RemainingEpisodes(s.Remaining), badge
+		return i18n.RemainingEpisodes(s.Remaining), badge, warn
+	}
+}
+
+// newsBadge — бейдж новинок бажаної студії. Один лічильник не затуляє інший:
+// «+1 у Рідний Голос · +1 лише в субтитрах» чесніший за будь-який із половин.
+func newsBadge(news library.FreshNews) (badge string, warn bool) {
+	switch {
+	case news.SubOnly == 0:
+		return fmt.Sprintf(i18n.TuiStudioNews, news.Preferred, news.Studio), false
+	case news.Preferred == 0:
+		return fmt.Sprintf(i18n.TuiFreshOnlySubs, news.SubOnly), true
+	default:
+		return fmt.Sprintf(i18n.TuiFreshMixed, fmt.Sprintf(i18n.TuiStudioNews, news.Preferred, news.Studio), news.SubOnly), false
 	}
 }
 

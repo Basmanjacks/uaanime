@@ -32,7 +32,7 @@ func TestResumeAnyOrder(t *testing.T) {
 			})
 			m, _ = pressTestKey(t, m, tea.KeyEnter, "")
 			req := m.reqID
-			epsMsg := episodesDoneMsg{req: req, ref: ref, eps: testEpisodes(3), navigate: false}
+			epsMsg := episodesDoneMsg{req: req, ref: ref, eps: testEpisodes(3), purpose: epsResume}
 			resMsg := resolvedMsg{req: req, res: &playback.Resolved{
 				Ref:     ref,
 				Episode: 1,
@@ -164,10 +164,10 @@ func TestResumeFromHistory(t *testing.T) {
 	req := m.reqID
 	selectedRef := refs[1]
 	m, _ = updateTestModel(t, m, episodesDoneMsg{
-		req:      req,
-		ref:      selectedRef,
-		eps:      testEpisodes(2),
-		navigate: false,
+		req:     req,
+		ref:     selectedRef,
+		eps:     testEpisodes(2),
+		purpose: epsResume,
 	})
 	m, _ = updateTestModel(t, m, resolvedMsg{req: req, res: &playback.Resolved{
 		Ref:     selectedRef,

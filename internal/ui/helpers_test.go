@@ -73,7 +73,10 @@ func newTestModel(t *testing.T) Model {
 		t.Fatalf("open store: %v", err)
 	}
 	eng := &playback.Engine{Store: st, Lib: &library.Library{}, Player: fakePlayer{}}
-	return New(eng, Options{})
+	m := New(eng, Options{})
+	// Тести виконують команди синхронно: тік фонового циклу заблокував би їх.
+	m.refreshEvery = 0
+	return m
 }
 
 func updateTestModel(t *testing.T, m Model, msg tea.Msg) (Model, tea.Cmd) {

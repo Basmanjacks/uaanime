@@ -37,7 +37,7 @@ func (m Model) View() tea.View {
 	case screenPlaying:
 		title = m.currentTitleName()
 	case screenStudio:
-		title = i18n.TuiStudioTitle
+		title = i18n.TuiPickerTitle
 	case screenBookmarks:
 		title = i18n.TuiBookmarksTitle
 	case screenHistory:
@@ -155,24 +155,43 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// episodesHeader — назва тайтла плюс хвіст із метаданих: скільки лишилось і
-// яка озвучка закріплена. Хвіст коштує колонок, тому у вузькому вікні частини
-// відкидаються зліва направо, поки назві не лишиться менше за minTitleName.
+// episodesHeader — назва тайтла плюс хвіст із метаданих: скільки лишилось,
+// приблизно скільки це часу і який реліз закріплено. Хвіст коштує колонок,
+// тому у вузькому вікні частини відкидаються за цінністю: спершу оцінка часу
+// (похідна від кількості), потім кількість, і лише тоді пін — поки назві не
+// лишиться менше за minTitleName.
 func (m Model) episodesHeader() string {
-	pin := m.studioPin()
-	if pin == "" {
-		pin = i18n.TuiStudioAuto
+	remaining := m.remainingParts()
+	eta := ""
+	if len(remaining) > 1 {
+		eta = "~" + remaining[1] // середнє, а не точна тривалість
+		remaining = remaining[:1]
 	}
-	parts := make([]string, 0, 2)
-	if remaining := m.remainingLabel(); remaining != "" {
-		parts = append(parts, remaining)
+	pin := fmt.Sprintf(i18n.TuiStudioPinned, m.pinLabel())
+	assemble := func() []string {
+		parts := append([]string{}, remaining...)
+		if eta != "" {
+			parts = append(parts, eta)
+		}
+		return append(parts, pin)
 	}
-	parts = append(parts, fmt.Sprintf(i18n.TuiStudioPinned, pin))
 
 	limit := m.w - 2
+	parts := assemble()
 	tail := metaTail(parts)
 	for len(parts) > 0 && limit-lipgloss.Width(tail) < minTitleName {
-		parts = parts[1:]
+		switch {
+		case eta != "":
+			eta = ""
+		case len(remaining) > 0:
+			remaining = nil
+		default:
+			pin = ""
+		}
+		parts = assemble()
+		if pin == "" {
+			parts = nil
+		}
 		tail = metaTail(parts)
 	}
 	nameWidth := limit - lipgloss.Width(tail)
@@ -200,24 +219,45 @@ func (m Model) liveLine() string {
 	}
 	pos := m.displayPosition()
 	clock := func(v float64) string { return fmt.Sprintf("%02d:%02d", int(v)/60, int(v)%60) }
-	parts := []string{fmt.Sprintf(i18n.TuiEpisodeNo, m.pendingEp), clock(pos)}
-	if m.live.DurationSec > 0 {
-		parts[1] += " / " + clock(m.live.DurationSec)
+	// Реліз стоїть одразу після номера серії: «в чому грає» — це те, заради
+	// чого сюди дивляться після Enter. Скидається лише у зовсім вузькому вікні,
+	// після повного годинника й перед скороченням «Серія» до «С.».
+	release := ""
+	if m.live.Studio != "" {
+		release = m.live.Studio + metaSep + i18n.KindShort(m.live.Kind)
 	}
+	tail := []string{}
 	if m.live.Paused {
-		parts = append(parts, i18n.TuiPaused)
+		tail = append(tail, i18n.TuiPaused)
 	}
 	if m.live.SessionLimited {
-		parts = append(parts, fmt.Sprintf(i18n.TuiBudgetRemaining, m.live.SessionRemaining))
+		tail = append(tail, fmt.Sprintf(i18n.TuiBudgetRemaining, m.live.SessionRemaining))
 	}
-	if m.w > 0 && lipgloss.Width(strings.Join(parts, metaSep)) > m.w-2 && m.live.DurationSec > 0 {
-		parts[1] = clock(pos)
-	}
-	if m.w > 0 && lipgloss.Width(strings.Join(parts, metaSep)) > m.w-2 {
-		parts[0] = fmt.Sprintf(i18n.TuiEpisodeShort, m.pendingEp)
-		if m.live.SessionLimited {
-			parts[len(parts)-1] = fmt.Sprintf(i18n.TuiBudgetShort, m.live.SessionRemaining)
+	build := func(episode, rel, clk string) []string {
+		out := []string{episode}
+		if rel != "" {
+			out = append(out, rel)
 		}
+		out = append(out, clk)
+		return append(out, tail...)
+	}
+	fits := func(p []string) bool { return m.w <= 0 || lipgloss.Width(strings.Join(p, metaSep)) <= m.w-2 }
+	full := clock(pos)
+	if m.live.DurationSec > 0 {
+		full += " / " + clock(m.live.DurationSec)
+	}
+	parts := build(fmt.Sprintf(i18n.TuiEpisodeNo, m.pendingEp), release, full)
+	if !fits(parts) && m.live.DurationSec > 0 {
+		parts = build(fmt.Sprintf(i18n.TuiEpisodeNo, m.pendingEp), release, clock(pos))
+	}
+	if !fits(parts) && release != "" {
+		parts = build(fmt.Sprintf(i18n.TuiEpisodeNo, m.pendingEp), "", clock(pos))
+	}
+	if !fits(parts) {
+		if m.live.SessionLimited {
+			tail[len(tail)-1] = fmt.Sprintf(i18n.TuiBudgetShort, m.live.SessionRemaining)
+		}
+		parts = build(fmt.Sprintf(i18n.TuiEpisodeShort, m.pendingEp), "", clock(pos))
 	}
 	extras := []string{}
 	if m.live.VolumePct >= 0 {
@@ -225,9 +265,6 @@ func (m Model) liveLine() string {
 	}
 	if eta := m.etaLine(); eta != "" {
 		extras = append(extras, eta)
-	}
-	if m.live.Studio != "" {
-		extras = append(extras, m.live.Studio)
 	}
 	for _, extra := range extras {
 		line := strings.Join(append(parts, extra), metaSep)

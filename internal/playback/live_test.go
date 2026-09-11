@@ -34,7 +34,7 @@ func TestLiveNilIsSafe(t *testing.T) {
 			t.Errorf("%s(nil) = %v, очікував ErrNotPlaying", name, err)
 		}
 	}
-	live.set(nil, provider.TitleRef{}, "", 0, "")
+	live.set(nil, provider.TitleRef{}, "", 0, "", "")
 	live.clear()
 	live.SetStopAfter(true)
 	if live.StopAfter() || live.Limit().Enabled {
@@ -190,7 +190,7 @@ func TestLiveControlsAndIntent(t *testing.T) {
 
 func TestLiveSetResetsLeftoverIntent(t *testing.T) {
 	live := &Live{intent: IntentNext, limit: SessionLimit{Enabled: true, Remaining: 1}, requested: PlayRequest{Gen: 1, Episode: 3}}
-	live.set(playertest.NewSession(player.EndQuit, nil, nil), provider.TitleRef{}, "T", 2, "")
+	live.set(playertest.NewSession(player.EndQuit, nil, nil), provider.TitleRef{}, "T", 2, "", "")
 	if got, req := live.takeIntent(); got != IntentNone || req != (PlayRequest{}) {
 		t.Fatalf("залишковий намір протік у нову сесію: %v %+v", got, req)
 	}
@@ -208,7 +208,7 @@ func TestLiveEndPlaySurfacesRequest(t *testing.T) {
 		t.Fatalf("Begin: %v", err)
 	}
 	want := PlayRequest{Ref: res.Ref, Gen: 2, Episode: 3}
-	eng.Live.set(playertest.NewSession(player.EndQuit, nil, nil), res.Ref, "Title", 1, "")
+	eng.Live.set(playertest.NewSession(player.EndQuit, nil, nil), res.Ref, "Title", 1, "", "")
 	eng.Live.mu.Lock()
 	eng.Live.requested = want
 	eng.Live.mu.Unlock()
@@ -383,7 +383,7 @@ func TestLiveAddVolumeClamps(t *testing.T) {
 			sess := playertest.NewSession(player.EndQuit, nil, nil)
 			sess.VolumePct = tt.start
 			live := &Live{}
-			live.set(sess, provider.TitleRef{}, "T", 1, "")
+			live.set(sess, provider.TitleRef{}, "T", 1, "", "")
 
 			if err := live.AddVolume(tt.delta); err != nil {
 				t.Fatalf("AddVolume: %v", err)
@@ -400,7 +400,7 @@ func TestLiveAddVolumeClamps(t *testing.T) {
 // без позиції та кнопок.
 func TestSnapshotSurvivesVolumeError(t *testing.T) {
 	live := &Live{}
-	live.set(mutedSession{playertest.NewSession(player.EndQuit, []float64{12}, []float64{100})}, provider.TitleRef{}, "T", 1, "")
+	live.set(mutedSession{playertest.NewSession(player.EndQuit, []float64{12}, []float64{100})}, provider.TitleRef{}, "T", 1, "", "")
 	live.SetStopAfter(true)
 
 	snap, err := live.Snapshot()
@@ -419,7 +419,7 @@ func (mutedSession) Volume() (float64, error) { return 0, errBroken }
 
 func TestSnapshotSurfacesSessionError(t *testing.T) {
 	live := &Live{}
-	live.set(failingSession{}, provider.TitleRef{}, "T", 1, "")
+	live.set(failingSession{}, provider.TitleRef{}, "T", 1, "", "")
 	if _, err := live.Snapshot(); !errors.Is(err, errBroken) {
 		t.Fatalf("Snapshot = %v, очікував помилку сесії", err)
 	}

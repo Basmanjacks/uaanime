@@ -694,3 +694,174 @@ func TestHomePlannedTitleShowsEpisodeCount(t *testing.T) {
 		t.Errorf("badge = %q, want %q", row.badge, want)
 	}
 }
+
+// seedPairLibraryTitle — тайтл у бібліотеці зі списком серій у кеші на диску:
+// саме звідти домівка бере релізи для бейджів і рядка «Продовжити».
+func seedPairLibraryTitle(t *testing.T, m *Model, ref provider.TitleRef, entry *library.Entry, eps []provider.Episode) {
+	t.Helper()
+
+	if err := m.eng.Store.SaveEpisodes(ref, eps); err != nil {
+		t.Fatalf("save episodes: %v", err)
+	}
+	m.eng.Lib.Titles = []*library.LocalTitle{{
+		ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref},
+	}}
+	entry.TitleID = ref.Slug
+	m.eng.Lib.Entries = []*library.Entry{entry}
+	m.showHome()
+}
+
+// bothKindsEpisodes — серії 1..n, які студія і озвучила, і субтитрувала.
+func bothKindsEpisodes(studio string, n int) []provider.Episode {
+	eps := make([]provider.Episode, n)
+	for i := range eps {
+		eps[i] = epWithReleases(i+1,
+			provider.Release{Studio: studio, Kind: provider.KindVoiceover},
+			provider.Release{Studio: studio, Kind: provider.KindSub})
+	}
+	return eps
+}
+
+// TestHomeBadgeSubOnlyAndMixed — бейдж новинок ніколи не ховає «лише саби» за
+// загальним «+N нових»: саме через це людина вмикала серію й отримувала саби.
+func TestHomeBadgeSubOnlyAndMixed(t *testing.T) {
+	studio := "РГ"
+	subOnly := epWithReleases(11, provider.Release{Studio: studio, Kind: provider.KindSub})
+	voiced := epWithReleases(12, provider.Release{Studio: studio, Kind: provider.KindVoiceover})
+
+	t.Run("пін: лише саби", func(t *testing.T) {
+		m := newTestModel(t)
+		ref := testRefs("news-subonly", 1)[0]
+		base := bothKindsEpisodes(studio, 10)
+		seedPairLibraryTitle(t, &m, ref, &library.Entry{StudioPin: studio}, append(slices.Clone(base), subOnly))
+		m.eng.Lib.Progress = []*library.Progress{{
+			TitleID: ref.Slug, Episode: 10, Completed: true,
+			WatchedAt: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+		}}
+		if !m.eng.Lib.SeedReleaseBaseline(ref.Slug, base) {
+			t.Fatal("базову лінію релізів не засіяно")
+		}
+		m.showHome()
+
+		row := libraryRow(t, m, ref.Name)
+		if want := fmt.Sprintf(i18n.TuiFreshOnlySubs, 1); row.badge != want || !row.badgeWarn {
+			t.Fatalf("бейдж = (%q, %t), want (%q, true)", row.badge, row.badgeWarn, want)
+		}
+	})
+
+	t.Run("пін: озвучення і саби разом", func(t *testing.T) {
+		m := newTestModel(t)
+		ref := testRefs("news-mixed", 1)[0]
+		base := bothKindsEpisodes(studio, 10)
+		seedPairLibraryTitle(t, &m, ref, &library.Entry{StudioPin: studio},
+			append(slices.Clone(base), subOnly, voiced))
+		m.eng.Lib.Progress = []*library.Progress{{
+			TitleID: ref.Slug, Episode: 10, Completed: true,
+			WatchedAt: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+		}}
+		if !m.eng.Lib.SeedReleaseBaseline(ref.Slug, base) {
+			t.Fatal("базову лінію релізів не засіяно")
+		}
+		m.showHome()
+
+		row := libraryRow(t, m, ref.Name)
+		want := fmt.Sprintf(i18n.TuiFreshMixed, fmt.Sprintf(i18n.TuiStudioNews, 1, studio), 1)
+		if row.badge != want || row.badgeWarn {
+			t.Fatalf("бейдж = (%q, %t), want (%q, false)", row.badge, row.badgeWarn, want)
+		}
+	})
+
+	t.Run("без піна: рахує статус тайтла", func(t *testing.T) {
+		base := bothKindsEpisodes(studio, 10)
+		for _, tc := range []struct {
+			name      string
+			eps       []provider.Episode
+			want      string
+			badgeWarn bool
+		}{
+			{
+				name:      "лише саби",
+				eps:       append(slices.Clone(base), subOnly),
+				want:      fmt.Sprintf(i18n.TuiFreshOnlySubs, 1),
+				badgeWarn: true,
+			},
+			{
+				name: "саби і озвучення",
+				eps:  append(slices.Clone(base), subOnly, voiced),
+				want: fmt.Sprintf(i18n.TuiFreshMixed, i18n.NewEpisodes(1), 1),
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				m := newTestModel(t)
+				ref := testRefs("news-nopin", 1)[0]
+				seedPairLibraryTitle(t, &m, ref, &library.Entry{LastEpisode: 10}, tc.eps)
+
+				row := libraryRow(t, m, ref.Name)
+				if row.badge != tc.want || row.badgeWarn != tc.badgeWarn {
+					t.Fatalf("бейдж = (%q, %t), want (%q, %t)", row.badge, row.badgeWarn, tc.want, tc.badgeWarn)
+				}
+			})
+		}
+	})
+}
+
+// TestHomeContinueRowShowsRelease — у якій парі відкриється плеєр, видно ще до
+// Enter: студія в меті, тип у бейджі, і червоне лише на непроханих сабах.
+func TestHomeContinueRowShowsRelease(t *testing.T) {
+	studio := "РГ"
+	for _, tc := range []struct {
+		name      string
+		pin       library.Pin
+		next      provider.Episode
+		badge     string
+		badgeWarn bool
+	}{
+		{
+			name:      "саби замість озвучення",
+			pin:       library.Pin{Studio: studio, Kind: provider.KindVoiceover},
+			next:      epWithReleases(11, provider.Release{Studio: studio, Kind: provider.KindSub}),
+			badge:     i18n.KindShort(provider.KindSub),
+			badgeWarn: true,
+		},
+		{
+			name:  "озвучення вийшло",
+			pin:   library.Pin{Studio: studio, Kind: provider.KindVoiceover},
+			next:  epWithReleases(11, provider.Release{Studio: studio, Kind: provider.KindVoiceover}),
+			badge: i18n.KindShort(provider.KindVoiceover),
+		},
+		{
+			name:  "саби на явний пін",
+			pin:   library.Pin{Studio: studio, Kind: provider.KindSub},
+			next:  epWithReleases(11, provider.Release{Studio: studio, Kind: provider.KindSub}),
+			badge: i18n.KindShort(provider.KindSub),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel(t)
+			ref := testRefs("continue-release", 1)[0]
+			watched := epWithReleases(10,
+				provider.Release{Studio: studio, Kind: provider.KindVoiceover},
+				provider.Release{Studio: studio, Kind: provider.KindSub})
+			seedPairLibraryTitle(t, &m, ref,
+				&library.Entry{StudioPin: tc.pin.Studio, KindPin: tc.pin.Kind},
+				[]provider.Episode{watched, tc.next})
+			m.eng.Lib.Progress = []*library.Progress{{
+				TitleID: ref.Slug, Episode: 10, Completed: true,
+				WatchedAt: time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC),
+			}}
+			m.showHome()
+
+			rows := sectionRows(t, m, i18n.TuiBlockContinue)
+			if len(rows) != 1 {
+				t.Fatalf("«%s» = %+v, want один рядок", i18n.TuiBlockContinue, rows)
+			}
+			row := rows[0]
+			if !strings.HasSuffix(row.meta, studio) {
+				t.Errorf("meta = %q, want хвіст %q", row.meta, studio)
+			}
+			if row.badge != tc.badge || row.badgeWarn != tc.badgeWarn {
+				t.Fatalf("бейдж = (%q, %t), want (%q, %t)", row.badge, row.badgeWarn, tc.badge, tc.badgeWarn)
+			}
+		})
+	}
+}

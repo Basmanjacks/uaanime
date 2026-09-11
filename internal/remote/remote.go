@@ -48,6 +48,7 @@ var pageHTML string
 // має рендеритися з одного JSON без додаткових запитів.
 type Status struct {
 	Studio           string  `json:"studio"`
+	Kind             string  `json:"kind"`
 	SessionLimited   bool    `json:"session_limited"`
 	SessionRemaining int     `json:"session_remaining"`
 	Playing          bool    `json:"playing"`

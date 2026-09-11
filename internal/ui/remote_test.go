@@ -460,7 +460,7 @@ func TestMarkWatchedRepublishesPlaylist(t *testing.T) {
 	m.eng.Live = live
 	ref := testRefs("playlist-mark", 1)[0]
 	m.ref, m.reqID = ref, 1
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: ref, eps: testEpisodes(3), req: 1, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: ref, eps: testEpisodes(3), req: 1, purpose: epsOpen})
 	mustScreen(t, m, screenEpisodes)
 
 	first := live.CurrentGen()
@@ -488,7 +488,7 @@ func TestPlaylistFollowsTitleChanges(t *testing.T) {
 	refs := testRefs("playlist-switch", 2)
 
 	m.ref, m.reqID = refs[0], 1
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[0], eps: testEpisodes(2), req: 1, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[0], eps: testEpisodes(2), req: 1, purpose: epsOpen})
 	genA := live.CurrentGen()
 	if genA == 0 {
 		t.Fatal("список A не опубліковано")
@@ -501,7 +501,7 @@ func TestPlaylistFollowsTitleChanges(t *testing.T) {
 
 	m.ref = refs[1]
 	m.reqID = 2
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[1], eps: testEpisodes(4), req: 2, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[1], eps: testEpisodes(4), req: 2, purpose: epsOpen})
 	pl := live.Playlist()
 	if pl.Gen == genA || pl.Gen == 0 {
 		t.Fatalf("gen B = %d, а в A був %d", pl.Gen, genA)
@@ -523,7 +523,7 @@ func TestPlaylistNeverPublishesForeignEpisodes(t *testing.T) {
 	// серії A вже в моделі
 	m.reqID = 1
 	m.ref = refs[0]
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[0], eps: testEpisodes(3), req: 1, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[0], eps: testEpisodes(3), req: 1, purpose: epsOpen})
 	live.ClearPlaylist()
 
 	// «Продовжити B»: resolve випередив episodes
@@ -538,7 +538,7 @@ func TestPlaylistNeverPublishesForeignEpisodes(t *testing.T) {
 	}
 
 	// серії B приїхали — тепер список є, і він саме B
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[1], eps: testEpisodes(5), req: 2, navigate: false})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: refs[1], eps: testEpisodes(5), req: 2, purpose: epsResume})
 	pl := live.Playlist()
 	if !pl.Ref.Same(refs[1]) || len(pl.Episodes) != 5 || !pl.Episodes[1].Current {
 		t.Fatalf("плейлист B = %+v", pl)
@@ -553,7 +553,7 @@ func TestRemotePlayRequestDroppedWhenPlaylistChanged(t *testing.T) {
 	m.eng.Live = live
 	ref := testRefs("playlist-stale", 1)[0]
 	m.ref, m.reqID = ref, 1
-	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: ref, eps: testEpisodes(3), req: 1, navigate: true})
+	m, _ = updateTestModel(t, m, episodesDoneMsg{ref: ref, eps: testEpisodes(3), req: 1, purpose: epsOpen})
 
 	stale := live.CurrentGen()
 	if err := live.RequestPlay(stale, 3); err != nil {

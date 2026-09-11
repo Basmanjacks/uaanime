@@ -72,6 +72,7 @@ type Snapshot struct {
 	VolumePct        float64
 	StopAfter        bool
 	Studio           string
+	Kind             provider.Kind
 	SessionLimited   bool
 	SessionRemaining int
 }
@@ -91,6 +92,7 @@ type Live struct {
 	intent      Intent
 	requested   PlayRequest
 	studio      string
+	kind        provider.Kind
 	chainRef    provider.TitleRef
 	chainActive bool
 	limit       SessionLimit
@@ -114,7 +116,7 @@ func (l *Live) Snapshot() (Snapshot, error) {
 		return idleSnapshot(), nil
 	}
 	l.mu.Lock()
-	sess, title, episode, studio, limit := l.sess, l.title, l.episode, l.studio, l.limit
+	sess, title, episode, studio, kind, limit := l.sess, l.title, l.episode, l.studio, l.kind, l.limit
 	l.mu.Unlock()
 	if sess == nil {
 		return idleSnapshot(), nil
@@ -147,6 +149,7 @@ func (l *Live) Snapshot() (Snapshot, error) {
 		VolumePct:        volume,
 		StopAfter:        limit.Enabled && limit.Remaining == 1,
 		Studio:           studio,
+		Kind:             kind,
 		SessionLimited:   limit.Enabled,
 		SessionRemaining: limit.Remaining,
 	}, nil
@@ -250,7 +253,7 @@ func (l *Live) end(intent Intent) error {
 
 // set відкриває вікно на нову сесію. Намір скидається на кожному старті, щоб
 // залишок від Run, який помер до Finish, не протік у наступну серію.
-func (l *Live) set(sess player.Session, ref provider.TitleRef, title string, episode int, studio string) {
+func (l *Live) set(sess player.Session, ref provider.TitleRef, title string, episode int, studio string, kind provider.Kind) {
 	if l == nil {
 		return
 	}
@@ -259,7 +262,7 @@ func (l *Live) set(sess player.Session, ref provider.TitleRef, title string, epi
 		l.limit = SessionLimit{}
 	}
 	l.chainRef, l.chainActive = ref, true
-	l.sess, l.title, l.episode, l.studio = sess, title, episode, studio
+	l.sess, l.title, l.episode, l.studio, l.kind = sess, title, episode, studio, kind
 	l.intent, l.requested, l.finished = IntentNone, PlayRequest{}, false
 	l.mu.Unlock()
 }

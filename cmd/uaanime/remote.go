@@ -26,6 +26,7 @@ func (c remoteControl) Status() (remote.Status, error) {
 	}
 	return remote.Status{
 		Studio:           snap.Studio,
+		Kind:             string(snap.Kind),
 		SessionLimited:   snap.SessionLimited,
 		SessionRemaining: snap.SessionRemaining,
 		Playing:          snap.Playing,

@@ -15,6 +15,7 @@ type item struct {
 	meta       string // другорядний рядок: студії, час, стан
 	metaParts  []metaPart
 	badge      string // короткий статус праворуч
+	badgeWarn  bool   // бейдж — попередження (гратиме не те, що закріплено), не похвала
 	header     bool   // заголовок секції: не вибирається й не фільтрується
 	note       bool   // довідковий рядок (адреса, шлях): як header, але без UPPERCASE; завжди разом із header
 	spacer     bool   // порожній роздільник; завжди разом із header
@@ -102,7 +103,11 @@ type (
 	payloadQuery   struct{ q string }
 	payloadHistory struct{}
 	payloadEp      struct{ num int }
-	payloadStudio  struct{ src provider.Source }
+	payloadStudio  struct {
+		src        provider.Source
+		pinKind    provider.Kind // що записати в KindPin: "" коли вибору типу не було
+		unplayable bool          // пара є в серії, але хост без екстрактора: Enter не пінує
+	}
 	// екран налаштувань: рядок домівки, рядок налаштування, рядок значення
 	payloadSettings     struct{}
 	payloadSetting      struct{ id settingID }

@@ -41,9 +41,9 @@ func TestUsabilityBootstrapOldCacheBeforeRefresh(t *testing.T) {
 		t.Fatal("old metadata was not seeded")
 	}
 	m.eng.Lib.Entries[0].StudioPin = "A"
-	studio, n := m.eng.Lib.PreferredFresh(ref.Slug, append(old, provider.Episode{Number: 2, Releases: old[0].Releases}), library.Prefs{})
-	if studio != "A" || n != 1 {
-		t.Fatalf("studio %q fresh %d", studio, n)
+	news := m.eng.Lib.PreferredFresh(ref.Slug, append(old, provider.Episode{Number: 2, Releases: old[0].Releases}), library.Prefs{})
+	if news.Studio != "A" || news.Preferred != 1 {
+		t.Fatalf("news %+v", news)
 	}
 }
 func TestUsabilityBadgeSchedulerFreshDoesNotConsumeBudget(t *testing.T) {
@@ -117,11 +117,11 @@ func TestUsabilityBootstrapDefersLatestForegroundAndKeepsRemoval(t *testing.T) {
 	m = New(m.eng, Options{})
 	bootstrap := m.bootstrapCmd()
 	m.reqID = 1
-	if m.episodesCmd(refs[0], 1, true) != nil {
+	if m.episodesCmd(refs[0], 1, epsOpen) != nil {
 		t.Fatal("cache writer ran before bootstrap")
 	}
 	m.reqID = 2
-	if m.episodesCmd(refs[1], 2, true) != nil {
+	if m.episodesCmd(refs[1], 2, epsOpen) != nil {
 		t.Fatal("second writer ran before bootstrap")
 	}
 	m.eng.Lib.Entries = m.eng.Lib.Entries[1:]
@@ -132,7 +132,7 @@ func TestUsabilityBootstrapDefersLatestForegroundAndKeepsRemoval(t *testing.T) {
 	if len(m.eng.Lib.Entries) != 1 || m.eng.Lib.Entries[0].TitleID != refs[1].Slug {
 		t.Fatal("bootstrap recreated removed entry")
 	}
-	if m.episodesCmd(refs[1], 2, true) == nil {
+	if m.episodesCmd(refs[1], 2, epsOpen) == nil {
 		t.Fatal("gate stayed closed")
 	}
 }

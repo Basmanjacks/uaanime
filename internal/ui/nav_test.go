@@ -94,10 +94,10 @@ func TestBackStack(t *testing.T) {
 	m, _ = pressTestKey(t, m, tea.KeyEnter, "")
 	req = m.reqID
 	m, _ = updateTestModel(t, m, episodesDoneMsg{
-		req:      req,
-		ref:      cards[1].TitleRef,
-		eps:      testEpisodes(2),
-		navigate: true,
+		req:     req,
+		ref:     cards[1].TitleRef,
+		eps:     testEpisodes(2),
+		purpose: epsOpen,
 	})
 	if m.screen != screenEpisodes {
 		t.Fatalf("screen after episodes = %d, want %d", m.screen, screenEpisodes)
@@ -183,10 +183,10 @@ func TestPendingFrameNoDup(t *testing.T) {
 	m, _ = pressTestKey(t, m, tea.KeyEnter, "")
 	secondReq := m.reqID
 	m, _ = updateTestModel(t, m, episodesDoneMsg{
-		req:      secondReq,
-		ref:      ref,
-		eps:      testEpisodes(1),
-		navigate: true,
+		req:     secondReq,
+		ref:     ref,
+		eps:     testEpisodes(1),
+		purpose: epsOpen,
 	})
 	if m.screen != screenEpisodes {
 		t.Fatalf("screen after second response = %d, want %d", m.screen, screenEpisodes)
@@ -206,10 +206,10 @@ func TestPendingFrameNoDup(t *testing.T) {
 	m, _ = pressTestKey(t, m, tea.KeyEnter, "")
 	req = m.reqID
 	m, _ = updateTestModel(t, m, episodesDoneMsg{
-		req:      req,
-		ref:      ref,
-		err:      errors.New("episodes failed"),
-		navigate: true,
+		req:     req,
+		ref:     ref,
+		err:     errors.New("episodes failed"),
+		purpose: epsOpen,
 	})
 	if m.screen != screenSearch {
 		t.Errorf("error response changed screen to %d, want %d", m.screen, screenSearch)

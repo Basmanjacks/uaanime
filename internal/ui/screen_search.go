@@ -77,7 +77,7 @@ func (m *Model) titleStateBadge(ref provider.TitleRef) string {
 	if entry == nil || entry.Hidden {
 		return ""
 	}
-	meta, _ := statusMeta(m.titleStatus(title))
+	meta, _, _ := statusMeta(m.titleStatus(title))
 	return meta
 }
 

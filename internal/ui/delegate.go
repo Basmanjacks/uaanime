@@ -82,7 +82,7 @@ func (d rowDelegate) Render(w io.Writer, m list.Model, index int, li list.Item) 
 		badgeWidth := lipgloss.Width(badge)
 		badgeSpace := 0
 		if badge != "" {
-			badgeSpace = 1 + badgeWidth
+			badgeSpace = lipgloss.Width(badgeGap) + badgeWidth
 		}
 
 		meta := it.meta
@@ -118,7 +118,7 @@ func (d rowDelegate) Render(w io.Writer, m list.Model, index int, li list.Item) 
 			line += styleMetaSep.Render(metaSep) + metaStyle.Render(meta)
 		}
 		if badge != "" {
-			line += " " + styleBadge.Render(badge)
+			line += badgeGap + d.badgeStyle(it).Render(badge)
 		}
 		fmt.Fprint(w, line) //nolint:errcheck
 		return
@@ -171,9 +171,20 @@ func (d rowDelegate) metaLine(it item, width int, style lipgloss.Style, selected
 		if meta != "" {
 			line += "  "
 		}
-		line += styleBadge.Render(badge)
+		line += d.badgeStyle(it).Render(badge)
 	}
 	return line
+}
+
+// badgeGap — два пробіли перед бейджем: він читається як чіп після тексту,
+// а не як ще одна частина мети.
+const badgeGap = "  "
+
+func (d rowDelegate) badgeStyle(it item) lipgloss.Style {
+	if it.badgeWarn {
+		return styleBadgeWarn
+	}
+	return styleBadge
 }
 
 type styledMetaSegment struct {

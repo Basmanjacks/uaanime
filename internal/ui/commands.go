@@ -32,14 +32,43 @@ func (m *Model) searchCmd(q string, page, req int) tea.Cmd {
 	})
 }
 
-func (m *Model) episodesCmd(ref provider.TitleRef, req int, navigate bool) tea.Cmd {
-	if m.deferEpisodeRequest(ref, req, navigate) {
+// epsPurpose — навіщо просили список серій. Від цього залежить і джерело
+// (кеш чи мережа), і те, як відповідь застосовується: навігація веде на екран
+// серій, «Продовжити» лише запам'ятовує список, а оновлення — після перегляду
+// чи по клавіші r — перемальовує список на місці й не має права ні закрити
+// оверлей, ні скинути відкладений кадр.
+type epsPurpose int
+
+const (
+	// epsResume — нульове значення навмисно: відповідь без призначення нікуди
+	// не веде, як і колишній navigate=false.
+	epsResume    epsPurpose = iota // «Продовжити»: список для екрана після перегляду
+	epsOpen                        // відкрити тайтл
+	epsAfterPlay                   // тиха перевірка після серії: «а наступна вже вийшла?»
+	epsManual                      // клавіша r на екрані серій
+)
+
+// fresh — чи минати кеш: оновлення без мережі було б порожнім жестом.
+func (p epsPurpose) fresh() bool { return p == epsAfterPlay || p == epsManual }
+
+func (m *Model) episodesCmd(ref provider.TitleRef, req int, purpose epsPurpose) tea.Cmd {
+	if m.deferEpisodeRequest(ref, req, purpose) {
 		return nil
 	}
 	eng := m.eng
+	gen := m.refreshGen
 	return asyncCmd(30*time.Second, func(ctx context.Context) tea.Msg {
-		eps, offline, err := eng.EpisodesCached(ctx, ref)
-		return episodesDoneMsg{ref: ref, eps: eps, err: err, offline: offline, req: req, navigate: navigate}
+		var (
+			eps     []provider.Episode
+			offline bool
+			err     error
+		)
+		if purpose.fresh() {
+			eps, err = eng.EpisodesFresh(ctx, ref)
+		} else {
+			eps, offline, err = eng.EpisodesCached(ctx, ref)
+		}
+		return episodesDoneMsg{ref: ref, eps: eps, err: err, offline: offline, req: req, purpose: purpose, refreshGen: gen}
 	})
 }
 
@@ -71,7 +100,7 @@ func (m *Model) resolveCmd(ref provider.TitleRef, ep, req int, h playback.Hints)
 func (m *Model) studiosCmd(ref provider.TitleRef, ep, req int) tea.Cmd {
 	eng := m.eng
 	return asyncCmd(45*time.Second, func(ctx context.Context) tea.Msg {
-		choices, err := eng.StudioChoices(ctx, ref, ep)
+		choices, err := eng.ReleaseChoices(ctx, ref, ep)
 		return studiosMsg{choices: choices, err: err, req: req}
 	})
 }
@@ -164,6 +193,15 @@ func (m *Model) libraryEpisodesCmd() tea.Cmd {
 }
 
 const (
+	// refreshInterval — крок фонового циклу оновлення бібліотеки й каталогу.
+	// Мережа задіюється лише для записів, чий TTL сплив (година для серій), тож
+	// тік у десять хвилин коштує читання диска, а нова серія доходить до
+	// бейджів домівки протягом години без перезапуску застосунку.
+	refreshInterval = 10 * time.Minute
+	// refreshAllTimeout — дедлайн ручного «оновити зараз»: уся бібліотека без
+	// ліміту на кількість тайтлів, тому щедріший за 15 с фонового пробігу.
+	refreshAllTimeout = 60 * time.Second
+
 	// liveTickInterval — крок оновлення рядка «закінчиться о». Це вже третій
 	// споживач RC-каналу VLC поруч із журналом і пультом, а хвилина на екрані
 	// змінюється рідше, ніж раз на п'ять секунд.
@@ -174,6 +212,83 @@ const (
 	liveStartRetry = time.Second
 	liveStartTries = 10
 )
+
+// refreshTickCmd — наступний крок фонового циклу; refreshEvery == 0 вимикає
+// цикл (тести виконують команди синхронно, і тік заблокував би їх назавжди).
+func (m *Model) refreshTickCmd() tea.Cmd {
+	if m.refreshEvery <= 0 || m.eng == nil || m.eng.Provider == nil || m.eng.Store == nil {
+		return nil
+	}
+	return tea.Tick(m.refreshEvery, func(time.Time) tea.Msg { return refreshTickMsg{} })
+}
+
+// refreshAllCmd — ручне «оновити зараз» з домівки: усі видимі тайтли
+// бібліотеки повз TTL і без ліміту на кількість, плюс обидва блоки каталогу.
+// Одна операція з однією відповіддю: статус «Оновлено» має значити, що
+// оновилося все, а не лише бібліотека. Лише Store і Provider — правило 10.
+func (m *Model) refreshAllCmd(gen int) tea.Cmd {
+	eng := m.eng
+	refs := m.visibleRefs()
+	var kinds []provider.CatalogKind
+	if m.catalogEnabled() {
+		kinds = catalogKinds
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), refreshAllTimeout)
+		defer cancel()
+		var (
+			mu       sync.Mutex
+			seeds    []playback.ReleaseSeed
+			firstErr error
+			wg       sync.WaitGroup
+		)
+		note := func(err error) {
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
+		}
+		jobs := make(chan provider.TitleRef)
+		for range min(badgeWorkers, len(refs)) {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ref := range jobs {
+					eps, err := eng.EpisodesFresh(ctx, ref)
+					if err != nil {
+						note(err)
+						continue
+					}
+					mu.Lock()
+					seeds = append(seeds, playback.ReleaseSeed{Ref: ref, Episodes: eps})
+					mu.Unlock()
+				}
+			}()
+		}
+	queue:
+		for _, ref := range refs {
+			select {
+			case jobs <- ref:
+			case <-ctx.Done():
+				note(ctx.Err())
+				break queue
+			}
+		}
+		close(jobs)
+		wg.Wait()
+		catalog := map[provider.CatalogKind][]provider.TitleCard{}
+		for _, kind := range kinds {
+			cards, err := eng.CatalogFresh(ctx, kind)
+			if err != nil {
+				note(err)
+				continue
+			}
+			catalog[kind] = cards
+		}
+		return refreshDoneMsg{seeds: seeds, catalog: catalog, err: firstErr, refreshGen: gen}
+	}
+}
 
 // liveCmd — знімок сесії для екрана «Грає». Snapshot async-safe і Lib не
 // торкається (правило 10). gen несе покоління сесії: відповідь, що приїхала

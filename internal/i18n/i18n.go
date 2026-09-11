@@ -52,7 +52,7 @@ const (
 	TuiTagline      = "Аніме українською · дубляж і субтитри"
 	TuiTaglineShort = "Аніме українською"
 	TuiSearchTitle  = "Пошук"
-	TuiStudioTitle  = "Хто озвучує? (закріпиться за тайтлом)"
+	TuiPickerTitle  = "Що вмикати для цього тайтла?"
 	TuiContinuePfx  = "%s · серія %d"
 	TuiSearchItem   = "Пошук нового"
 	// Рулетка: вибір за людину, коли обирати самому вже несила. Порожній стан
@@ -81,7 +81,9 @@ const (
 	// за незгадану клавішу фільтра, яку список підказує сам.
 	TuiHintEpisodes = "↑↓ Вибір · Enter Грати · X Переглянуто · S Озвучка · M Закладка · Esc Назад"
 	TuiHintStudio   = "↑↓ Вибір · Enter Закріпити й грати · Esc Назад"
-	TuiStudioPinned = "озвучка: %s"
+	// TuiStudioPinned — закріплений реліз у заголовку серій: пара може бути й
+	// субтитрами, тому слово нейтральне.
+	TuiStudioPinned = "реліз: %s"
 	// TuiRemainingFmt — залишок серій і оцінка часу в заголовку екрана серій.
 	// «~» перед часом обов'язкове: це середнє, а не точна тривалість.
 	TuiRemainingFmt = "%s · ~%s"
@@ -89,18 +91,40 @@ const (
 	TuiStudioCoverage = "%d/%d"
 	TuiStudioAuto     = "авто"
 	TuiStudioFallback = "озвучка %s недоступна — грає %s"
-	TuiEmptyLibrary   = "Закладок ще немає — почни з пошуку"
-	TuiNothingFound   = "Нічого не знайдено"
-	TuiMoreStudios    = "+%d"
-	TuiToday          = "сьогодні"
-	TuiYesterday      = "вчора"
-	TuiBlockContinue  = "Продовжити"
-	TuiBlockLibrary   = "Закладки"
-	TuiBlockMore      = "Ще"
-	TuiBlockCatalog   = "Каталог"
-	TuiBlockTop       = "Топ сезону"
-	TuiBlockFresh     = "Нові релізи"
-	TuiShowMore       = "показати ще"
+	// Відхилення типу. Формулювання «ще не вийшло» — навмисне: саби на
+	// сайті зазвичай випереджають озвучення тієї ж студії на кілька днів.
+	TuiStudioFallbackSub    = "озвучка %s недоступна — грає %s у субтитрах"
+	TuiSubsMissingStudio    = "субтитрів від %s немає — грає озвучення %s"
+	TuiSubsFallbackStudio   = "субтитрів від %s немає — грає %s у субтитрах"
+	TuiKindNotOutYet        = "озвучення ще не вийшло"
+	TuiKindNotOutYetLong    = "озвучення від %s ще не вийшло — грає в субтитрах"
+	TuiOnlySubsStatus       = "озвучення ще не вийшло — грає в субтитрах"
+	TuiSubsMissing          = "субтитрів від %s немає — грає озвучення"
+	TuiPickNotInEpisode     = "немає в цій серії"
+	TuiPickUnplayable       = "хост не підтримується"
+	TuiPickFailed           = "хост не відповів"
+	TuiPickWillPlay         = "гратиме"
+	TuiPickWillChooseStudio = "обереш студію"
+	// Рядок серії: токен типу, обрана студія і що ще є. Скорочення лише тут,
+	// де рядки однакові й читаються як колонка; в унікальних рядках — слова.
+	TuiEpisodeNoPad  = "Серія %*d"
+	TuiRelPair       = "%s · %s"
+	TuiMoreVoiced    = "ще %d озв"
+	TuiMoreSubs      = "%d саб"
+	TuiFreshOnlySubs = "+%d лише в субтитрах"
+	TuiFreshMixed    = "%s · +%d лише в субтитрах"
+	TuiEmptyLibrary  = "Закладок ще немає — почни з пошуку"
+	TuiNothingFound  = "Нічого не знайдено"
+	TuiMoreStudios   = "+%d"
+	TuiToday         = "сьогодні"
+	TuiYesterday     = "вчора"
+	TuiBlockContinue = "Продовжити"
+	TuiBlockLibrary  = "Закладки"
+	TuiBlockMore     = "Ще"
+	TuiBlockCatalog  = "Каталог"
+	TuiBlockTop      = "Топ сезону"
+	TuiBlockFresh    = "Нові релізи"
+	TuiShowMore      = "показати ще"
 	// TuiBlockRecent — секція нещодавніх запитів під полем пошуку.
 	TuiBlockRecent = "Нещодавнє"
 
@@ -109,6 +133,8 @@ const (
 	TuiDub    = "Дуб"
 	TuiSub    = "Саб"
 	TuiDubSub = "Дуб+Саб"
+	TuiVoice  = "Озв"
+	TuiMulti  = "Мікс"
 
 	TuiHistoryItem = "Історія"
 	TuiHintList    = "↑↓ Вибір · Enter Грати · Esc Назад"
@@ -208,6 +234,20 @@ const (
 	RemoteNoPlaylist = "Список серій оновився — відкрийте його ще раз"
 	RemoteOffline    = "Немає зв'язку з uaanime"
 )
+
+// KindShort — токен типу для колонки в списку серій і пікері: Дуб/Озв/Саб/Мікс.
+func KindShort(k provider.Kind) string {
+	switch k {
+	case provider.KindDub:
+		return TuiDub
+	case provider.KindVoiceover:
+		return TuiVoice
+	case provider.KindSub:
+		return TuiSub
+	default:
+		return TuiMulti
+	}
+}
 
 func KindLabel(k provider.Kind) string {
 	switch k {

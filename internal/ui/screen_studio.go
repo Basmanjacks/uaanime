@@ -2,66 +2,190 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
-func (m *Model) showStudioChoice(candidates []provider.Source) {
+// showStudioChoice — пікер релізів. Рядок = пара (студія, тип): студія з
+// озвученням і субтитрами дає два рядки, а покриття рахується по парі, тому
+// «11/11» більше не бреше про озвучення, якого є 10/11.
+//
+// playable — пари поточної серії з відомим екстрактором; failed — ті з них,
+// чий хост щойно не відповів (закріпити можна, але з попередженням); willPlay —
+// та, що обере резолв (nil, коли невідомо). Пари з інших серій теж видно: людина
+// має бачити весь вибір тайтлу, а не лише те, що встигло вийти для цієї серії.
+func (m *Model) showStudioChoice(playable, failed []provider.Source, willPlay *provider.Source) {
 	m.setScreen(screenStudio)
 	pin := m.studioPin()
-	coverage, total := m.studioCoverage()
-	seen := map[string]bool{}
-	var items []item
-	for _, s := range candidates {
-		key := s.Studio + "|" + string(s.Kind)
-		if seen[key] {
+	episodes, _ := m.currentEpisodes()
+	coverage, total := library.ReleaseCoverage(episodes)
+
+	type row struct {
+		src      provider.Source
+		playable bool
+		failed   bool
+		inMeta   bool // є в метаданих поточної серії (але, можливо, без екстрактора)
+		coverage int
+	}
+	rows := map[provider.Release]*row{}
+	pairOf := func(s provider.Source) provider.Release { return provider.Release{Studio: s.Studio, Kind: s.Kind} }
+	for _, s := range playable {
+		key := pairOf(s)
+		if _, ok := rows[key]; ok {
 			continue
 		}
-		seen[key] = true
+		rows[key] = &row{src: s, playable: true, inMeta: true, coverage: coverage[key]}
+	}
+	for _, s := range failed {
+		if r, ok := rows[pairOf(s)]; ok {
+			r.failed = true
+		}
+	}
+	for key, n := range coverage {
+		if _, ok := rows[key]; ok {
+			continue
+		}
+		rows[key] = &row{src: provider.Source{Studio: key.Studio, Kind: key.Kind, Episode: m.pendingEp}, coverage: n}
+	}
+	for _, ep := range episodes {
+		if ep.Number != m.pendingEp {
+			continue
+		}
+		for _, r := range provider.CleanEpisode(ep).Releases {
+			if row, ok := rows[r]; ok {
+				row.inMeta = true
+			}
+		}
+	}
+
+	ordered := make([]provider.Release, 0, len(rows))
+	for key := range rows {
+		ordered = append(ordered, key)
+	}
+	pinned := m.pinnedPair(pin, ordered)
+	isWill := func(key provider.Release) bool {
+		return willPlay != nil && key == pairOf(*willPlay)
+	}
+	rank := func(key provider.Release) int {
+		switch {
+		case key == pinned:
+			return 0
+		case isWill(key):
+			return 1
+		case rows[key].playable:
+			return 2
+		default:
+			return 3
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if rank(a) != rank(b) {
+			return rank(a) < rank(b)
+		}
+		if rows[a].coverage != rows[b].coverage {
+			return rows[a].coverage > rows[b].coverage
+		}
+		if kindRank(a.Kind) != kindRank(b.Kind) {
+			return kindRank(a.Kind) < kindRank(b.Kind)
+		}
+		return a.Studio < b.Studio
+	})
+
+	// Явний пін на субтитри — лише коли був вибір: якщо серед рядків немає
+	// жодного не-sub релізу, людина не обирала саби замість озвучення, і пін
+	// лишається wildcard — озвучення ввімкнеться, щойно з'явиться.
+	offersNonSub := false
+	for _, key := range ordered {
+		if key.Kind != provider.KindSub {
+			offersNonSub = true
+		}
+	}
+	items := make([]item, 0, len(ordered))
+	for _, key := range ordered {
+		r := rows[key]
+		pinKind := r.src.Kind
+		if pinKind == provider.KindSub && !offersNonSub {
+			pinKind = ""
+		}
 		it := item{
-			title:   s.Studio,
-			meta:    i18n.KindLabel(s.Kind),
-			payload: payloadStudio{src: s},
+			title:   r.src.Studio,
+			meta:    i18n.KindShort(r.src.Kind),
+			payload: payloadStudio{src: r.src, pinKind: pinKind, unplayable: !r.playable && r.inMeta},
 		}
 		// Покриття йде в мету, а не в бейдж: зелений бейдж читається як
 		// «все добре», а «3/12» — це попередження, а не похвала. Нуль не
 		// показуємо взагалі: список серій міг просто відстати від сайту.
-		if n := coverage[s.Studio]; n > 0 && total > 0 {
-			it.meta += metaSep + fmt.Sprintf(i18n.TuiStudioCoverage, n, total)
+		if r.coverage > 0 && total > 0 {
+			it.meta += metaSep + fmt.Sprintf(i18n.TuiStudioCoverage, r.coverage, total)
 		}
-		if s.Studio == pin {
-			it.icon = m.ic.Done
-			it.iconAccent = true
+		switch {
+		case key == pinned:
+			it.icon, it.iconAccent = m.ic.Done, true
+		case isWill(key):
+			it.icon, it.iconAccent = m.ic.Play, true
+		}
+		switch {
+		case isWill(key):
+			it.badge = i18n.TuiPickWillPlay
+		case r.failed:
+			it.badge, it.badgeWarn = i18n.TuiPickFailed, true
+		case !r.playable && r.inMeta:
+			it.badge, it.badgeWarn = i18n.TuiPickUnplayable, true
+		case !r.playable:
+			it.badge, it.badgeWarn = i18n.TuiPickNotInEpisode, true
 		}
 		items = append(items, it)
 	}
 	_ = m.setItems(items, 0)
 }
 
-// studioCoverage — скільки серій тайтлу має кожна студія і скільки їх усього.
-// Рахується з релізів, які вже лежать у списку серій: мережа тут не потрібна,
-// а без списку покриття просто не показується.
-func (m *Model) studioCoverage() (map[string]int, int) {
-	episodes, ok := m.currentEpisodes()
-	if !ok {
-		return nil, 0
+// pinnedPair — який рядок пікера позначити як закріплений. Явний пін — його
+// пара; wildcard — тип студії, який Pick обрав би серед УСІХ пар (щоб вето на
+// тихі саби діяло так само, як у резолві), а коли Pick іде в іншу студію —
+// найкраще озвучення студії піна, бо саме воно ввімкнеться, щойно буде.
+func (m *Model) pinnedPair(pin library.Pin, pairs []provider.Release) provider.Release {
+	if pin.Studio == "" {
+		return provider.Release{}
 	}
-	coverage := map[string]int{}
-	for _, ep := range episodes {
-		// Одна серія рахується студії один раз, навіть якщо в неї там і
-		// дубляж, і субтитри.
-		counted := map[string]bool{}
-		for _, r := range ep.Releases {
-			if counted[r.Studio] {
-				continue
-			}
-			counted[r.Studio] = true
-			coverage[r.Studio]++
+	if pin.Kind != "" {
+		return provider.Release{Studio: pin.Studio, Kind: pin.Kind}
+	}
+	all := make([]provider.Source, 0, len(pairs))
+	for _, key := range pairs {
+		all = append(all, provider.Source{Studio: key.Studio, Kind: key.Kind})
+	}
+	if chosen, _ := library.Pick(all, pin, m.eng.Prefs); chosen != nil && chosen.Studio == pin.Studio {
+		return provider.Release{Studio: chosen.Studio, Kind: chosen.Kind}
+	}
+	best := provider.Release{}
+	for _, key := range pairs {
+		if key.Studio != pin.Studio || key.Kind == provider.KindSub {
+			continue
+		}
+		if best.Studio == "" || kindRank(key.Kind) < kindRank(best.Kind) {
+			best = key
 		}
 	}
-	return coverage, len(episodes)
+	return best
+}
+
+// kindRank дублює порядок бібліотеки для сортування рядків пікера.
+func kindRank(k provider.Kind) int {
+	switch k {
+	case provider.KindDub:
+		return 0
+	case provider.KindVoiceover:
+		return 1
+	case provider.KindMulti:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // currentEpisodes — серії саме поточного тайтлу. m.episodes лишається від
@@ -122,14 +246,25 @@ func (m *Model) clearPlaylist() {
 	}
 }
 
-func (m Model) studioPin() string {
+// studioPin — пін поточного тайтлу значеннями.
+func (m Model) studioPin() library.Pin {
 	title := m.eng.Lib.TitleByRef(m.ref)
 	if title == nil {
-		return ""
+		return library.Pin{}
 	}
-	entry := m.eng.Lib.EntryLookup(title.ID)
-	if entry == nil {
-		return ""
+	return m.pinFor(title.ID)
+}
+
+// pinLabel — пін для заголовка: «Рідний Голос · Озв», лише студія для
+// wildcard, «авто» без піна.
+func (m Model) pinLabel() string {
+	pin := m.studioPin()
+	switch {
+	case pin.Studio == "":
+		return i18n.TuiStudioAuto
+	case pin.Kind == "":
+		return pin.Studio
+	default:
+		return fmt.Sprintf(i18n.TuiRelPair, pin.Studio, i18n.KindShort(pin.Kind))
 	}
-	return entry.StudioPin
 }

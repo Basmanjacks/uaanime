@@ -11,6 +11,7 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // ---- update ----
@@ -50,7 +51,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if r := m.deferredEpisodes; r != nil {
 			m.deferredEpisodes = nil
 			if r.req == m.reqID {
-				cmds = append(cmds, m.episodesCmd(r.ref, r.req, r.navigate))
+				cmds = append(cmds, m.episodesCmd(r.ref, r.req, r.purpose))
 			}
 		}
 		if r := m.deferredBookmark; r != nil {
@@ -121,9 +122,18 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case libraryEpisodesMsg:
+		// Пробіг завершився — наступний тік має право запустити новий.
+		m.badgeScheduled.Store(false)
 		m.seedReleases(msg.seeds)
 		m.refreshLibraryLists()
 		return m, nil
+
+	case refreshTickMsg:
+		cmd := m.updateRefreshTick()
+		return m, cmd
+
+	case refreshDoneMsg:
+		return m.updateRefreshDone(msg)
 
 	case bookmarkBaselineMsg:
 		if m.playCancel != nil {
@@ -138,6 +148,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case episodesDoneMsg:
+		if msg.purpose.fresh() {
+			return m.updateRefreshedEpisodes(msg)
+		}
 		if m.rejectStale(msg.req) {
 			return m, nil
 		}
@@ -153,9 +166,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.episodes, m.episodesRef = msg.eps, msg.ref
 		m.seedReleases([]playback.ReleaseSeed{{Ref: msg.ref, Episodes: msg.eps}})
 		// Список приїхав — пульт має його побачити навіть тоді, коли на екран
-		// серій ми не заходимо («Продовжити» йде з navigate:false).
+		// серій ми не заходимо («Продовжити» йде з epsResume).
 		m.publishPlaylist()
-		if !msg.navigate {
+		if msg.purpose == epsResume {
 			if msg.offline {
 				m.status = i18n.MsgOfflineCache
 				m.statusKind = statusWarning
@@ -222,7 +235,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		pinned := entry != nil && entry.StudioPin != ""
 		if len(res.Candidates) > 1 && !pinned {
 			m.stack = append(m.stack, m.snapshot())
-			m.showStudioChoice(res.Candidates)
+			m.showStudioChoice(res.Playable, res.Failed, &res.Source)
 			return m, nil
 		}
 		return m.startPlayback(res)
@@ -241,7 +254,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		_ = m.closeOverlay()
 		m.commitPending(msg.req)
 		m.stack = append(m.stack, m.snapshot())
-		m.showStudioChoice(msg.choices)
+		// «Гратиме» рахується тут, а не у фоні: Pick чистий, а пін і
+		// переваги читаються з бібліотеки лише на Update-горутині.
+		willPlay, _ := library.Pick(msg.choices, m.studioPin(), m.eng.Prefs)
+		m.showStudioChoice(msg.choices, nil, willPlay)
 		return m, nil
 
 	case journalMsg:
@@ -284,6 +300,11 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if _, ok := m.currentEpisodes(); ok {
 			cmd = m.showEpisodes()
+			// Момент найвищої цінності для свіжого списку: «а наступна вже
+			// вийшла?» — перепитуємо тихо, поки людина дивиться на список.
+			if !m.quitting {
+				cmd = tea.Batch(cmd, m.afterPlayRefreshCmd())
+			}
 		} else {
 			m.showHome()
 		}
@@ -449,8 +470,10 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.statusKind = statusInfo
 	m.statusGen++
-	if res.PinFallback {
-		m.status = fmt.Sprintf(i18n.TuiStudioFallback, m.studioPin(), res.Source.Studio)
+	// Попередження — лише з res: після Begin бібліотека вже має неявний пін
+	// і не відрізняє «піна не було» від явного вибору.
+	if text, ok := res.Warning(); ok {
+		m.status = text
 		m.statusKind = statusWarning
 		m.statusGen++
 	}
@@ -476,4 +499,150 @@ func (m Model) requestQuit() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, tea.Quit
+}
+
+// updateRefreshTick — крок фонового циклу. У простої повторює стартовий
+// пробіг (кеш серій бібліотеки й блоки каталогу, обидва поважають TTL); під
+// час гри, bootstrap чи ручного оновлення лише переозброюється — бібліотеку
+// в ці моменти не чіпаємо з тієї ж причини, що й bookmarkBaselineMsg.
+func (m *Model) updateRefreshTick() tea.Cmd {
+	cmds := []tea.Cmd{m.refreshTickCmd()}
+	if m.playCancel != nil || m.bootstrapPending || m.refreshBusy != 0 {
+		return tea.Batch(cmds...)
+	}
+	if m.catalogEnabled() {
+		for _, kind := range catalogKinds {
+			cmds = append(cmds, m.catalogCmd(kind))
+		}
+	}
+	if cmd := m.libraryEpisodesCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	return tea.Batch(cmds...)
+}
+
+// afterPlayRefreshCmd — тиха перевірка списку поточного тайтлу після серії.
+func (m *Model) afterPlayRefreshCmd() tea.Cmd {
+	if m.eng == nil || m.eng.Provider == nil || m.eng.Store == nil || m.refreshBusy != 0 {
+		return nil
+	}
+	m.refreshGen++
+	m.refreshBusy = m.refreshGen
+	cmd := m.episodesCmd(m.ref, m.reqID, epsAfterPlay)
+	if cmd == nil {
+		// Запит відклали до кінця bootstrap і можуть викинути — власника
+		// відповіді не буде, а зависла зайнятість убила б і r, і тік.
+		m.refreshBusy = 0
+	}
+	return cmd
+}
+
+// updateRefreshedEpisodes — відповідь оновлення списку серій (після перегляду
+// або по r). Спершу покоління: зайнятість знімає лише власна відповідь, а
+// екран змінює лише актуальна. Ніякого closeOverlay і failNav: людина могла
+// відкрити довідку чи піти далі, і відповідь не має права смикати її.
+func (m Model) updateRefreshedEpisodes(msg episodesDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.refreshGen == m.refreshBusy {
+		m.refreshBusy = 0
+	}
+	if msg.refreshGen != m.refreshGen {
+		return m, nil
+	}
+	if msg.err != nil {
+		if msg.purpose == epsManual {
+			m.status = ""
+			m.statusKind = statusInfo
+			m.statusGen++
+			m.errText = m.errorText(msg.err)
+		}
+		return m, nil
+	}
+	// Порівнюємо зі списком у пам'яті, а не з currentEpisodes(): кеш на диску
+	// EpisodesFresh уже перезаписав, і різниця з ним завжди була б нульовою.
+	var appeared []int
+	if len(m.episodes) > 0 && m.episodesRef.Same(msg.ref) {
+		appeared = newEpisodeNumbers(m.episodes, msg.eps)
+	}
+	var cmd tea.Cmd
+	sameTitle := m.ref.Same(msg.ref)
+	if sameTitle {
+		// Дані — завжди, коли тайтл той самий: інакше наступне r оголосило б
+		// ту саму серію знову. Рядки — лише коли список справді на екрані.
+		m.episodes, m.episodesRef = msg.eps, msg.ref
+		m.seedReleases([]playback.ReleaseSeed{{Ref: msg.ref, Episodes: msg.eps}})
+	}
+	if sameTitle && m.screen == screenEpisodes && m.overlay == overlayNone {
+		cmd = m.setItems(m.episodeRows(), -1)
+		m.publishPlaylist()
+	} else {
+		m.refreshLibraryLists()
+	}
+	switch {
+	case len(appeared) > 0:
+		m.status = i18n.EpisodesAppeared(appeared)
+		m.statusKind = statusSuccess
+		m.statusGen++
+	case msg.purpose == epsManual:
+		m.status = i18n.TuiRefreshedNone
+		m.statusKind = statusSuccess
+		m.statusGen++
+	}
+	return m, cmd
+}
+
+// newEpisodeNumbers — номери, яких у старому списку не було. Порівнюємо
+// множини номерів, а не довжини: провайдер може віддати один номер двічі.
+func newEpisodeNumbers(old, fresh []provider.Episode) []int {
+	seen := map[int]bool{}
+	for _, ep := range old {
+		seen[ep.Number] = true
+	}
+	var out []int
+	for _, ep := range fresh {
+		if !seen[ep.Number] {
+			seen[ep.Number] = true
+			out = append(out, ep.Number)
+		}
+	}
+	return out
+}
+
+// updateRefreshDone — відповідь ручного оновлення з домівки. Дані (каталог,
+// базові лінії) застосовуються завжди — кеш на диску вже новий; статус —
+// лише для актуального покоління, і ставиться ДО refreshLibraryLists:
+// refreshHome зберігає статус, який не є statusInfo.
+func (m Model) updateRefreshDone(msg refreshDoneMsg) (tea.Model, tea.Cmd) {
+	if msg.refreshGen == m.refreshBusy {
+		m.refreshBusy = 0
+	}
+	for kind, cards := range msg.catalog {
+		if len(cards) > 0 {
+			m.catalog[kind] = cards
+		}
+	}
+	m.seedReleases(msg.seeds)
+	if msg.refreshGen == m.refreshGen {
+		delta := m.libraryFreshTotal() - m.freshBefore
+		switch {
+		case msg.err != nil:
+			m.status = ""
+			m.statusKind = statusInfo
+			m.statusGen++
+			m.errText = m.errorText(msg.err)
+		case delta > 0:
+			m.status = fmt.Sprintf(i18n.TuiRefreshedNews, i18n.NewEpisodes(delta))
+			m.statusKind = statusSuccess
+			m.statusGen++
+		case len(m.visibleRefs()) == 0:
+			m.status = i18n.TuiRefreshed
+			m.statusKind = statusSuccess
+			m.statusGen++
+		default:
+			m.status = i18n.TuiRefreshedNone
+			m.statusKind = statusSuccess
+			m.statusGen++
+		}
+	}
+	m.refreshLibraryLists()
+	return m, nil
 }

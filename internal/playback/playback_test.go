@@ -17,6 +17,7 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
+	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/provider"
@@ -186,7 +187,7 @@ func (e stubExtractor) Extract(context.Context, string, string) ([]extractor.Str
 	return e.streams, e.err
 }
 
-func TestStudioChoicesFiltersUnplayableHosts(t *testing.T) {
+func TestReleaseChoicesFiltersUnplayableHosts(t *testing.T) {
 	playableEmbed := "https://handled.invalid/embed"
 	sources := []provider.Source{
 		{Studio: "X", Kind: provider.KindDub, Embed: "https://unsupported.invalid/embed"},
@@ -194,18 +195,18 @@ func TestStudioChoicesFiltersUnplayableHosts(t *testing.T) {
 	}
 	engine := testEngine(sources, []extractor.Extractor{stubExtractor{handle: playableEmbed}})
 
-	choices, err := engine.StudioChoices(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
+	choices, err := engine.ReleaseChoices(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
 	if err != nil {
-		t.Fatalf("StudioChoices: %v", err)
+		t.Fatalf("ReleaseChoices: %v", err)
 	}
 	if len(choices) != 1 || choices[0].Studio != "Y" {
-		t.Fatalf("StudioChoices = %+v, want only Y", choices)
+		t.Fatalf("ReleaseChoices = %+v, want only Y", choices)
 	}
 
 	engine.Extractors = nil
-	choices, err = engine.StudioChoices(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
+	choices, err = engine.ReleaseChoices(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1)
 	if !errors.Is(err, errs.ErrNoStream) || len(choices) != 0 {
-		t.Fatalf("StudioChoices all unplayable = (%+v, %v), want ErrNoStream", choices, err)
+		t.Fatalf("ReleaseChoices all unplayable = (%+v, %v), want ErrNoStream", choices, err)
 	}
 }
 
@@ -227,8 +228,119 @@ func TestResolvePinFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if !resolved.PinFallback || resolved.Source.Studio != "Y" {
-		t.Fatalf("Resolved = %+v, want fallback to Y", resolved)
+	if resolved.Deviation != library.DeviationStudio || resolved.Source.Studio != "Y" || resolved.Pin.Studio != "X" {
+		t.Fatalf("Resolved = %+v, want fallback to Y with DeviationStudio", resolved)
+	}
+	if text, ok := resolved.Warning(); !ok || text != fmt.Sprintf(i18n.TuiStudioFallback, "X", "Y") {
+		t.Fatalf("Warning = (%q, %v)", text, ok)
+	}
+}
+
+// Кейс «Вигнаного лицаря»: пін (РГ, voiceover), серія лише з РГ/sub.
+func TestResolveSubFallbackWarnsAndBeginKeepsWildcard(t *testing.T) {
+	ref := provider.TitleRef{Provider: "stub", Slug: "1-title", Name: "Title"}
+	playableEmbed := "https://handled.invalid/embed"
+	sources := []provider.Source{{Studio: "РГ", Kind: provider.KindSub, Embed: playableEmbed}}
+	engine := testEngine(sources, []extractor.Extractor{stubExtractor{
+		handle:  playableEmbed,
+		streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}},
+	}})
+
+	engine.Player = fakePlayer{}
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.Store = st
+
+	// Без піна: попередження без студії, а Begin пінує студію, але не саби.
+	resolved, err := engine.Resolve(t.Context(), ref, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Deviation != library.DeviationNone || resolved.Pin.Studio != "" {
+		t.Fatalf("Resolved = %+v, want no pin and no deviation", resolved)
+	}
+	if text, ok := resolved.Warning(); !ok || text != i18n.TuiOnlySubsStatus {
+		t.Fatalf("Warning = (%q, %v), want TuiOnlySubsStatus", text, ok)
+	}
+	titleID, pinned, err := engine.Begin(resolved)
+	if err != nil {
+		t.Fatalf("Begin: %v", err)
+	}
+	entry := engine.Lib.EntryLookup(titleID)
+	if pinned != "РГ" || entry.StudioPin != "РГ" || entry.KindPin != "" {
+		t.Fatalf("неявний пін = %q/%q, want РГ/wildcard", entry.StudioPin, entry.KindPin)
+	}
+
+	// Пін (РГ, voiceover): та сама студія, інший тип → DeviationKind і статус «ще не вийшло».
+	entry.KindPin = provider.KindVoiceover
+	resolved, err = engine.Resolve(t.Context(), ref, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved.Deviation != library.DeviationKind {
+		t.Fatalf("Deviation = %v, want Kind", resolved.Deviation)
+	}
+	if text, ok := resolved.Warning(); !ok || text != fmt.Sprintf(i18n.TuiKindNotOutYetLong, "РГ") {
+		t.Fatalf("Warning = (%q, %v)", text, ok)
+	}
+
+	// Явний sub-пін: це те, чого хотіли — без попередження.
+	entry.KindPin = provider.KindSub
+	resolved, err = engine.Resolve(t.Context(), ref, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if text, ok := resolved.Warning(); ok {
+		t.Fatalf("явний sub-пін не має попереджати, отримав %q", text)
+	}
+}
+
+func TestResolvedWarningKinds(t *testing.T) {
+	pinA := library.Pin{Studio: "A", Kind: provider.KindDub}
+	cases := []struct {
+		name string
+		res  Resolved
+		want string
+	}{
+		{"dub→voiceover тієї ж студії — мовчить", Resolved{Pin: pinA, Source: provider.Source{Studio: "A", Kind: provider.KindVoiceover}, Deviation: library.DeviationKind}, ""},
+		{"sub-пін без сабів — озвучення", Resolved{Pin: library.Pin{Studio: "A", Kind: provider.KindSub}, Source: provider.Source{Studio: "A", Kind: provider.KindDub}, Deviation: library.DeviationKind}, fmt.Sprintf(i18n.TuiSubsMissing, "A")},
+		{"інша студія і саби", Resolved{Pin: pinA, Source: provider.Source{Studio: "B", Kind: provider.KindSub}, Deviation: library.DeviationStudio}, fmt.Sprintf(i18n.TuiStudioFallbackSub, "A", "B")},
+		{"sub-пін → озвучення іншої студії", Resolved{Pin: library.Pin{Studio: "A", Kind: provider.KindSub}, Source: provider.Source{Studio: "B", Kind: provider.KindDub}, Deviation: library.DeviationStudio}, fmt.Sprintf(i18n.TuiSubsMissingStudio, "A", "B")},
+		{"sub-пін → саби іншої студії", Resolved{Pin: library.Pin{Studio: "A", Kind: provider.KindSub}, Source: provider.Source{Studio: "B", Kind: provider.KindSub}, Deviation: library.DeviationStudio}, fmt.Sprintf(i18n.TuiSubsFallbackStudio, "A", "B")},
+		{"глобальні саби — мовчить", Resolved{Prefs: library.Prefs{PreferKind: provider.KindSub}, Source: provider.Source{Studio: "A", Kind: provider.KindSub}}, ""},
+	}
+	for _, tc := range cases {
+		got, ok := tc.res.Warning()
+		if ok != (tc.want != "") || got != tc.want {
+			t.Errorf("%s: Warning = (%q, %v), want %q", tc.name, got, ok, tc.want)
+		}
+	}
+}
+
+// Пара, чий хост щойно впав, лишається серед Playable (екстрактор є), але
+// окремо позначена у Failed — пікер каже «хост не відповів», а не «не
+// підтримується», і не блокує закріплення.
+func TestResolveReportsFailedSources(t *testing.T) {
+	dead, alive := "https://dead.invalid/embed", "https://alive.invalid/embed"
+	sources := []provider.Source{
+		{Studio: "A", Kind: provider.KindDub, Embed: dead},
+		{Studio: "B", Kind: provider.KindDub, Embed: alive},
+	}
+	engine := testEngine(sources, []extractor.Extractor{
+		stubExtractor{handle: dead, err: errors.New("host down")},
+		stubExtractor{handle: alive, streams: []extractor.Stream{{URL: "https://video.invalid/stream.m3u8"}}},
+	})
+	resolved, err := engine.Resolve(t.Context(), provider.TitleRef{Provider: "stub", Slug: "1-title"}, 1, nil)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(resolved.Playable) != 2 {
+		t.Fatalf("Playable = %+v, want A and B", resolved.Playable)
+	}
+	if len(resolved.Failed) != 1 || resolved.Failed[0].Studio != "A" {
+		t.Fatalf("Failed = %+v, want only A", resolved.Failed)
 	}
 }
 
@@ -947,8 +1059,8 @@ func TestSourcesMemoSkipsSecondFetch(t *testing.T) {
 	if _, err := engine.Resolve(t.Context(), stored, 1, nil); err != nil {
 		t.Fatalf("другий Resolve: %v", err)
 	}
-	if _, err := engine.StudioChoices(t.Context(), fresh, 1); err != nil {
-		t.Fatalf("StudioChoices: %v", err)
+	if _, err := engine.ReleaseChoices(t.Context(), fresh, 1); err != nil {
+		t.Fatalf("ReleaseChoices: %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("звернень до провайдера = %d, want 1 (Name/URL не входять у ключ memo)", calls)
@@ -1153,5 +1265,30 @@ func TestResolveWithUsesPrefsSnapshot(t *testing.T) {
 	res := <-done
 	if res == nil || res.Source.Kind != provider.KindSub {
 		t.Fatalf("резолв мав узяти знімок sub, отримав %+v", res)
+	}
+}
+
+func TestCatalogFreshBypassesCacheAndSavesResult(t *testing.T) {
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	stale := []provider.TitleCard{{TitleRef: provider.TitleRef{Provider: "stub", Slug: "1-a", Name: "A"}}}
+	if err := st.SaveCatalog("stub", provider.CatalogFresh, stale); err != nil {
+		t.Fatalf("save catalog: %v", err)
+	}
+	want := []provider.TitleCard{{TitleRef: provider.TitleRef{Provider: "stub", Slug: "2-b", Name: "B"}}}
+	engine := &Engine{Provider: catalogStub(want, nil), Store: st}
+
+	got, err := engine.CatalogFresh(t.Context(), provider.CatalogFresh)
+	if err != nil {
+		t.Fatalf("CatalogFresh: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cards = %#v, want %#v", got, want)
+	}
+	cached, fresh, found := st.LoadCatalog("stub", provider.CatalogFresh)
+	if !found || !fresh || !reflect.DeepEqual(cached, want) {
+		t.Fatalf("кеш після CatalogFresh = (fresh=%v, found=%v, %#v), want свіжий %#v", fresh, found, cached, want)
 	}
 }

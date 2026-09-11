@@ -8,9 +8,9 @@ import (
 
 type bootstrapMsg struct{ seeds []playback.ReleaseSeed }
 type episodeRequest struct {
-	ref      provider.TitleRef
-	req      int
-	navigate bool
+	ref     provider.TitleRef
+	req     int
+	purpose epsPurpose
 }
 type bookmarkRequest struct {
 	titleID     string
@@ -75,13 +75,13 @@ func (m *Model) bootstrapCmd() tea.Cmd {
 		return bootstrapMsg{seeds}
 	}
 }
-func (m *Model) deferEpisodeRequest(ref provider.TitleRef, req int, navigate bool) bool {
+func (m *Model) deferEpisodeRequest(ref provider.TitleRef, req int, purpose epsPurpose) bool {
 	if !m.bootstrapPending {
 		return false
 	}
 	for _, old := range m.bootstrapRefs {
 		if old.Same(ref) {
-			m.deferredEpisodes = &episodeRequest{ref, req, navigate}
+			m.deferredEpisodes = &episodeRequest{ref, req, purpose}
 			return true
 		}
 	}

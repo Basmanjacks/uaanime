@@ -358,3 +358,23 @@ func TestSearchesFilePerms(t *testing.T) {
 		t.Fatalf("права %v, очікував 0600", info.Mode().Perm())
 	}
 }
+
+// TTL серій — година: це затримка, з якою фоновий цикл TUI бачить нову серію.
+func TestEpisodesCacheTTLIsOneHour(t *testing.T) {
+	s := openTemp(t)
+	ref := provider.TitleRef{Provider: "anitube", Slug: "1-x"}
+	for _, tc := range []struct {
+		age  time.Duration
+		want bool
+	}{{59 * time.Minute, true}, {61 * time.Minute, false}} {
+		if err := writeAtomic(s.episodesCachePath(ref), &episodesCache{
+			FetchedAt: time.Now().Add(-tc.age),
+			Episodes:  []provider.Episode{{Number: 1}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, fresh, found := s.LoadEpisodes(ref); !found || fresh != tc.want {
+			t.Errorf("вік %v: fresh=%v found=%v, want fresh=%v", tc.age, fresh, found, tc.want)
+		}
+	}
+}

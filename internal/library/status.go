@@ -20,6 +20,23 @@ type Status struct {
 	Total     int // серій у списку
 	Remaining int // непереглянутих серій у списку
 	Fresh     int // непереглянутих із номером понад базову лінію «що вже вийшло»
+	// FreshSubOnly — скільки з Fresh мають лише субтитри (є релізи, і всі sub).
+	// Серія без метаданих релізів — невідома, а не «лише саби».
+	FreshSubOnly int
+}
+
+// subOnly — у серії є релізи, і жоден із них не озвучення (multi рахується
+// озвученням: за kindRank він стоїть перед sub).
+func subOnly(releases []provider.Release) bool {
+	if len(releases) == 0 {
+		return false
+	}
+	for _, r := range releases {
+		if r.Kind != provider.KindSub {
+			return false
+		}
+	}
+	return true
 }
 
 // StatusOf рахує стан тайтла з журналу прогресу і списку серій. Порожній
@@ -51,6 +68,13 @@ func (l *Library) StatusOf(titleID string, episodes []provider.Episode) Status {
 		baseline = max(e.LastEpisode, e.KnownEpisodes)
 	}
 
+	// Провайдер може віддати один номер двічі: релізи всіх дублів зливаються,
+	// щоб «лише саби» рахувалося по всьому, що є в серії (як у PreferredFresh).
+	releases := map[int][]provider.Release{}
+	for _, ep := range episodes {
+		releases[ep.Number] = append(releases[ep.Number], provider.CleanEpisode(ep).Releases...)
+	}
+
 	var st Status
 	seen := map[int]bool{}
 	for _, ep := range episodes {
@@ -65,6 +89,9 @@ func (l *Library) StatusOf(titleID string, episodes []provider.Episode) Status {
 		st.Remaining++
 		if ep.Number > baseline {
 			st.Fresh++
+			if subOnly(releases[ep.Number]) {
+				st.FreshSubOnly++
+			}
 		}
 	}
 
