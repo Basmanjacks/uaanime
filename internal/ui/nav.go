@@ -68,6 +68,9 @@ func (m *Model) nextReq() int {
 func (m *Model) beginNav() int {
 	m.pending = nil
 	m.pendingReq = 0
+	// Оновлення, що летить, більше не стосується екрана, з якого пішли; сама
+	// операція доживає (кеш на диску їй потрібен), тому refreshBusy не чіпаємо.
+	m.refreshGen++
 	m.statusGen++
 	m.statusKind = statusInfo
 	m.status = ""

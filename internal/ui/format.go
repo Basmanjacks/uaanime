@@ -117,9 +117,23 @@ const minTitleName = 20
 // відкривали: провайдер тривалості не дає, а серії одного релізу приблизно
 // однакові. Без жодного семпла лишається сама кількість.
 func (m *Model) remainingLabel() string {
+	parts := m.remainingParts()
+	switch len(parts) {
+	case 0:
+		return ""
+	case 1:
+		return parts[0]
+	default:
+		return fmt.Sprintf(i18n.TuiRemainingFmt, parts[0], parts[1])
+	}
+}
+
+// remainingParts — те саме двома частинами: [«залишилось 8 серій», «3 год 20 хв»].
+// Заголовок відкидає їх окремо: оцінка часу дешевша за кількість серій.
+func (m *Model) remainingParts() []string {
 	episodes, ok := m.currentEpisodes()
 	if !ok {
-		return ""
+		return nil
 	}
 	// Порожній ID — тайтл із пошуку, якого ще немає в бібліотеці: прогресу
 	// нема, залишок дорівнює всьому списку.
@@ -129,7 +143,7 @@ func (m *Model) remainingLabel() string {
 	}
 	remaining := m.eng.Lib.StatusOf(titleID, episodes).Remaining
 	if remaining == 0 {
-		return ""
+		return nil
 	}
 	var sum float64
 	samples := 0
@@ -142,10 +156,10 @@ func (m *Model) remainingLabel() string {
 	}
 	label := i18n.RemainingEpisodes(remaining)
 	if samples == 0 {
-		return label
+		return []string{label}
 	}
 	if d := i18n.HumanDuration(sum / float64(samples) * float64(remaining)); d != "" {
-		return fmt.Sprintf(i18n.TuiRemainingFmt, label, d)
+		return []string{label, d}
 	}
-	return label
+	return []string{label}
 }

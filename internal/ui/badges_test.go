@@ -295,7 +295,7 @@ func TestOpeningPlannedTitleMarksEpisodesSeen(t *testing.T) {
 	m.reqID = 7
 
 	m, _ = updateTestModel(t, m, episodesDoneMsg{
-		ref: ref, eps: testEpisodes(5), req: 7, navigate: true,
+		ref: ref, eps: testEpisodes(5), req: 7, purpose: epsOpen,
 	})
 
 	entry := m.eng.Lib.EntryLookup(title.ID)

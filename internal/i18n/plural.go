@@ -3,6 +3,7 @@ package i18n
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // plural повертає українську форму слова: однину для чисел на 1, форму для 2–4
@@ -34,6 +35,22 @@ func Episodes(n int) string {
 // NewEpisodes форматує кількість нових серій за українським правилом множини.
 func NewEpisodes(n int) string {
 	return fmt.Sprintf("+%d %s", n, plural(n, "нова серія", "нові серії", "нових серій"))
+}
+
+// EpisodesAppeared — які серії з'явилися після оновлення: «З'явилась серія 12»
+// або «З'явились серії 12, 13». Порожній список — порожній рядок.
+func EpisodesAppeared(nums []int) string {
+	switch len(nums) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("З'явилась серія %d", nums[0])
+	}
+	parts := make([]string, len(nums))
+	for i, n := range nums {
+		parts[i] = fmt.Sprint(n)
+	}
+	return "З'явились серії " + strings.Join(parts, ", ")
 }
 
 // RemainingEpisodes — скільки серій ще не переглянуто, за українським правилом

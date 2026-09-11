@@ -81,6 +81,7 @@ var (
 	styleSectionName = lipgloss.NewStyle().Foreground(colDim)
 	styleRule        = lipgloss.NewStyle().Foreground(colFaint)
 	styleBadge       = lipgloss.NewStyle().Foreground(colOK)
+	styleBadgeWarn   = lipgloss.NewStyle().Foreground(colWarn)
 	styleCursor      = lipgloss.NewStyle().Foreground(colAccent)
 	styleMatch       = lipgloss.NewStyle().Underline(true)
 )

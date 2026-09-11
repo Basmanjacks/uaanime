@@ -14,9 +14,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/playertest"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
@@ -294,5 +296,96 @@ func TestWindowTitleOnlyWhilePlaying(t *testing.T) {
 	mustScreen(t, m, screenEpisodes)
 	if got := m.View().WindowTitle; got != "" {
 		t.Fatalf("заголовок після перегляду = %q, want порожній", got)
+	}
+}
+
+// TestStartPlaybackWarnsByDeviation — попередження після Enter будується лише з
+// того, з чим робився вибір (Pin/Prefs/Deviation), і розрізняє три різні речі:
+// «озвучення ще не вийшло», «субтитрів немає» і «студія недоступна». Відхилення
+// між озвученими типами не варте жодного рядка.
+func TestStartPlaybackWarnsByDeviation(t *testing.T) {
+	voice, sub, dub := provider.KindVoiceover, provider.KindSub, provider.KindDub
+	for _, tc := range []struct {
+		name      string
+		pin       library.Pin
+		source    provider.Source
+		deviation library.Deviation
+		want      string
+	}{
+		{
+			name:      "озвучення ще не вийшло",
+			pin:       library.Pin{Studio: "РГ", Kind: voice},
+			source:    provider.Source{Studio: "РГ", Kind: sub},
+			deviation: library.DeviationKind,
+			want:      fmt.Sprintf(i18n.TuiKindNotOutYetLong, "РГ"),
+		},
+		{
+			name:      "дубляж замість озвучення мовчить",
+			pin:       library.Pin{Studio: "РГ", Kind: dub},
+			source:    provider.Source{Studio: "РГ", Kind: voice},
+			deviation: library.DeviationKind,
+		},
+		{
+			name:      "субтитрів студії немає",
+			pin:       library.Pin{Studio: "РГ", Kind: sub},
+			source:    provider.Source{Studio: "РГ", Kind: voice},
+			deviation: library.DeviationKind,
+			want:      fmt.Sprintf(i18n.TuiSubsMissing, "РГ"),
+		},
+		{
+			name:   "без піна лишились самі саби",
+			source: provider.Source{Studio: "A", Kind: sub},
+			want:   i18n.TuiOnlySubsStatus,
+		},
+		{
+			name:      "інша студія та ще й у сабах",
+			pin:       library.Pin{Studio: "A", Kind: dub},
+			source:    provider.Source{Studio: "B", Kind: sub},
+			deviation: library.DeviationStudio,
+			want:      fmt.Sprintf(i18n.TuiStudioFallbackSub, "A", "B"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTestModel(t)
+			ref := testRefs("deviation", 1)[0]
+			m.eng.Lib.Titles = []*library.LocalTitle{{ID: ref.Slug, Name: ref.Name, Sources: []provider.TitleRef{ref}}}
+			m.eng.Lib.Entries = []*library.Entry{{TitleID: ref.Slug, StudioPin: tc.pin.Studio, KindPin: tc.pin.Kind}}
+			m.ref = ref
+			m.screen = screenEpisodes
+			m.reqID = 3
+
+			m, _ = updateTestModel(t, m, resolvedMsg{req: 3, res: &playback.Resolved{
+				Ref:       ref,
+				Episode:   1,
+				Source:    tc.source,
+				Pin:       tc.pin,
+				Deviation: tc.deviation,
+			}})
+			mustScreen(t, m, screenPlaying)
+
+			view := ansi.Strip(m.View().Content)
+			if tc.want == "" {
+				if m.status != "" {
+					t.Fatalf("статус = %q, want порожній", m.status)
+				}
+				for _, unwanted := range []string{
+					fmt.Sprintf(i18n.TuiKindNotOutYetLong, "РГ"),
+					i18n.TuiOnlySubsStatus,
+					fmt.Sprintf(i18n.TuiSubsMissing, "РГ"),
+					fmt.Sprintf(i18n.TuiStudioFallback, "РГ", "РГ"),
+				} {
+					if strings.Contains(view, unwanted) {
+						t.Fatalf("кадр містить зайве попередження %q:\n%s", unwanted, view)
+					}
+				}
+				return
+			}
+			if m.status != tc.want {
+				t.Fatalf("статус = %q, want %q", m.status, tc.want)
+			}
+			if !strings.Contains(view, tc.want) {
+				t.Fatalf("кадр не містить %q:\n%s", tc.want, view)
+			}
+		})
 	}
 }

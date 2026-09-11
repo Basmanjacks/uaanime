@@ -241,8 +241,8 @@ func TestBulkSeedsFullBaselineBeforeAcknowledgingSubset(t *testing.T) {
 		t.Fatal(err)
 	}
 	title := e.Lib.TitleByRef(ref)
-	if studio, n := e.Lib.PreferredFresh(title.ID, actionEpisodes(), library.Prefs{FavoriteStudio: "A"}); studio != "A" || n != 0 {
-		t.Fatalf("old unwatched releases became new: %s/%d", studio, n)
+	if news := e.Lib.PreferredFresh(title.ID, actionEpisodes(), library.Prefs{FavoriteStudio: "A"}); news.Studio != "A" || news.Preferred != 0 || news.SubOnly != 0 {
+		t.Fatalf("old unwatched releases became new: %+v", news)
 	}
 }
 

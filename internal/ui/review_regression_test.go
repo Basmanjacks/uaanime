@@ -33,7 +33,7 @@ func TestReviewSyncNavigationInvalidatesPending(t *testing.T) {
 			}
 			m = updated.(Model)
 			want := m.screen
-			m, _ = updateTestModel(t, m, episodesDoneMsg{req: old, ref: ref, eps: testEpisodes(2), navigate: true})
+			m, _ = updateTestModel(t, m, episodesDoneMsg{req: old, ref: ref, eps: testEpisodes(2), purpose: epsOpen})
 			if m.screen != want || m.pending != nil {
 				t.Fatalf("old navigation hijacked screen: %v, pending=%v", m.screen, m.pending)
 			}
@@ -106,7 +106,7 @@ func TestReviewSelectedVoiceoverSurvivesResolve(t *testing.T) {
 	m.eng.Provider = sourcesStub(sources)
 	m.eng.Extractors = []extractor.Extractor{stubExtractor{}}
 	m.pendingEp = 1
-	m.showStudioChoice(sources[1:])
+	m.showStudioChoice(sources[1:], nil, nil)
 	m, cmd := pressTestKey(t, m, tea.KeyEnter, "")
 	if cmd == nil {
 		t.Fatal("selection did not resolve")

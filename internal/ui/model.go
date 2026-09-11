@@ -106,6 +106,18 @@ type Model struct {
 	newsDisabled     map[string]bool
 	baselineWarning  bool
 
+	// Фонове й ручне оновлення. refreshEvery — крок циклу (0 вимикає; шов для
+	// тестів). refreshGen — покоління актуальності: beginNav збільшує його, і
+	// відповідь старого покоління не торкається екрана. refreshBusy — покоління
+	// операції, що ще виконується (0 — жодної): знімає його лише її власна
+	// відповідь, бо після переходу команда все ще пише кеш. freshBefore —
+	// сума бейджів до ручного оновлення, щоб сказати «+2 нові серії» тим самим
+	// числом, що й рядки домівки.
+	refreshEvery time.Duration
+	refreshGen   int
+	refreshBusy  int
+	freshBefore  int
+
 	initialRemote    bool
 	overlay          overlayKind
 	overlayFrame     *frame
@@ -234,6 +246,7 @@ func New(eng *playback.Engine, opts Options) Model {
 
 	m := Model{
 		badgeScheduled: &atomic.Bool{},
+		refreshEvery:   refreshInterval,
 		initialRemote:  initialRemote,
 		eng:            eng,
 		list:           l,
@@ -316,6 +329,9 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 	if cmd := m.remoteRequestCmd(); m.initialRemote && cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.refreshTickCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if len(cmds) == 0 {

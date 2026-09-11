@@ -32,8 +32,8 @@ func TestSingleMarkAcknowledgesOnlyItsReleases(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Lib.EntryLookup(title.ID).StudioPin = "B"
-	if _, n := e.Lib.PreferredFresh(title.ID, fresh, e.Prefs); n != 1 {
-		t.Fatalf("fresh=%d want1", n)
+	if news := e.Lib.PreferredFresh(title.ID, fresh, e.Prefs); news.Preferred != 1 {
+		t.Fatalf("news=%+v want Preferred=1", news)
 	}
 }
 func TestFailedSingleMarkDoesNotPublish(t *testing.T) {
@@ -65,8 +65,8 @@ func TestFinishAcknowledgesWatchedRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	e.Lib.EntryLookup(title.ID).StudioPin = "B"
-	if _, n := e.Lib.PreferredFresh(title.ID, eps, e.Prefs); n != 1 {
-		t.Fatalf("fresh=%d want1", n)
+	if news := e.Lib.PreferredFresh(title.ID, eps, e.Prefs); news.Preferred != 1 {
+		t.Fatalf("news=%+v want Preferred=1", news)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestFailedStartDoesNotAcknowledgeExistingProgress(t *testing.T) {
 	if _, err := e.Play(context.Background(), res); err == nil {
 		t.Fatal("expected start failure")
 	}
-	if _, n := e.Lib.PreferredFresh(title.ID, eps, e.Prefs); n != 1 {
-		t.Fatalf("failed start acknowledged release: fresh=%d", n)
+	if news := e.Lib.PreferredFresh(title.ID, eps, e.Prefs); news.Preferred != 1 {
+		t.Fatalf("failed start acknowledged release: news=%+v", news)
 	}
 }

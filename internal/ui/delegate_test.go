@@ -264,7 +264,7 @@ func TestRenderOneLineInlineMetaAndBadge(t *testing.T) {
 	d.Render(&buf, m, 1, it)
 	got := ansi.Strip(buf.String())
 
-	want := "  " + padIcon(it.icon, iconWidth) + it.title + metaSep + it.meta + " " + it.badge
+	want := "  " + padIcon(it.icon, iconWidth) + it.title + metaSep + it.meta + badgeGap + it.badge
 	if got != want {
 		t.Errorf("Render() = %q, want %q", got, want)
 	}
@@ -319,7 +319,7 @@ func TestRenderOneLineNarrowDropsMetaKeepsBadge(t *testing.T) {
 	if gotWidth := lipgloss.Width(got); gotWidth > width {
 		t.Errorf("Render() width = %d, want at most %d (%q)", gotWidth, width, got)
 	}
-	if !strings.Contains(got, ellipsis+" "+it.badge) {
+	if !strings.Contains(got, ellipsis+badgeGap+it.badge) {
 		t.Errorf("Render() = %q, want truncated title before badge", got)
 	}
 }
@@ -333,7 +333,7 @@ func TestRenderOneLineNoMetaBadgeOnly(t *testing.T) {
 	var buf bytes.Buffer
 	d.Render(&buf, m, 1, it)
 	got := ansi.Strip(buf.String())
-	want := "  " + padIcon(it.icon, iconWidth) + it.title + " " + it.badge
+	want := "  " + padIcon(it.icon, iconWidth) + it.title + badgeGap + it.badge
 	if got != want {
 		t.Errorf("Render() = %q, want %q", got, want)
 	}
@@ -386,5 +386,41 @@ func TestMetaLineRendersStyledPartsWithoutChangingText(t *testing.T) {
 		if !strings.Contains(out, styled) {
 			t.Errorf("metaLine() = %q, want styled segment %q", out, styled)
 		}
+	}
+}
+
+// TestRenderOneLineWarnBadgeUsesWarnStyle — бейдж-попередження («гратиме не те,
+// що закріплено») малюється попереджувальним кольором, а не зеленим «усе
+// добре»: інакше рядок бреше кольором, лишаючись правдивим текстом.
+func TestRenderOneLineWarnBadgeUsesWarnStyle(t *testing.T) {
+	const width = 40
+	if styleBadge.Render("x") == styleBadgeWarn.Render("x") {
+		t.Fatal("тест вимагає різних стилів бейджа й попередження")
+	}
+
+	for _, tc := range []struct {
+		name string
+		warn bool
+		want lipgloss.Style
+		bad  lipgloss.Style
+	}{
+		{name: "попередження", warn: true, want: styleBadgeWarn, bad: styleBadge},
+		{name: "звичайний", want: styleBadge, bad: styleBadgeWarn},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := item{icon: "·", title: "Серія 11", meta: "Саб · РГ", badge: i18n.TuiKindNotOutYet, badgeWarn: tc.warn}
+			d := rowDelegate{ic: themeIcons(false)}
+			m := list.New([]list.Item{it}, d, width, 10)
+
+			var buf bytes.Buffer
+			d.Render(&buf, m, 1, it)
+			got := buf.String()
+			if !strings.Contains(got, tc.want.Render(it.badge)) {
+				t.Errorf("Render() = %q, want бейдж стилем %q", got, tc.want.Render(it.badge))
+			}
+			if strings.Contains(got, tc.bad.Render(it.badge)) {
+				t.Errorf("Render() = %q, містить бейдж чужим стилем %q", got, tc.bad.Render(it.badge))
+			}
+		})
 	}
 }

@@ -211,27 +211,38 @@ func (l *Library) AcknowledgeReleases(titleID string, episodes []provider.Episod
 	return true
 }
 
-// PreferredFresh counts unique unfinished episode numbers whose chosen release
-// belongs to the pinned (or global favorite) studio and has not been acknowledged.
-// Pick receives metadata-only sources, preserving playback's fallback rules.
-func (l *Library) PreferredFresh(titleID string, episodes []provider.Episode, prefs Prefs) (studio string, count int) {
+// FreshNews — непідтверджені новинки тайтлу очима користувача.
+// Preferred — серії, які Pick віддає бажаній студії тим релізом, що
+// користувач і хоче (озвучення, або саби при WantsSub); SubOnly — серії,
+// де є лише субтитри, а користувач їх не просив: «озвучення ще не вийшло».
+// Один із лічильників ніколи не ховає інший — це і є сенс бейджа.
+type FreshNews struct {
+	Studio    string
+	Preferred int
+	SubOnly   int
+}
+
+// PreferredFresh рахує унікальні непереглянуті номери серій, чий обраний
+// реліз ще не підтверджений (AcknowledgeReleases). Pick отримує джерела лише з
+// метаданих, тож правила fallback ті самі, що й у відтворенні.
+func (l *Library) PreferredFresh(titleID string, episodes []provider.Episode, prefs Prefs) FreshNews {
 	entry := l.EntryLookup(titleID)
 	pin := Pin{}
 	if entry != nil {
 		pin = Pin{Studio: entry.StudioPin, Kind: entry.KindPin}
 	}
-	studio = pin.Studio
-	if studio == "" {
-		studio = prefs.FavoriteStudio
+	news := FreshNews{Studio: pin.Studio}
+	if news.Studio == "" {
+		news.Studio = prefs.FavoriteStudio
 	}
-	if studio == "" || entry == nil || entry.ReleaseBaseline == nil {
-		return studio, 0
+	if news.Studio == "" || entry == nil || entry.ReleaseBaseline == nil {
+		return news
 	}
 	baseline := map[provider.Release][]interval{}
 	for _, g := range entry.ReleaseBaseline.Groups {
 		ranges, ok := parseIntervals(g.Episodes)
 		if !ok {
-			return studio, 0
+			return news
 		}
 		baseline[provider.Release{Studio: g.Studio, Kind: g.Kind}] = ranges
 	}
@@ -246,22 +257,30 @@ func (l *Library) PreferredFresh(titleID string, episodes []provider.Episode, pr
 		if ep.Number < 0 || completed[ep.Number] {
 			continue
 		}
-		for _, r := range provider.CleanEpisode(ep).Releases {
-			sources[ep.Number] = append(sources[ep.Number], provider.Source{Episode: ep.Number, Studio: r.Studio, Kind: r.Kind})
-		}
+		sources[ep.Number] = append(sources[ep.Number], SourcesFromReleases(ep)...)
 	}
+	wantsSub := WantsSub(pin, prefs)
 	for number, releases := range sources {
 		chosen, _ := Pick(releases, pin, prefs)
-		if chosen == nil || chosen.Studio != studio {
+		if chosen == nil {
+			continue
+		}
+		forcedSub := chosen.Kind == provider.KindSub && !wantsSub && !hasNonSub(releases)
+		if !forcedSub && chosen.Studio != news.Studio {
 			continue
 		}
 		ranges := baseline[provider.Release{Studio: chosen.Studio, Kind: chosen.Kind}]
 		i := sort.Search(len(ranges), func(i int) bool { return ranges[i].last >= number })
-		if i == len(ranges) || ranges[i].first > number {
-			count++
+		if i < len(ranges) && ranges[i].first <= number {
+			continue
+		}
+		if forcedSub {
+			news.SubOnly++
+		} else {
+			news.Preferred++
 		}
 	}
-	return studio, count
+	return news
 }
 
 // Clone copies every mutable layer so failed staged writes cannot change the

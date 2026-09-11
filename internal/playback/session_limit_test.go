@@ -16,7 +16,7 @@ func TestSessionLimitSurvivesSeriesAndStopsExactly(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng.Live.BeginChain(res.Ref)
-	eng.Live.set(sess, res.Ref, res.Name, 1, res.Source.Studio)
+	eng.Live.set(sess, res.Ref, res.Name, 1, res.Source.Studio, res.Source.Kind)
 	if err := eng.Live.SetSessionLimit(2); err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +32,7 @@ func TestSessionLimitSurvivesSeriesAndStopsExactly(t *testing.T) {
 	if got := eng.Live.Limit(); !got.Enabled || got.Remaining != 1 {
 		t.Fatalf("live lost budget: %+v", got)
 	}
-	eng.Live.set(playertest.NewSession(player.EndEOF, nil, nil), res.Ref, res.Name, 2, res.Source.Studio)
+	eng.Live.set(playertest.NewSession(player.EndEOF, nil, nil), res.Ref, res.Name, 2, res.Source.Studio, res.Source.Kind)
 	eng.Live.clear()
 	last, err := eng.Finish(player.EndEOF, id, 2)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestSessionLimitSurvivesSeriesAndStopsExactly(t *testing.T) {
 func TestManualNextReplacesBudgetSlot(t *testing.T) {
 	eng, sess, res, _ := liveEngine(t)
 	id, _, _ := eng.Begin(res)
-	eng.Live.set(sess, res.Ref, res.Name, 1, res.Source.Studio)
+	eng.Live.set(sess, res.Ref, res.Name, 1, res.Source.Studio, res.Source.Kind)
 	if err := eng.Live.SetSessionLimit(2); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestManualNextReplacesBudgetSlot(t *testing.T) {
 		t.Fatalf("manual next lost: %d %v", n, ok)
 	}
 	other := provider.TitleRef{Provider: "stub", Slug: "2-other"}
-	eng.Live.set(sess, other, "Other", 1, "Studio")
+	eng.Live.set(sess, other, "Other", 1, "Studio", "")
 	if eng.Live.Limit().Enabled {
 		t.Fatal("budget leaked to other title")
 	}
@@ -89,7 +89,7 @@ func TestSessionToggleAndDisabledAreDistinct(t *testing.T) {
 	if err := l.SetSessionLimit(2); !errors.Is(err, ErrNotPlaying) {
 		t.Fatal(err)
 	}
-	l.set(playertest.NewSession(player.EndQuit, nil, nil), provider.TitleRef{}, "T", 0, "Studio")
+	l.set(playertest.NewSession(player.EndQuit, nil, nil), provider.TitleRef{}, "T", 0, "Studio", "")
 	for _, n := range []int{-1, 13} {
 		if l.SetSessionLimit(n) == nil {
 			t.Fatalf("accepted %d", n)

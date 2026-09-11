@@ -478,11 +478,40 @@ func TestNormalizeLeavesValidLibraryIntact(t *testing.T) {
 		}
 	}
 	lib, want := build(), build()
+	want.Version = LibraryVersion // єдина легальна зміна: штамп схеми
 
 	if dropped := lib.Normalize(provider.CleanText); dropped != 0 {
 		t.Fatalf("dropped = %d, чиста бібліотека має лишатися цілою", dropped)
 	}
 	if !reflect.DeepEqual(lib, want) {
 		t.Fatalf("Normalize змінив чисту бібліотеку:\n got %+v\nwant %+v", lib, want)
+	}
+}
+
+func TestNormalizeMigratesLegacySubPin(t *testing.T) {
+	// До v2 kind_pin: sub писався неявно (Begin) — стає wildcard; явний sub-пін
+	// у файлі v2 лишається.
+	legacy := &Library{
+		Titles:  []*LocalTitle{{ID: "t", Sources: []provider.TitleRef{{Provider: "anitube", Slug: "4465-frren"}}}},
+		Entries: []*Entry{{TitleID: "t", StudioPin: "A", KindPin: provider.KindSub}},
+	}
+	if dropped := legacy.Normalize(provider.CleanText); dropped != 0 {
+		t.Fatalf("dropped = %d", dropped)
+	}
+	if legacy.Entries[0].KindPin != "" || legacy.Entries[0].StudioPin != "A" {
+		t.Fatalf("legacy pin = %q/%q, want A/wildcard", legacy.Entries[0].StudioPin, legacy.Entries[0].KindPin)
+	}
+	if legacy.Version != LibraryVersion {
+		t.Fatalf("Version = %d, want %d", legacy.Version, LibraryVersion)
+	}
+
+	current := &Library{
+		Version: LibraryVersion,
+		Titles:  []*LocalTitle{{ID: "t", Sources: []provider.TitleRef{{Provider: "anitube", Slug: "4465-frren"}}}},
+		Entries: []*Entry{{TitleID: "t", StudioPin: "A", KindPin: provider.KindSub}},
+	}
+	current.Normalize(provider.CleanText)
+	if current.Entries[0].KindPin != provider.KindSub {
+		t.Fatalf("явний sub-пін v2 має зберегтися, отримав %q", current.Entries[0].KindPin)
 	}
 }

@@ -616,12 +616,8 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 			a.printCommandError(err)
 			return 1
 		}
-		if res.PinFallback {
-			if title := eng.Lib.TitleByRef(ref); title != nil {
-				if entry := eng.Lib.EntryLookup(title.ID); entry != nil {
-					errf(i18n.TuiStudioFallback+"\n", entry.StudioPin, res.Source.Studio)
-				}
-			}
+		if text, ok := res.Warning(); ok {
+			errf("%s\n", text)
 		}
 		if res.StartSec > 0 {
 			outf(i18n.MsgResume+"\n", int(res.StartSec)/60, int(res.StartSec)%60)
@@ -683,7 +679,13 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		episodes, _, err := eng.EpisodesCached(episodesCtx, ref)
 		cancel()
 		if err != nil {
-			break
+			// Провайдер спіткнувся між серіями: список із диска будь-якого віку
+			// кращий за обірваний ланцюжок — саме за ним ця серія й грала.
+			cached, _, found := eng.Store.LoadEpisodes(ref)
+			if !found {
+				break
+			}
+			episodes = cached
 		}
 		next, ok := playback.ContinueEpisode(result, nil, sigCtx.Err() != nil, ref, ep, episodes, eng.Autoplay)
 		if !ok {

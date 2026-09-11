@@ -21,6 +21,7 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
+	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/provider"
@@ -89,19 +90,55 @@ const (
 
 // Resolved — все, що треба для запуску плеєра.
 type Resolved struct {
-	Ref         provider.TitleRef
-	Episode     int
-	Source      provider.Source
-	PinFallback bool
-	Stream      extractor.Stream
-	HostID      string
-	StartSec    float64 // resume-позиція, 0 = з початку
-	Name        string  // назва тайтлу без номера серії (для пульта)
-	MediaTitle  string  // Name · Episode — заголовок вікна плеєра
+	Ref     provider.TitleRef
+	Episode int
+	Source  provider.Source
+	// Pin і Prefs — знімок, з яким робився вибір. Статус після запуску
+	// будується лише з них: Begin уже записав неявний пін, і бібліотека далі
+	// не відрізняє «піна не було» від явного.
+	Pin        library.Pin
+	Prefs      library.Prefs
+	Deviation  library.Deviation
+	Stream     extractor.Stream
+	HostID     string
+	StartSec   float64 // resume-позиція, 0 = з початку
+	Name       string  // назва тайтлу без номера серії (для пульта)
+	MediaTitle string  // Name · Episode — заголовок вікна плеєра
 	// Candidates непорожній, коли на переможному ярусі >1 студії і піна немає:
 	// інтерфейс може спитати один раз і закріпити. Source при цьому вже
 	// детермінований — headless-режим грає без питань.
 	Candidates []provider.Source
+	// Playable — усі пари (студія, тип) серії з відомим екстрактором;
+	// Failed — ті з них, чиє джерело впало саме зараз (хост не відповів,
+	// потік порожній). Пікер показує обидва класи по-різному: перший можна
+	// закріпити, другий — теж, але з попередженням.
+	Playable []provider.Source
+	Failed   []provider.Source
+}
+
+// Warning — попередження про відхилення від наміру користувача, спільне для
+// TUI і CLI. ok == false — грає рівно те, чого хотіли (або відхилення між
+// озвученими типами, яке видно в рядку сесії і не варте попередження).
+func (r *Resolved) Warning() (text string, ok bool) {
+	wantsSub := library.WantsSub(r.Pin, r.Prefs)
+	sub := r.Source.Kind == provider.KindSub
+	switch {
+	case r.Deviation == library.DeviationStudio && sub && !wantsSub:
+		return fmt.Sprintf(i18n.TuiStudioFallbackSub, r.Pin.Studio, r.Source.Studio), true
+	case r.Deviation == library.DeviationStudio && r.Pin.Kind == provider.KindSub && !sub:
+		return fmt.Sprintf(i18n.TuiSubsMissingStudio, r.Pin.Studio, r.Source.Studio), true
+	case r.Deviation == library.DeviationStudio && r.Pin.Kind == provider.KindSub:
+		return fmt.Sprintf(i18n.TuiSubsFallbackStudio, r.Pin.Studio, r.Source.Studio), true
+	case r.Deviation == library.DeviationStudio:
+		return fmt.Sprintf(i18n.TuiStudioFallback, r.Pin.Studio, r.Source.Studio), true
+	case sub && !wantsSub && r.Pin.Studio != "":
+		return fmt.Sprintf(i18n.TuiKindNotOutYetLong, r.Pin.Studio), true
+	case sub && !wantsSub:
+		return i18n.TuiOnlySubsStatus, true
+	case r.Pin.Kind == provider.KindSub && !sub:
+		return fmt.Sprintf(i18n.TuiSubsMissing, r.Pin.Studio), true
+	}
+	return "", false
 }
 
 func (e *Engine) playable(sources []provider.Source) []provider.Source {
@@ -160,13 +197,13 @@ func validStreams(streams []extractor.Stream) []extractor.Stream {
 	return out
 }
 
-// StudioChoices повертає доступні для відтворення студії серії. async-safe.
-func (e *Engine) StudioChoices(ctx context.Context, ref provider.TitleRef, ep int) ([]provider.Source, error) {
+// ReleaseChoices повертає відтворювані пари (студія, тип) серії. async-safe.
+func (e *Engine) ReleaseChoices(ctx context.Context, ref provider.TitleRef, ep int) ([]provider.Source, error) {
 	sources, err := e.sources(ctx, ref, ep)
 	if err != nil {
 		return nil, err
 	}
-	choices := library.StudioChoices(e.playable(sources))
+	choices := library.ReleaseChoices(e.playable(sources))
 	if len(choices) == 0 {
 		return nil, fmt.Errorf("серія %d: немає відтворюваних студій: %w", ep, errs.ErrNoStream)
 	}
@@ -228,10 +265,12 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 	}
 	name := h.Name
 
+	pin := library.Pin{Studio: h.StudioPin, Kind: h.KindPin}
 	remaining := sources
 	var failures []error
+	var failed []provider.Source // джерела з екстрактором, які впали цього разу
 	for len(remaining) > 0 {
-		chosen, candidates := library.Pick(remaining, library.Pin{Studio: h.StudioPin, Kind: h.KindPin}, h.Prefs)
+		chosen, candidates := library.Pick(remaining, pin, h.Prefs)
 		if chosen == nil {
 			failures = append(failures, fmt.Errorf("неможливо обрати реліз: %w", errs.ErrProvider))
 			break
@@ -248,6 +287,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			if onEvent != nil {
 				onEvent(EventTryingNext)
 			}
+			failed = append(failed, *chosen)
 			remaining = without(remaining, *chosen)
 			continue
 		}
@@ -257,6 +297,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			if onEvent != nil {
 				onEvent(EventTryingNext)
 			}
+			failed = append(failed, *chosen)
 			remaining = without(remaining, *chosen)
 			continue
 		}
@@ -264,16 +305,20 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			name = ref.Slug
 		}
 		return &Resolved{
-			Ref:         ref,
-			Episode:     ep,
-			Source:      *chosen,
-			PinFallback: h.StudioPin != "" && chosen.Studio != h.StudioPin,
-			Stream:      streams[0],
-			HostID:      ex.ID(),
-			StartSec:    h.StartSec,
-			Name:        name,
-			MediaTitle:  fmt.Sprintf("%s · %d", name, ep),
-			Candidates:  e.playable(candidates),
+			Ref:        ref,
+			Episode:    ep,
+			Source:     *chosen,
+			Pin:        pin,
+			Prefs:      h.Prefs,
+			Deviation:  library.DeviationOf(pin, *chosen),
+			Stream:     streams[0],
+			HostID:     ex.ID(),
+			StartSec:   h.StartSec,
+			Name:       name,
+			MediaTitle: fmt.Sprintf("%s · %d", name, ep),
+			Candidates: e.playable(candidates),
+			Playable:   library.ReleaseChoices(e.playable(sources)),
+			Failed:     library.ReleaseChoices(failed),
 		}, nil
 	}
 	return nil, aggregateFailures(ep, failures)
@@ -403,6 +448,18 @@ func (e *Engine) CatalogCached(ctx context.Context, kind provider.CatalogKind) (
 	return cards, false, nil
 }
 
+// CatalogFresh завжди питає провайдера й оновлює кеш — для явного «оновити
+// зараз», де свіжий кеш означає «нічого не робити», а людина чекає на дію.
+// async-safe.
+func (e *Engine) CatalogFresh(ctx context.Context, kind provider.CatalogKind) ([]provider.TitleCard, error) {
+	cards, err := e.Provider.Catalog(ctx, kind)
+	if err != nil {
+		return nil, err
+	}
+	_ = e.Store.SaveCatalog(e.Provider.ID(), kind, cards)
+	return cards, nil
+}
+
 // PinStudio закріплює студію за тайтлом (відповідь на одноразове питання).
 // sync: пише Lib.
 func (e *Engine) PinStudio(ref provider.TitleRef, studio string, kind provider.Kind) error {
@@ -530,10 +587,14 @@ func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) 
 	entry := e.Lib.EntryFor(title.ID)
 
 	// студія запам'ятовується після першого перегляду: наступна серія
-	// піде тією самою озвучкою без питань
+	// піде тією самою озвучкою без питань. Тип субтитрів неявно не
+	// закріплюється: wildcard означає «озвучення цієї студії, щойно буде».
 	if entry.StudioPin == "" {
 		entry.StudioPin = res.Source.Studio
 		entry.KindPin = res.Source.Kind
+		if entry.KindPin == provider.KindSub {
+			entry.KindPin = ""
+		}
 		pinnedStudio = res.Source.Studio
 	}
 	if err := e.Store.SaveLibrary(e.Lib); err != nil {
@@ -559,7 +620,7 @@ func (e *Engine) RunWithObserver(ctx context.Context, res *Resolved, titleID str
 		return player.EndError, fmt.Errorf("%w: %w", errs.ErrPlayerStart, err)
 	}
 	defer sess.Close()
-	e.Live.set(sess, res.Ref, res.Name, res.Episode, res.Source.Studio)
+	e.Live.set(sess, res.Ref, res.Name, res.Episode, res.Source.Studio, res.Source.Kind)
 	defer e.Live.clear()
 
 	ticker := time.NewTicker(e.journalInterval())

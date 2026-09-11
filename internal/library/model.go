@@ -45,8 +45,17 @@ type Progress struct {
 	WatchedAt   time.Time `json:"watched_at"`
 }
 
+// LibraryVersion — поточна версія схеми library.json. Файли без версії (або з
+// меншою) проходять міграцію в Normalize.
+//
+// v2: kind_pin == sub у старих файлах — неявний (Begin писав тип першого
+// перегляду, а пікер сабів поряд з озвученням не пропонував), тож він стає
+// wildcard. Явний пін на субтитри існує лише у файлах v2.
+const LibraryVersion = 2
+
 // Library — весь стан користувача. Серіалізується в library.json як є.
 type Library struct {
+	Version  int           `json:"version,omitempty"`
 	Titles   []*LocalTitle `json:"titles"`
 	Entries  []*Entry      `json:"entries"`
 	Progress []*Progress   `json:"progress"`
@@ -105,6 +114,11 @@ func (l *Library) Normalize(clean func(string) string) (dropped int) {
 		if e.KindPin != "" && !provider.ValidKind(e.KindPin) {
 			e.KindPin = ""
 		}
+		// Міграція v2: старий sub-пін ніколи не був явним вибором (див.
+		// LibraryVersion), тому стає wildcard — озвучення, щойно з'явиться.
+		if l.Version < LibraryVersion && e.KindPin == provider.KindSub {
+			e.KindPin = ""
+		}
 		if !known[e.TitleID] || seen[e.TitleID] {
 			dropped++
 			continue
@@ -123,6 +137,12 @@ func (l *Library) Normalize(clean func(string) string) (dropped int) {
 		progress = append(progress, p)
 	}
 	l.Progress = progress
+	// Після нормалізації файл відповідає поточній схемі: наступний Save
+	// запише версію, і міграція більше не повториться. Новішу версію не
+	// затираємо: старий бінарник не має даунгрейдити файл сусіда.
+	if l.Version < LibraryVersion {
+		l.Version = LibraryVersion
+	}
 	return dropped
 }
 

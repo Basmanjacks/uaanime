@@ -48,21 +48,52 @@ type faultTransport struct {
 	mu    sync.Mutex
 	urls  map[string]fault
 	hosts map[string]fault
+	// after — збій за шляхом, що вмикається лише після hits успішних запитів:
+	// так ламається «між серіями», а не «з самого початку».
+	after map[string]*afterFault
 	next  http.RoundTripper
 }
 
+type afterFault struct {
+	hits  int // скільки запитів пропустити
+	times int // скільки наступних зламати
+	seen  int
+	f     fault
+}
+
 func newFaultTransport() *faultTransport {
-	return &faultTransport{urls: map[string]fault{}, hosts: map[string]fault{}, next: fixtureTransport()}
+	return &faultTransport{urls: map[string]fault{}, hosts: map[string]fault{}, after: map[string]*afterFault{}, next: fixtureTransport()}
 }
 
 func (t *faultTransport) failURL(u string, f fault)  { t.mu.Lock(); t.urls[u] = f; t.mu.Unlock() }
 func (t *faultTransport) failHost(h string, f fault) { t.mu.Lock(); t.hosts[h] = f; t.mu.Unlock() }
-func (t *faultTransport) reset()                     { t.mu.Lock(); clear(t.urls); clear(t.hosts); t.mu.Unlock() }
+func (t *faultTransport) reset() {
+	t.mu.Lock()
+	clear(t.urls)
+	clear(t.hosts)
+	clear(t.after)
+	t.mu.Unlock()
+}
+
+// failPathAfter — запити на шлях path проходять hits разів, наступні times
+// отримують f, а далі знову проходять.
+func (t *faultTransport) failPathAfter(path string, hits, times int, f fault) {
+	t.mu.Lock()
+	t.after[path] = &afterFault{hits: hits, times: times, f: f}
+	t.mu.Unlock()
+}
+
 func (t *faultTransport) lookup(req *http.Request) fault {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if f, ok := t.urls[req.URL.String()]; ok {
 		return f
+	}
+	if a, ok := t.after[req.URL.Path]; ok {
+		a.seen++
+		if a.seen > a.hits && a.seen <= a.hits+a.times {
+			return a.f
+		}
 	}
 	return t.hosts[req.URL.Host]
 }
@@ -337,8 +368,8 @@ func TestJourneyDeadHostFallsBackWithinStudio(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if first.Source.Studio != studio || first.PinFallback {
-		t.Fatalf("перший Resolve = %s/%s fallback=%v, want пін %s", first.Source.Studio, first.HostID, first.PinFallback, studio)
+	if first.Source.Studio != studio || first.Deviation != library.DeviationNone {
+		t.Fatalf("перший Resolve = %s/%s deviation=%v, want пін %s", first.Source.Studio, first.HostID, first.Deviation, studio)
 	}
 	deadHost := mustHost(t, first.Source.Embed)
 	ft.failHost(deadHost, faultOffline)
@@ -351,8 +382,8 @@ func TestJourneyDeadHostFallsBackWithinStudio(t *testing.T) {
 	if events == 0 {
 		t.Error("очікував EventTryingNext")
 	}
-	if second.Source.Studio != studio || second.PinFallback {
-		t.Errorf("студія після збою хоста = %s (fallback=%v), want %s", second.Source.Studio, second.PinFallback, studio)
+	if second.Source.Studio != studio || second.Deviation != library.DeviationNone {
+		t.Errorf("студія після збою хоста = %s (deviation=%v), want %s", second.Source.Studio, second.Deviation, studio)
 	}
 	if second.HostID == first.HostID || mustHost(t, second.Source.Embed) == deadHost {
 		t.Errorf("хост не змінився: %s → %s", first.HostID, second.HostID)
@@ -397,8 +428,8 @@ func TestJourneyDeadStudioFallsBackToOtherDub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if res.Source.Studio == studio || !res.PinFallback {
-		t.Fatalf("Resolve = %s fallback=%v, want іншу студію з PinFallback", res.Source.Studio, res.PinFallback)
+	if res.Source.Studio == studio || res.Deviation != library.DeviationStudio {
+		t.Fatalf("Resolve = %s deviation=%v, want іншу студію з DeviationStudio", res.Source.Studio, res.Deviation)
 	}
 	if res.Source.Kind == provider.KindSub {
 		t.Errorf("є інші озвучення, а обрано субтитри: %+v", res.Source)
@@ -537,4 +568,34 @@ func TestJourneyExportImportKeepsResume(t *testing.T) {
 	if got := regexpAll(out, i18n.MsgPickedSource); len(got) != 1 || got[0] != studio[0] {
 		t.Errorf("студія після імпорту = %v, want %v", got, studio)
 	}
+}
+
+// Провайдер спіткнувся між серіями (TTL сплив, а сайт віддав сміття): ланцюжок
+// автоплею продовжується зі списку на диску, а не обривається.
+func TestJourneyAutoplaySurvivesProviderFailureBetweenEpisodes(t *testing.T) {
+	dir, ft, fp := journeyEnv(t,
+		playertest.NewSession(player.EndEOF, []float64{1400}, []float64{1440}),
+		playertest.NewSession(player.EndQuit, []float64{30}, []float64{1440}),
+	)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"autoplay":"always"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut := runCLI(t, "episodes", fixtureTitleID)
+	mustExit(t, 0, code, out, errOut)
+	cacheFiles, _ := filepath.Glob(filepath.Join(dir, "cache", "episodes-*.json"))
+	if len(cacheFiles) != 1 {
+		t.Fatalf("кеш серій: %v", cacheFiles)
+	}
+	ageCache(t, cacheFiles[0], 2*time.Hour)
+	// перший запит плейлистів (резолв серії 1) проходить, наступний — між
+	// серіями — повертає порожнє тіло (помилка провайдера, не офлайн), а
+	// резолв серії 2 знову бачить живий сайт
+	ft.failPathAfter("/engine/ajax/playlists.php", 1, 1, faultEmptyBody)
+
+	code, out, errOut = runCLI(t, "play", fixtureTitleID, "1")
+	mustExit(t, 0, code, out, errOut)
+	if starts := fp.Starts(); len(starts) != 2 {
+		t.Fatalf("плеєр запущено %d разів, want 2 (ланцюжок мав продовжитися з кешу)\n%s\n%s", len(starts), out, errOut)
+	}
+	mustContain(t, "stdout", out, fmt.Sprintf(i18n.MsgResolving, 2))
 }

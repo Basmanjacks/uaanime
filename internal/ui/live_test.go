@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
@@ -236,5 +237,47 @@ func TestLiveTickStopsAfterPlayback(t *testing.T) {
 	}
 	if m.live.Playing {
 		t.Fatal("тік завершеної сесії оновив стан")
+	}
+}
+
+// TestLiveLineShowsReleaseAfterEpisode — «в чому грає» стоїть одразу після
+// номера серії: заради цього на екран і дивляться після Enter. У зовсім
+// вузькому вікні реліз відкидається, але рядок лишається цілим.
+func TestLiveLineShowsReleaseAfterEpisode(t *testing.T) {
+	newLiveModel := func(t *testing.T, width int) Model {
+		t.Helper()
+
+		m := newTestModel(t)
+		m.now = func() time.Time { return time.Date(2026, 9, 11, 21, 0, 0, 0, time.Local) }
+		m.screen = screenPlaying
+		m.pendingEp = 3
+		m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: width, Height: 24})
+		m, _ = updateTestModel(t, m, liveMsg{gen: m.liveGen, snap: playback.Snapshot{
+			Playing:     true,
+			PositionSec: 300,
+			DurationSec: 1420,
+			Studio:      "Рідний Голос",
+			Kind:        provider.KindSub,
+		}})
+		return m
+	}
+
+	m := newLiveModel(t, 80)
+	want := fmt.Sprintf(i18n.TuiEpisodeNo, m.pendingEp) + metaSep +
+		"Рідний Голос" + metaSep + i18n.KindShort(provider.KindSub) + metaSep
+	if line := m.liveLine(); !strings.HasPrefix(line, want) {
+		t.Fatalf("рядок сесії = %q, want префікс %q", line, want)
+	}
+
+	narrow := newLiveModel(t, 24)
+	line := narrow.liveLine()
+	if strings.Contains(line, "Рідний Голос") {
+		t.Fatalf("вузький рядок сесії = %q, want без релізу", line)
+	}
+	if got := lipgloss.Width(line); got > narrow.w-2 {
+		t.Fatalf("ширина вузького рядка = %d, want <= %d: %q", got, narrow.w-2, line)
+	}
+	if !strings.Contains(line, "05:00") {
+		t.Fatalf("вузький рядок сесії = %q, want позицію", line)
 	}
 }

@@ -179,3 +179,36 @@ func TestResumeInWithoutEpisodeList(t *testing.T) {
 		t.Fatal("ResumeIn без списку запропонував наступну серію")
 	}
 }
+
+func TestStatusOfFreshSubOnly(t *testing.T) {
+	l := &Library{
+		Titles:   []*LocalTitle{{ID: "t"}},
+		Entries:  []*Entry{{TitleID: "t", LastEpisode: 10}},
+		Progress: watched("t", 10),
+	}
+	eps := []provider.Episode{
+		{Number: 10, Releases: []provider.Release{{Studio: "A", Kind: provider.KindVoiceover}}},
+		{Number: 11, Releases: []provider.Release{{Studio: "A", Kind: provider.KindSub}}},
+		{Number: 12, Releases: []provider.Release{{Studio: "A", Kind: provider.KindSub}, {Studio: "B", Kind: provider.KindMulti}}},
+		{Number: 13}, // без метаданих — невідомо, не «лише саби»
+	}
+	st := l.StatusOf("t", eps)
+	if st.Fresh != 3 || st.FreshSubOnly != 1 {
+		t.Fatalf("StatusOf = %+v, want Fresh=3 FreshSubOnly=1", st)
+	}
+}
+
+func TestStatusOfFreshSubOnlyMergesDuplicateNumbers(t *testing.T) {
+	l := &Library{
+		Titles:  []*LocalTitle{{ID: "t"}},
+		Entries: []*Entry{{TitleID: "t", LastEpisode: 11}},
+	}
+	// Один номер двічі: перший запис лише з сабами, другий — з дубляжем.
+	eps := []provider.Episode{
+		{Number: 12, Releases: []provider.Release{{Studio: "A", Kind: provider.KindSub}}},
+		{Number: 12, Releases: []provider.Release{{Studio: "A", Kind: provider.KindDub}}},
+	}
+	if st := l.StatusOf("t", eps); st.Fresh != 1 || st.FreshSubOnly != 0 {
+		t.Fatalf("StatusOf = %+v, want Fresh=1 FreshSubOnly=0", st)
+	}
+}

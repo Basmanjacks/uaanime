@@ -15,13 +15,17 @@ type (
 		err     error
 		req     int
 	}
+	// episodesDoneMsg — список серій приїхав. purpose каже, навіщо його
+	// просили (див. epsPurpose): навігаційні відповіді відсікає req, а
+	// оновлення (після перегляду, клавіша r) — refreshGen.
 	episodesDoneMsg struct {
-		ref      provider.TitleRef
-		eps      []provider.Episode
-		err      error
-		offline  bool
-		req      int
-		navigate bool
+		ref        provider.TitleRef
+		eps        []provider.Episode
+		err        error
+		offline    bool
+		req        int
+		purpose    epsPurpose
+		refreshGen int
 	}
 	resolvedMsg struct {
 		res *playback.Resolved
@@ -67,6 +71,18 @@ type (
 	// libraryEpisodesMsg — кеш списків серій бібліотеки оновлено; рядки домівки
 	// перечитають його самі.
 	libraryEpisodesMsg struct{ seeds []playback.ReleaseSeed }
+	// refreshTickMsg — черговий крок фонового циклу оновлення; переозброюється
+	// лише зі свого обробника.
+	refreshTickMsg struct{}
+	// refreshDoneMsg — відповідь на ручне «оновити зараз» із домівки: усі
+	// тайтли бібліотеки й блоки каталогу однією операцією. err — перша
+	// помилка будь-якої складової; кеш на диску до цього моменту вже оновлено.
+	refreshDoneMsg struct {
+		seeds      []playback.ReleaseSeed
+		catalog    map[provider.CatalogKind][]provider.TitleCard
+		err        error
+		refreshGen int
+	}
 	// nyaOffMsg — час кота вийшов; банер повертається до сезонного.
 	nyaOffMsg           struct{}
 	bookmarkBaselineMsg struct {
