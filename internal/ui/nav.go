@@ -210,7 +210,7 @@ const chromeBase = 4
 
 func (m *Model) chromeHeight() int {
 	if m.overlay == overlayNone && m.bannerVisible() {
-		return brandChromeHeight
+		return brandChromeHeight(m.ic.ASCII)
 	}
 	return chromeBase
 }
