@@ -29,23 +29,101 @@ func TestThemeIcons(t *testing.T) {
 // від набору символів: brandWidth() вирішує, показувати банер чи fallback, і
 // варіант, ширший за нього, зсунув би рамку всього екрана.
 func TestBrandBannerUniformWidth(t *testing.T) {
-	if len(brandTemplate) != 4 {
-		t.Fatalf("brandTemplate lines = %d, want 4", len(brandTemplate))
-	}
-	for s := seasonWinter; s <= seasonAutumn; s++ {
-		for _, ascii := range []bool{false, true} {
+	// Ширини й висоти закріплені числами: випадкова правка шаблону зсунула б
+	// рамку всього екрана непомітно для решти тестів. Обидві геометрії — той
+	// самий figlet у різних символах, тож числа збігаються за побудовою.
+	wantWidth := map[bool]int{false: 39, true: 39}
+	wantChrome := map[bool]int{false: 8, true: 8}
+	for _, ascii := range []bool{false, true} {
+		art := brandArtFor(ascii)
+		if art.width != wantWidth[ascii] {
+			t.Errorf("ascii=%t brandWidth = %d, want %d", ascii, art.width, wantWidth[ascii])
+		}
+		if got := brandChromeHeight(ascii); got != wantChrome[ascii] {
+			t.Errorf("ascii=%t brandChromeHeight = %d, want %d", ascii, got, wantChrome[ascii])
+		}
+		for s := seasonWinter; s <= seasonAutumn; s++ {
 			lines := brandVariant(brandOrnaments[s], ascii)
-			if len(lines) != len(brandTemplate) {
-				t.Fatalf("season %d ascii=%t lines = %d, want %d", s, ascii, len(lines), len(brandTemplate))
+			if len(lines) != len(art.lines) {
+				t.Fatalf("season %d ascii=%t lines = %d, want %d", s, ascii, len(lines), len(art.lines))
 			}
 			for i, line := range lines {
-				if got := lipgloss.Width(line); got != brandBannerWidth {
-					t.Errorf("season %d ascii=%t line %d width = %d, want %d", s, ascii, i, got, brandBannerWidth)
+				if got := lipgloss.Width(line); got != art.width {
+					t.Errorf("season %d ascii=%t line %d width = %d, want %d", s, ascii, i, got, art.width)
 				}
 			}
 			if strings.Contains(strings.Join(lines, ""), brandOrnamentMark) {
 				t.Errorf("season %d ascii=%t left an unsubstituted ornament mark", s, ascii)
 			}
+		}
+	}
+
+	// Жирний варіант — та сама сітка: орнамент не має «переїхати».
+	if len(brandBlock.lines) != len(brandASCII.lines) {
+		t.Fatalf("brandBlock lines = %d, brandASCII lines = %d", len(brandBlock.lines), len(brandASCII.lines))
+	}
+	for i := range brandBlock.lines {
+		if markColumns(brandBlock.lines[i]) != markColumns(brandASCII.lines[i]) {
+			t.Errorf("line %d: ornament marks differ between block and ASCII templates", i)
+		}
+	}
+}
+
+// markColumns — колонки орнаменту в рядку шаблону, як рядок для порівняння.
+// Рахуємо по рунах: жирний шаблон багатобайтовий, байтові індекси тут брешуть.
+func markColumns(line string) string {
+	var cols []string
+	for i, r := range []rune(line) {
+		if string(r) == brandOrnamentMark {
+			cols = append(cols, fmt.Sprint(i))
+		}
+	}
+	return strings.Join(cols, ",")
+}
+
+// TestBrandSplitColumn — стилізований рядок після зняття SGR і є банером: розріз
+// на межі кольорів нічого не губить і не дублює в обох геометріях.
+func TestBrandSplitColumn(t *testing.T) {
+	for _, ascii := range []bool{false, true} {
+		art := brandArtFor(ascii)
+		o := brandOrnaments[seasonSummer]
+		glyph := o.unicode
+		if ascii {
+			glyph = o.ascii
+		}
+		want := brandVariant(o, ascii)
+		for i, line := range art.lines {
+			if got := ansi.Strip(renderBrandLine(line, art.split, glyph)); got != want[i] {
+				t.Errorf("ascii=%t line %d rendered text = %q, want %q", ascii, i, got, want[i])
+			}
+		}
+	}
+}
+
+// TestBannerVisibleThresholds — пороги видимості читаються з геометрії. Зараз
+// обидві геометрії однакового розміру; тест ловить розсинхрон, якщо одну з них
+// колись змінять окремо.
+func TestBannerVisibleThresholds(t *testing.T) {
+	tests := []struct {
+		ascii bool
+		w, h  int
+		want  bool
+	}{
+		{false, 42, 24, false},
+		{false, 43, 24, true},
+		{true, 42, 24, false},
+		{true, 43, 24, true},
+		{false, 80, 17, false},
+		{false, 80, 18, true},
+		{true, 80, 17, false},
+		{true, 80, 18, true},
+	}
+	for _, tt := range tests {
+		m := newTestModel(t)
+		m.ic = themeIcons(tt.ascii)
+		m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: tt.w, Height: tt.h})
+		if got := m.bannerVisible(); got != tt.want {
+			t.Errorf("ascii=%t %dx%d bannerVisible = %t, want %t", tt.ascii, tt.w, tt.h, got, tt.want)
 		}
 	}
 }
@@ -97,26 +175,64 @@ func TestBrandBannerSeasonalOrnament(t *testing.T) {
 	}
 }
 
+// TestBrandBannerUsesTwoColors — «ua» акцентом, «anime» кольором рядка, межа
+// рівно на split, орнаменти в кольорі своєї частини — в обох наборах символів.
 func TestBrandBannerUsesTwoColors(t *testing.T) {
 	oldProfile := compat.Profile
 	compat.Profile = colorprofile.TrueColor
 	t.Cleanup(func() { compat.Profile = oldProfile })
 
-	m := newTestModel(t)
-	lines := strings.Split(m.brandHeader(), "\n")
 	uaSGR := firstSGR(styleBrandUA.Render("x"))
 	restSGR := firstSGR(styleBrandRest.Render("x"))
 	if uaSGR == "" || restSGR == "" || uaSGR == restSGR {
 		t.Fatalf("brand SGR styles = %q and %q, want distinct non-empty sequences", uaSGR, restSGR)
 	}
 
-	for i, want := range m.brandBanner() {
-		if got := strings.TrimPrefix(ansi.Strip(lines[i]), "  "); got != want {
-			t.Errorf("banner line %d text = %q, want %q", i, got, want)
-		}
-		if !strings.Contains(lines[i], uaSGR) || !strings.Contains(lines[i], restSGR) {
-			t.Errorf("banner line %d does not contain both brand SGR styles: %q", i, lines[i])
-		}
+	for _, ascii := range []bool{false, true} {
+		t.Run(fmt.Sprintf("ascii=%t", ascii), func(t *testing.T) {
+			m := newTestModel(t)
+			m.ic = themeIcons(ascii)
+			art := brandArtFor(ascii)
+			glyph := m.brandOrnamentGlyph()
+			lines := strings.Split(m.brandHeader(), "\n")
+			for i, want := range m.brandBanner() {
+				if got := strings.TrimPrefix(ansi.Strip(lines[i]), "  "); got != want {
+					t.Errorf("banner line %d text = %q, want %q", i, got, want)
+				}
+				runes := []rune(art.lines[i])
+				left := strings.TrimSpace(string(runes[:art.split]))
+				right := strings.TrimSpace(string(runes[art.split:]))
+				if left != "" && !strings.Contains(lines[i], uaSGR) {
+					t.Errorf("banner line %d lacks the ua SGR: %q", i, lines[i])
+				}
+				if right != "" && !strings.Contains(lines[i], restSGR) {
+					t.Errorf("banner line %d lacks the rest SGR: %q", i, lines[i])
+				}
+				if strings.Contains(art.lines[i], brandOrnamentMark) {
+					// Лівий орнамент в акценті, правий — у кольорі «anime».
+					wantLeft := uaSGR + glyph
+					wantRight := restSGR + glyph
+					if !strings.Contains(lines[i], wantLeft) || !strings.Contains(lines[i], wantRight) {
+						t.Errorf("banner line %d: ornaments not styled by their side: %q", i, lines[i])
+					}
+				}
+			}
+
+			// Межа кольорів рівно на split: рядок без орнаментів, перший SGR —
+			// акцент, перший restSGR стоїть перед символом колонки split.
+			line := art.lines[len(art.lines)-1]
+			rendered := renderBrandLine(line, art.split, glyph)
+			if firstSGR(rendered) != uaSGR {
+				t.Errorf("rendered line starts with %q, want ua SGR", firstSGR(rendered))
+			}
+			at := strings.Index(rendered, restSGR)
+			if at < 0 {
+				t.Fatalf("rendered line has no rest SGR: %q", rendered)
+			}
+			if got := lipgloss.Width(ansi.Strip(rendered[:at])); got != art.split {
+				t.Errorf("ua segment width = %d, want %d", got, art.split)
+			}
+		})
 	}
 }
 
@@ -168,7 +284,7 @@ func TestHomeBannerRendered(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	view := ansi.Strip(m.View().Content)
-	if !strings.Contains(view, m.brandBanner()[2]) {
+	if !strings.Contains(view, m.brandBanner()[1]) {
 		t.Error("home view does not contain brand banner")
 	}
 	if !strings.Contains(view, strings.ToUpper(i18n.TuiTagline)) {
@@ -181,10 +297,10 @@ func TestHomeBannerRendered(t *testing.T) {
 
 func TestHomeBannerFallbackNarrow(t *testing.T) {
 	m := newTestModel(t)
-	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 40, Height: 24})
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 39, Height: 24})
 
 	view := ansi.Strip(m.View().Content)
-	if strings.Contains(view, m.brandBanner()[2]) {
+	if strings.Contains(view, m.brandBanner()[1]) {
 		t.Error("narrow home view contains brand banner")
 	}
 	if !strings.Contains(view, strings.ToUpper(i18n.TuiTaglineShort)) {
@@ -200,7 +316,7 @@ func TestHomeBannerFallbackShort(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 14})
 
 	view := ansi.Strip(m.View().Content)
-	if strings.Contains(view, m.brandBanner()[2]) {
+	if strings.Contains(view, m.brandBanner()[1]) {
 		t.Error("short home view contains brand banner")
 	}
 	if !strings.Contains(view, strings.ToUpper(i18n.TuiTaglineShort)) {
@@ -216,7 +332,7 @@ func TestSearchScreenHasNoBanner(t *testing.T) {
 	m.screen = screenSearch
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	if strings.Contains(ansi.Strip(m.View().Content), m.brandBanner()[2]) {
+	if strings.Contains(ansi.Strip(m.View().Content), m.brandBanner()[1]) {
 		t.Error("search view contains brand banner")
 	}
 }
