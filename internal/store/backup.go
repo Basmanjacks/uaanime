@@ -87,12 +87,12 @@ func (s *Store) Import(r io.Reader) error {
 			return err
 		}
 	}
-	if err := writeAtomic(s.libraryPath(), b.Library); err != nil {
+	if err := WriteAtomic(s.libraryPath(), b.Library); err != nil {
 		return err
 	}
 	if b.Config != nil {
 		normalizeConfig(b.Config)
-		if err := writeAtomic(s.configPath(), b.Config); err != nil {
+		if err := WriteAtomic(s.configPath(), b.Config); err != nil {
 			return err
 		}
 	}

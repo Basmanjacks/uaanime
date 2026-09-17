@@ -42,6 +42,42 @@ func TestWriterLock(t *testing.T) {
 	defer func() { _ = third.Close() }()
 }
 
+// Lock тримає той самий flock на довільному шляху — завантаження беруть його
+// за ref тайтлу, тому «зайнято» має приходити своїм сентинелом викликача.
+func TestLockArbitraryPath(t *testing.T) {
+	busy := errors.New("зайнято")
+	path := filepath.Join(t.TempDir(), "locks", "title.lock")
+	first, err := Lock(path, busy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := Lock(path, busy); !errors.Is(err, busy) {
+		if second != nil {
+			_ = second.Close()
+		}
+		t.Fatalf("другий Lock: %v", err)
+	}
+	// Інший шлях у тій самій папці не конфліктує.
+	other, err := Lock(filepath.Join(filepath.Dir(path), "other.lock"), busy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = other.Close()
+
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Файл лишається на місці: unlink дав би другий inode і розщепив lock.
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("lock-файл зник: %v", err)
+	}
+	third, err := Lock(path, busy)
+	if err != nil {
+		t.Fatalf("після Close lock не віддано: %v", err)
+	}
+	_ = third.Close()
+}
+
 func TestWriterLockProcess(t *testing.T) {
 	if dir := os.Getenv("UAANIME_LOCK_HELPER"); dir != "" {
 		lock, err := LockWriter(dir)

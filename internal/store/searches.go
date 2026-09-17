@@ -39,7 +39,7 @@ func (s *Store) LoadSearches() []string {
 // AddSearch піднімає запит на початок історії і повертає новий список.
 func (s *Store) AddSearch(q string) ([]string, error) {
 	list := pushRecent(s.LoadSearches(), q)
-	return list, writeAtomic(s.searchesPath(), searches{Queries: list})
+	return list, WriteAtomic(s.searchesPath(), searches{Queries: list})
 }
 
 // RemoveSearch прибирає запит з історії і повертає новий список.
@@ -53,7 +53,7 @@ func (s *Store) RemoveSearch(q string) ([]string, error) {
 		}
 	}
 	out = normalizeSearches(out)
-	return out, writeAtomic(s.searchesPath(), searches{Queries: out})
+	return out, WriteAtomic(s.searchesPath(), searches{Queries: out})
 }
 
 // pushRecent ставить q першим і нормалізує решту — дедуплікація в

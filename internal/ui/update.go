@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
 	"github.com/Basmanjacks/uaanime/internal/playback"
@@ -337,12 +338,37 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.nya = false
 		return m, nil
 
+	case downloadMsg:
+		return m.updateDownloads(msg)
+
+	case downloadPlanMsg:
+		if m.rejectStale(msg.req) {
+			return m, nil
+		}
+		m.status = ""
+		m.statusKind = statusInfo
+		m.statusGen++
+		if msg.err != nil {
+			m.failNav(msg.err)
+			return m, nil
+		}
+		if len(msg.plan.Qualities) == 0 {
+			m.failNav(errs.ErrNoStream)
+			m.errText = i18n.TuiDlNoQualities
+			return m, nil
+		}
+		m.pendingUI = m.closeOverlay()
+		m.commitPending(msg.req)
+		m.showDownloadQuality(msg.res, msg.plan)
+		return m, nil
+
 	case signalMsg:
-		return m.requestQuit()
+		// Сигнал не питає: одиночний SIGTERM завжди завершує процес.
+		return m.requestQuit(false)
 	}
 
 	var cmd tea.Cmd
-	if m.screen == screenSearch && m.input.Focused() {
+	if m.inputFocused() {
 		m.input, cmd = m.input.Update(msg)
 		return m, cmd
 	}
@@ -470,6 +496,13 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	m.status = ""
 	m.statusKind = statusInfo
 	m.statusGen++
+	// Файл із диска — це те, заради чого його зберігали: сказати про це варто,
+	// бо саме звідси видно, що мережі зараз не треба.
+	if res.Local {
+		m.status = i18n.TuiDlPlayingLocal
+		m.statusKind = statusSuccess
+		m.statusGen++
+	}
 	// Попередження — лише з res: після Begin бібліотека вже має неявний пін
 	// і не відрізняє «піна не було» від явного вибору.
 	if text, ok := res.Warning(); ok {
@@ -490,7 +523,24 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 // requestQuit — двофазний вихід. Під час відтворення Ctrl+C і сигнал лише
 // скасовують сесію: сам вихід робить обробник playDoneMsg, коли Finish уже
 // злив журнал. Інакше вихід гонився б із завершенням плеєра.
-func (m Model) requestQuit() (tea.Model, tea.Cmd) {
+//
+// interactive розрізняє клавішу й сигнал. Клавіша під час завантаження спершу
+// попереджає: недокачаний файл зникає без сліду, і випадкове q коштувало б
+// гігабайта трафіку. Сигнал не питає ніколи — процес, який не вмирає від
+// SIGTERM, ламає все, що ним керує.
+func (m Model) requestQuit(interactive bool) (tea.Model, tea.Cmd) {
+	if m.dl != nil {
+		if m.downloadsActive() && interactive && !m.quitArmed {
+			m.quitArmed = true
+			m.status = i18n.TuiDlQuitWarn
+			m.statusKind = statusWarning
+			m.statusGen++
+			return m, nil
+		}
+		// Закриття синхронне: .part і плейсхолдер мають зникнути ДО того, як
+		// bubbletea поверне термінал. Ідемпотентне — cmd закриє його ще раз.
+		m.dl.Close()
+	}
 	m.endChain()
 	m.freezeLive()
 	if m.playCancel != nil {

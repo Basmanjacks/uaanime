@@ -63,7 +63,7 @@ func TestLoadConfigNormalizesPlayerAndAutoplay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			s := openTemp(t)
 			if tt.config != nil {
-				if err := writeAtomic(s.configPath(), tt.config); err != nil {
+				if err := WriteAtomic(s.configPath(), tt.config); err != nil {
 					t.Fatalf("write config: %v", err)
 				}
 			}
@@ -243,7 +243,7 @@ func TestCatalogCacheOldYear(t *testing.T) {
 
 func writeCatalogCache(t *testing.T, s *Store, kind provider.CatalogKind, c catalogCache) {
 	t.Helper()
-	if err := writeAtomic(s.catalogCachePath("anitube", kind), &c); err != nil {
+	if err := WriteAtomic(s.catalogCachePath("anitube", kind), &c); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -287,7 +287,7 @@ func TestSearchesNormalizedOnRead(t *testing.T) {
 	for i := range 20 {
 		raw = append(raw, string(rune('a'+i)))
 	}
-	if err := writeAtomic(s.searchesPath(), searches{Queries: raw}); err != nil {
+	if err := WriteAtomic(s.searchesPath(), searches{Queries: raw}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -367,7 +367,7 @@ func TestEpisodesCacheTTLIsOneHour(t *testing.T) {
 		age  time.Duration
 		want bool
 	}{{59 * time.Minute, true}, {61 * time.Minute, false}} {
-		if err := writeAtomic(s.episodesCachePath(ref), &episodesCache{
+		if err := WriteAtomic(s.episodesCachePath(ref), &episodesCache{
 			FetchedAt: time.Now().Add(-tc.age),
 			Episodes:  []provider.Episode{{Number: 1}},
 		}); err != nil {

@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Basmanjacks/uaanime/internal/download"
 	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/extractor/ashdi"
@@ -64,6 +65,11 @@ type app struct {
 	dataDir    string
 	writer     io.Closer
 	debug      bool
+	// rt — транспорт, на якому зібрано застосунок (nil = мережа). Тримаємо
+	// його, бо завантажувач будує власний http.Client із власною політикою
+	// редиректів і не може перевикористати httpx.NewClient — а фікстури й
+	// наскрізні тести мусять діяти й на ньому.
+	rt http.RoundTripper
 }
 
 func (a *app) Close() {
@@ -159,6 +165,7 @@ func newAppWith(rt http.RoundTripper, readOnly bool) (*app, error) {
 		cfg:        cfg,
 		dataDir:    dir,
 		writer:     writer,
+		rt:         rt,
 	}
 	writer = nil // ownership passes to app until session finalization is done
 	return a, nil
@@ -169,6 +176,10 @@ type options struct {
 	json   bool
 	dryRun bool
 	debug  bool
+	// quality — бажана висота кадру для download; 0 означає «найкраща».
+	quality int
+	// dir — папка призначення для download; порожнє = з налаштувань.
+	dir string
 }
 
 // command — одна headless-команда. args завжди починається з імені команди,
@@ -218,6 +229,16 @@ var commands = map[string]command{
 		}
 		return a.cmdPlay(ctx, args[1], ep, opt.dryRun)
 	}},
+	// readOnly, хоч команда й пише: пише вона лише в папку завантажень, а не
+	// в каталог даних, тож lease письменника їй не потрібен і вона працює
+	// паралельно з відкритим TUI.
+	"download": {readOnly: true, minArgs: 3, maxArgs: 3, run: func(a *app, _ context.Context, args []string, opt options) int {
+		ep, ok := parseEpisode(args[2])
+		if !ok {
+			return 2
+		}
+		return a.cmdDownload(args[1], ep, opt)
+	}},
 }
 
 func run(args []string) (code int) {
@@ -234,14 +255,37 @@ func run(args []string) (code int) {
 	}()
 
 	var positional []string
-	for _, a := range args {
-		switch a {
-		case "--json":
+	// Індексний цикл, а не range: --quality і --dir приймають значення як
+	// окремим аргументом, так і через `=`. Невідомі --x лишаються позиційними,
+	// як і раніше, — про них скаже таблиця команд.
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--json":
 			opt.json = true
-		case "--dry-run":
+		case a == "--dry-run":
 			opt.dryRun = true
-		case "--debug":
+		case a == "--debug":
 			opt.debug = true
+		case isFlag(a, "--quality"):
+			v, ok := flagValue(args, &i, "--quality")
+			if !ok {
+				errln(i18n.MsgUsage)
+				return 2
+			}
+			n, err := strconv.Atoi(v)
+			if err != nil || n <= 0 {
+				errln(i18n.MsgUsage)
+				return 2
+			}
+			opt.quality = n
+		case isFlag(a, "--dir"):
+			v, ok := flagValue(args, &i, "--dir")
+			if !ok {
+				errln(i18n.MsgUsage)
+				return 2
+			}
+			opt.dir = v
 		default:
 			positional = append(positional, a)
 		}
@@ -267,6 +311,26 @@ func run(args []string) (code int) {
 	defer a.Close()
 	a.debug = opt.debug
 	return cmd.run(a, ctx, positional, opt)
+}
+
+// isFlag розпізнає обидві форми прапорця зі значенням: `--x V` і `--x=V`.
+func isFlag(arg, name string) bool {
+	return arg == name || strings.HasPrefix(arg, name+"=")
+}
+
+// flagValue дістає значення прапорця, посуваючи індекс циклу, коли значення
+// йде окремим аргументом. Порожнє значення і наступний прапорець замість
+// нього — помилка вжитку: `--dir --json` майже напевно означає забутий шлях,
+// а не папку з такою назвою.
+func flagValue(args []string, i *int, name string) (string, bool) {
+	if v, ok := strings.CutPrefix(args[*i], name+"="); ok {
+		return v, v != ""
+	}
+	if *i+1 >= len(args) || args[*i+1] == "" || strings.HasPrefix(args[*i+1], "--") {
+		return "", false
+	}
+	*i++
+	return args[*i], true
 }
 
 // shellQuote друкує argv так, щоб рядок можна було вставити в оболонку без
@@ -327,6 +391,14 @@ func runTUI(debug bool) (code int) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	eng := a.engine()
+	// Черга завантажень живе стільки, скільки процес. Close ідемпотентний і
+	// його кличе ще й модель на виході — тут defer лише гарантує, що жоден
+	// шлях виходу (зокрема panic) не лишить недокачаний .part на диску.
+	// Один Fetcher на менеджер і на екран якості: обидва мають ходити тим самим
+	// транспортом, що й решта застосунку (фікстури, тести).
+	fetcher := download.NewFetcher(a.rt)
+	mgr := download.NewManager(fetcher)
+	defer mgr.Close()
 	// пульт живе стільки, скільки процес: між серіями сторінка каже «нічого не грає»
 	run, err := startRemote(a.store, eng.Live, a.cfg.Remote)
 	defer func() { run.Close() }() // замикання: після перезапуску run уже інший
@@ -336,6 +408,8 @@ func runTUI(debug bool) (code int) {
 		DataDir:      a.dataDir,
 		Remote:       run.info(err),
 		DetectPlayer: detectPlayer,
+		Downloads:    mgr,
+		Fetcher:      fetcher,
 		// Гарячий перезапуск з екрана налаштувань: нова адреса видна одразу.
 		RestartRemote: func(mode string) ui.RemoteInfo {
 			run.Close()
@@ -355,8 +429,33 @@ func runTUI(debug bool) (code int) {
 type doctorReport struct {
 	Players   []doctorPlayer       `json:"players"`
 	DataDir   string               `json:"data_dir"`
+	Download  doctorDownload       `json:"download"`
 	Providers []doctorProviderInfo `json:"providers"`
 	Remote    doctorRemote         `json:"remote"`
+}
+
+// doctorDownload — стан папки завантажень. Відсутня папка не є помилкою і не
+// псує код виходу: її створить перше завантаження, а doctor нічого не створює.
+type doctorDownload struct {
+	Dir       string `json:"dir"`
+	Exists    bool   `json:"exists"`
+	Writable  bool   `json:"writable"`
+	FreeBytes int64  `json:"free_bytes,omitempty"`
+	Message   string `json:"message,omitempty"`
+}
+
+func downloadDoctor(dir string) doctorDownload {
+	d := doctorDownload{Dir: dir}
+	d.Exists, d.Writable, d.FreeBytes = store.ProbeDownloadDir(dir)
+	switch {
+	case !d.Exists:
+		d.Message = fmt.Sprintf(i18n.MsgDownloadDirNew, dir)
+	case !d.Writable:
+		d.Message = fmt.Sprintf(i18n.MsgDownloadDirNoWrite, dir)
+	default:
+		d.Message = fmt.Sprintf(i18n.MsgDownloadDirLine, dir, i18n.Bytes(d.FreeBytes))
+	}
+	return d
 }
 
 type doctorPlayer struct {
@@ -383,6 +482,7 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 		})
 	}
 	rep.DataDir, _ = store.DataDir()
+	rep.Download = downloadDoctor(a.cfg.DownloadDir)
 	rep.Remote = a.doctorRemoteReport()
 
 	health := a.store.LoadHealth()
@@ -419,6 +519,7 @@ func (a *app) cmdDoctor(ctx context.Context, jsonOut bool) int {
 		outln(playerInstallHint())
 	}
 	outf(i18n.MsgDoctorDataDir+"\n", rep.DataDir)
+	outln(rep.Download.Message)
 	printDoctorRemote(rep.Remote)
 	for _, p := range rep.Providers {
 		if p.Alive {
@@ -471,6 +572,30 @@ func (a *app) refFromID(id string) (provider.TitleRef, bool) {
 }
 
 func titleID(r provider.TitleRef) string { return r.Provider + ":" + r.Slug }
+
+// namedRef дописує в ref назву тайтлу. Слаг із командного рядка її не несе, а
+// назва тече далі на диск (папка, ім'я файла, sidecar, marker) і в бібліотеку —
+// без неї headless-запуск лишав би скрізь слаг. Спершу бібліотека (без мережі),
+// потім провайдер, якщо він уміє називати. Помилка іменування не фатальна:
+// краще папка зі слагом, ніж перерване завантаження чи перегляд.
+// sync: читає Lib.
+func (a *app) namedRef(ctx context.Context, ref provider.TitleRef) provider.TitleRef {
+	if ref.Name != "" {
+		return ref
+	}
+	if t := a.lib.TitleByRef(ref); t != nil && t.Name != "" {
+		ref.Name = t.Name
+		return ref
+	}
+	namer, ok := a.provider.(provider.Namer)
+	if !ok {
+		return ref
+	}
+	if name, err := namer.TitleName(ctx, ref); err == nil {
+		ref.Name = name
+	}
+	return ref
+}
 
 func (a *app) cmdSearch(ctx context.Context, q string, jsonOut bool) int {
 	page, err := a.provider.Search(ctx, q, 1)
@@ -576,6 +701,9 @@ func (a *app) engineWithoutPlayer() *playback.Engine {
 		Extractors: a.extractors,
 		Store:      a.store,
 		Lib:        a.lib,
+		// Папка завантажень потрібна кожному рушію, а не лише TUI: headless
+		// play мусить знаходити збережену серію так само, як Enter у списку.
+		DownloadDir: a.cfg.DownloadDir,
 		Prefs: library.Prefs{
 			FavoriteStudio: a.cfg.FavoriteStudio,
 			PreferKind:     provider.Kind(a.cfg.PreferKind),
@@ -591,6 +719,12 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 	if !ok {
 		return 2
 	}
+	// Назва потрібна до першого запису: Begin заводить тайтл у бібліотеці, і
+	// без неї домівка показувала б слаг. Тайм-аут той самий, що й у резолюції.
+	nameCtx, cancelName := context.WithTimeout(sigCtx, 60*time.Second)
+	ref = a.namedRef(nameCtx, ref)
+	cancelName()
+
 	var eng *playback.Engine
 	if dryRun {
 		eng = a.engineWithoutPlayer()

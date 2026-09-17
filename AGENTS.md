@@ -57,6 +57,8 @@ internal/playertest/   controllable fake player + session for end-to-end tests (
 internal/playback/    orchestration: preference pick → extract → player session → journal
 internal/player/      зовнішні плеєри: VLC (RC/TCP) і mpv (JSON IPC)
 internal/store/       library.json, config.json, progress journal, metadata cache, atomic writes
+internal/download/    HLS → один .ts на диску, черга, sidecar-ідентичність збережених серій
+internal/downloadtest/ httptest-стенд HLS/прямих файлів для тестів
 internal/library/     domain logic: progress, completion, studio preference resolution
 internal/ui/          bubbletea models and views
 internal/remote/      web remote for the phone: OUR OWN embedded page, not scraping
@@ -73,7 +75,8 @@ docs/               product spec, architecture notes
 
 1. **No HTML, CSS selectors, or site URLs outside `internal/provider` and `internal/extractor`.**
    If domain code needs to know which site something came from, the abstraction is wrong.
-   (`internal/remote` renders its own `html/template` page — that is serving, not parsing.)
+   (`internal/remote` renders its own `html/template` page — that is serving, not parsing;
+   `internal/download` parses m3u8 — RFC 8216 text, not HTML — and only to save a file.)
 2. **No network in unit tests.** Fixtures only. A test that fails when a site is down is a broken test.
 3. **No panic reaches the user.** Recover at the root; restore the terminal via `defer` on every exit path.
    A terminal left in raw mode after a crash is a P0 bug.
@@ -135,6 +138,8 @@ Short version: record a fresh fixture, fix the parser against it, keep the old f
 ## Don't
 
 - Don't add features from `docs/future.md` unless asked.
-- Don't turn this into a library manager, downloader, or tracker sync client.
+- Don't turn this into a library manager or tracker sync client. Downloading single episodes
+  to a folder the user picks IS in scope since 2026-09-16 (package `internal/download`) —
+  that is the only downloading we do.
 - Don't add settings. The cap is 8 (`docs/build-brief.md`); adding a ninth means removing one.
 - Don't write architecture documents instead of code.

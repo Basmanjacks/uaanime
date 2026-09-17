@@ -45,7 +45,13 @@ func (m Model) actions() []action {
 	case screenPlaying:
 		a = []action{{"Space", i18n.TuiActionPause}, {"Esc", i18n.TuiActionStop}, {"?", i18n.TuiActionHelp}, {"←/→", i18n.TuiActionSeek}, {"Shift+←/→", i18n.TuiActionSeekBig}, {"N", i18n.TuiActionNext}, {"+/−", i18n.TuiActionVolume}, {".", i18n.TuiActionStopAfter}, {"B", i18n.TuiActionBudget}}
 	case screenEpisodes:
-		a = []action{{"Enter", i18n.TuiActionPlay}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionFilter}, {"M", i18n.TuiActionBookmark}, {"S", i18n.TuiActionStudio}, {"X", i18n.TuiActionWatched}, {"W", i18n.TuiActionBulk}, {"R", i18n.TuiActionRefresh}}
+		a = []action{{"Enter", i18n.TuiActionPlay}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionFilter}, {"M", i18n.TuiActionBookmark}, {"S", i18n.TuiActionStudio}, {"D", i18n.TuiActionDownload}, {"X", i18n.TuiActionWatched}, {"W", i18n.TuiActionBulk}, {"R", i18n.TuiActionRefresh}}
+	case screenDownloadQuality:
+		a = []action{{"Enter", i18n.TuiActionSave}, {"Esc", i18n.TuiActionCancel}, {"?", i18n.TuiActionHelp}}
+	case screenDownloads:
+		a = []action{{"Enter", i18n.TuiActionPlay}, {"X", i18n.TuiActionRemove}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}}
+	case screenDownloadDir:
+		return []action{{"Enter", i18n.TuiActionSave}, {"Esc", i18n.TuiActionCancel}}
 	case screenSettings:
 		a = []action{{"Enter", i18n.TuiActionPick}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"←/→", i18n.TuiActionChange}}
 	case screenSettingValue, screenStudio:
@@ -58,7 +64,7 @@ func (m Model) actions() []action {
 			a = append(a, action{"M", i18n.TuiActionBookmark})
 		}
 	case screenHome:
-		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionSearch}, {"M", i18n.TuiActionBookmark}, {",", i18n.TuiActionSettings}, {"Q", i18n.TuiActionQuit}, {"R", i18n.TuiActionRefresh}}
+		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionSearch}, {"M", i18n.TuiActionBookmark}, {",", i18n.TuiActionSettings}, {"Q", i18n.TuiActionQuit}, {"R", i18n.TuiActionRefresh}, {"D", i18n.TuiActionDownloads}}
 	default:
 		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}}
 		if m.list.FilteringEnabled() {
@@ -129,7 +135,7 @@ func (m *Model) closeOverlay() tea.Cmd {
 		return nil
 	}
 	m.setDelegate(m.screen == screenSearch && len(m.cards) > 0)
-	m.list.SetFilteringEnabled(m.screen != screenHome && m.screen != screenSettings && m.screen != screenSettingValue)
+	m.list.SetFilteringEnabled(filteringEnabled(m.screen))
 	m.relayout()
 	status, kind, gen, errText := m.status, m.statusKind, m.statusGen, m.errText
 	cmd := m.restoreRows(*f)
@@ -185,6 +191,7 @@ func (m *Model) selectKey(key string, fallback int) {
 func (m *Model) showBookmarks() {
 	m.setScreen(screenBookmarks)
 	m.epsScratch = map[string][]provider.Episode{}
+	m.resetSavedScratch()
 	_ = m.setItems(m.bookmarkRows(), 0)
 	m.status = ""
 }

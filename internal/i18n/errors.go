@@ -30,6 +30,22 @@ func ErrorText(err error) string {
 		text = MsgNoPlayer
 	case errors.Is(err, errs.ErrPlayer):
 		text = MsgPlayerUnavailable
+	case errors.Is(err, errs.ErrDiskFull):
+		text = MsgDiskFull
+	case errors.Is(err, errs.ErrNoWriteAccess):
+		text = MsgNoWriteAccess
+	case errors.Is(err, errs.ErrCancelled):
+		text = MsgDownloadCancelled
+	case errors.Is(err, errs.ErrEncryptedStream):
+		text = MsgStreamEncrypted
+	case errors.Is(err, errs.ErrUnsupportedStream):
+		text = MsgStreamUnsupported
+	case errors.Is(err, errs.ErrStreamExpired):
+		text = MsgStreamExpired
+	case errors.Is(err, errs.ErrAlreadySaved):
+		text = MsgAlreadySaved
+	case errors.Is(err, errs.ErrDownloadBusy):
+		text = MsgDownloadBusy
 	case errors.Is(err, errs.ErrProvider):
 		text = MsgSourceUnavailable
 	default:

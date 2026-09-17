@@ -162,6 +162,8 @@ func TestBinaryExitCodes(t *testing.T) {
 	}{
 		{"невідома команда", []string{"frobnicate"}, 2},
 		{"невалідна серія", []string{"resolve", fixtureTitleID, "нуль"}, 2},
+		{"download без аргументів", []string{"download"}, 2},
+		{"download без значення --quality", []string{"download", fixtureTitleID, "1", "--quality"}, 2},
 		{"невідомий тайтл", []string{"episodes", "999999-nemaye-takogo-tajtlu"}, 1},
 		{"doctor без плеєрів", []string{"doctor", "--json"}, 0},
 	}

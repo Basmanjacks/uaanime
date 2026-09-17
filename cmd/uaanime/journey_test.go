@@ -599,3 +599,22 @@ func TestJourneyAutoplaySurvivesProviderFailureBetweenEpisodes(t *testing.T) {
 	}
 	mustContain(t, "stdout", out, fmt.Sprintf(i18n.MsgResolving, 2))
 }
+
+// Headless play для тайтлу, якого ще немає в бібліотеці: тайтл заводиться з
+// людською назвою, а не зі слагом (домівка показувала б слаг), і та сама назва
+// стоїть у заголовку вікна плеєра.
+func TestJourneyHeadlessPlayNamesTitle(t *testing.T) {
+	dir, _, fp := journeyEnv(t, playertest.NewSession(player.EndQuit, []float64{100}, []float64{1440}))
+
+	code, out, errOut := runCLI(t, "play", fixtureTitleID, "1")
+	mustExit(t, 0, code, out, errOut)
+
+	title := loadLibrary(t, dir).TitleByRef(fixtureRef(t))
+	if title == nil || title.Name != fixtureTitleName {
+		t.Fatalf("тайтл у бібліотеці = %+v, очікував назву %q", title, fixtureTitleName)
+	}
+	starts := fp.Starts()
+	if want := fixtureTitleName + " · 1"; len(starts) != 1 || starts[0].MediaTitle != want {
+		t.Fatalf("Start = %+v, очікував MediaTitle %q", starts, want)
+	}
+}

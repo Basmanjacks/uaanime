@@ -518,3 +518,46 @@ func writeSilentWAV(t *testing.T, path string, seconds int) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 }
+
+// Локальний файл: шлях останнім аргументом і жодного --http-*, бо ходити
+// нікуди — VLC відкриває файл із диска.
+func TestVLCLocalFileHasNoHTTPArgs(t *testing.T) {
+	const path = "/Users/me/Movies/uaanime/Фрірен/Фрірен - 05 - FanVoxUA [Озв, 1080p].ts"
+	for name, headers := range map[string]map[string]string{
+		"nil":   nil,
+		"empty": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := (VLC{}).Command(path, "Фрірен · 5", headers, 0)
+			want := []string{
+				"vlc",
+				"--play-and-exit",
+				"--fullscreen",
+				"--quiet",
+				"--meta-title=Фрірен · 5",
+				path,
+			}
+			if !reflect.DeepEqual(cmd.Args, want) {
+				t.Fatalf("Command.Args = %#v, очікував %#v", cmd.Args, want)
+			}
+		})
+	}
+}
+
+// Resume зі збереженого файла: --start-time лишається, шлях — останній.
+func TestVLCLocalFileWithStart(t *testing.T) {
+	const path = "/tmp/uaanime/Тайтл/Тайтл - 01 - Студія [Озв, 720p].ts"
+	cmd := (VLC{}).Command(path, "Тайтл · 1", nil, 42)
+	want := []string{
+		"vlc",
+		"--play-and-exit",
+		"--fullscreen",
+		"--quiet",
+		"--meta-title=Тайтл · 1",
+		"--start-time=42.0",
+		path,
+	}
+	if !reflect.DeepEqual(cmd.Args, want) {
+		t.Fatalf("Command.Args = %#v, очікував %#v", cmd.Args, want)
+	}
+}

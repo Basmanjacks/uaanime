@@ -3,6 +3,7 @@ package ui
 import (
 	"strconv"
 
+	"github.com/Basmanjacks/uaanime/internal/download"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
@@ -77,6 +78,14 @@ func (i item) key() string {
 		return "value:" + payload.value
 	case payloadMore:
 		return "more"
+	case payloadDownloads:
+		return "downloads"
+	case payloadQuality:
+		return "quality:" + strconv.Itoa(payload.height)
+	case payloadDownload:
+		return "dl:" + strconv.FormatInt(payload.id, 10)
+	case payloadSavedFile:
+		return "saved:" + payload.ref.Provider + ":" + payload.ref.Slug + ":" + strconv.Itoa(payload.ep)
 	}
 	return ""
 }
@@ -107,6 +116,28 @@ type (
 		src        provider.Source
 		pinKind    provider.Kind // що записати в KindPin: "" коли вибору типу не було
 		unplayable bool          // пара є в серії, але хост без екстрактора: Enter не пінує
+	}
+	// payloadDownloads — рядок «Завантаження» в секції ЩЕ домівки.
+	payloadDownloads struct{}
+	// payloadQuality — рядок екрана вибору якості. bytes == 0 означає
+	// «розмір невідомий», exact == false — оцінка за бітрейтом.
+	payloadQuality struct {
+		height int
+		bytes  int64
+		exact  bool
+	}
+	// payloadDownload — завдання черги на екрані «Завантаження».
+	payloadDownload struct {
+		id    int64
+		state download.State
+		ref   provider.TitleRef
+		ep    int
+	}
+	// payloadSavedFile — серія, що вже лежить на диску.
+	payloadSavedFile struct {
+		ref  provider.TitleRef
+		ep   int
+		path string
 	}
 	// екран налаштувань: рядок домівки, рядок налаштування, рядок значення
 	payloadSettings     struct{}

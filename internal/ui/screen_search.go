@@ -13,6 +13,7 @@ import (
 // курсор після довантаження ставиться простою арифметикою.
 func (m *Model) searchRows() []item {
 	m.epsScratch = map[string][]provider.Episode{}
+	m.resetSavedScratch()
 	items := make([]item, 0, len(m.cards)+1)
 	for _, c := range m.cards {
 		items = append(items, item{

@@ -38,6 +38,10 @@ type Engine struct {
 	Player           player.Player
 	PlayerFallback   bool
 	Autoplay         bool
+	// DownloadDir — папка збережених серій (знімок конфігу). Пише лише
+	// горутина Update (екран налаштувань), як і Prefs; фонові команди читають
+	// її зі знімка в Hints, а не з поля рушія.
+	DownloadDir string
 	// JournalInterval — крок семплювання позиції під час Run; 0 означає
 	// defaultJournalInterval. Поле, а не пакетна змінна, щоб тести інших
 	// пакетів не чекали 5 с на перший запис журналу.
@@ -96,10 +100,18 @@ type Resolved struct {
 	// Pin і Prefs — знімок, з яким робився вибір. Статус після запуску
 	// будується лише з них: Begin уже записав неявний пін, і бібліотека далі
 	// не відрізняє «піна не було» від явного.
-	Pin        library.Pin
-	Prefs      library.Prefs
-	Deviation  library.Deviation
-	Stream     extractor.Stream
+	Pin       library.Pin
+	Prefs     library.Prefs
+	Deviation library.Deviation
+	Stream    extractor.Stream
+	// Streams — усі потоки обраного релізу за спаданням якості; Stream ==
+	// Streams[0]. Плеєру досить першого, а завантажувачу потрібні всі:
+	// moonanime віддає окремий прямий файл на кожну якість, і, лишаючи самий
+	// перший, ми втрачали 720p/480p ще до побудови плану.
+	Streams []extractor.Stream
+	// Local — грає файл із диска: Stream.URL це шлях, заголовків немає,
+	// провайдера й екстрактор не чіпали взагалі.
+	Local      bool
 	HostID     string
 	StartSec   float64 // resume-позиція, 0 = з початку
 	Name       string  // назва тайтлу без номера серії (для пульта)
@@ -197,6 +209,14 @@ func validStreams(streams []extractor.Stream) []extractor.Stream {
 	return out
 }
 
+// byQuality сортує потоки за спаданням якості на місці й стабільно: плеєр
+// бере перший, тож «найкраще» має бути попереду, а рівні якості (0 == master
+// або невідома) мусять лишитися в порядку екстрактора.
+func byQuality(streams []extractor.Stream) []extractor.Stream {
+	sort.SliceStable(streams, func(i, j int) bool { return streams[i].Quality > streams[j].Quality })
+	return streams
+}
+
 // ReleaseChoices повертає відтворювані пари (студія, тип) серії. async-safe.
 func (e *Engine) ReleaseChoices(ctx context.Context, ref provider.TitleRef, ep int) ([]provider.Source, error) {
 	sources, err := e.sources(ctx, ref, ep)
@@ -222,12 +242,19 @@ type Hints struct {
 	// фоні, а Engine.Prefs може змінити екран налаштувань на Update-горутині:
 	// копія в підказках замість читання поля рушія — і гонки немає.
 	Prefs library.Prefs
+	// DownloadDir — знімок Engine.DownloadDir з тієї ж причини, що й Prefs.
+	DownloadDir string
+	// NoLocal — не заглядати на диск. Нуль означає «локальний файл дозволено»,
+	// бо це поведінка за замовчуванням для всіх, хто грає. true ставить лише
+	// завантажувач: інакше після збереженого 720p неможливо було б докачати
+	// 1080p — резолв віддав би шлях до вже наявного файла замість потоків.
+	NoLocal bool
 }
 
 // ResolveHints знімає з бібліотеки все, що потрібно ResolveWith.
 // sync: читає Lib.
 func (e *Engine) ResolveHints(ref provider.TitleRef, ep int) Hints {
-	h := Hints{Name: ref.Name, Prefs: e.Prefs}
+	h := Hints{Name: ref.Name, Prefs: e.Prefs, DownloadDir: e.DownloadDir}
 	title := e.Lib.TitleByRef(ref)
 	if title == nil {
 		return h
@@ -256,6 +283,13 @@ func (e *Engine) Resolve(ctx context.Context, ref provider.TitleRef, ep int, onE
 // ResolveWith — та сама вибірка, але з уже знятими підказками: мережа й
 // екстрактори, жодного звертання до Lib. async-safe.
 func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int, h Hints, onEvent func(Event)) (*Resolved, error) {
+	// Диск перевіряється ДО провайдера: збережена серія має грати без жодного
+	// мережевого запиту, тобто й у літаку, і коли сайт лежить.
+	if !h.NoLocal && h.DownloadDir != "" {
+		if res := localResolved(ref, ep, h); res != nil {
+			return res, nil
+		}
+	}
 	sources, err := e.sources(ctx, ref, ep)
 	if err != nil {
 		return nil, err
@@ -291,7 +325,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			remaining = without(remaining, *chosen)
 			continue
 		}
-		streams = validStreams(streams)
+		streams = byQuality(validStreams(streams))
 		if len(streams) == 0 {
 			failures = append(failures, fmt.Errorf("екстрактор %s не повернув потоку: %w", ex.ID(), errs.ErrNoStream))
 			if onEvent != nil {
@@ -312,6 +346,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			Prefs:      h.Prefs,
 			Deviation:  library.DeviationOf(pin, *chosen),
 			Stream:     streams[0],
+			Streams:    streams,
 			HostID:     ex.ID(),
 			StartSec:   h.StartSec,
 			Name:       name,
@@ -589,7 +624,11 @@ func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) 
 	// студія запам'ятовується після першого перегляду: наступна серія
 	// піде тією самою озвучкою без питань. Тип субтитрів неявно не
 	// закріплюється: wildcard означає «озвучення цієї студії, щойно буде».
-	if entry.StudioPin == "" {
+	//
+	// Файл із диска нічого не пінує: завантаження не торкається бібліотеки, і
+	// студія збереженого файла (може, єдина, що була тоді на сайті) не має
+	// тихо ставати перевагою для всіх наступних серій із мережі.
+	if entry.StudioPin == "" && !res.Local {
 		entry.StudioPin = res.Source.Studio
 		entry.KindPin = res.Source.Kind
 		if entry.KindPin == provider.KindSub {

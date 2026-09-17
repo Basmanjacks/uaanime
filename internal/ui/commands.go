@@ -8,6 +8,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/Basmanjacks/uaanime/internal/download"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
@@ -366,4 +367,36 @@ func (m *Model) journalCmd() tea.Cmd {
 		err, open := <-events
 		return journalMsg{gen: gen, err: err, open: open}
 	}
+}
+
+// downloadEventsCmd підписується на сигнал менеджера завантажень. Команда
+// блокується на каналі, як remoteRequestCmd, і переозброюється з обробника
+// downloadMsg — так одночасно живе рівно один читач. Закритий канал (Close)
+// більше не переозброюється: далі змінюватись нічому.
+func (m *Model) downloadEventsCmd() tea.Cmd {
+	if m.dl == nil {
+		return nil
+	}
+	events := m.dl.Events()
+	return func() tea.Msg {
+		_, ok := <-events
+		return downloadMsg{ok: ok}
+	}
+}
+
+// downloadPlanCmd — підготовка завантаження: той самий резолв, що й у
+// відтворення (а отже той самий Pick і те саме правило 4), але з NoLocal —
+// інакше після збереженого 720p неможливо було б докачати 1080p. Зондування
+// потоків і розбір плейлистів робить BuildPlan; у фон іде лише мережа.
+func (m *Model) downloadPlanCmd(ref provider.TitleRef, ep, req int, h playback.Hints) tea.Cmd {
+	eng, f := m.eng, m.fetcher
+	h.NoLocal = true
+	return asyncCmd(45*time.Second, func(ctx context.Context) tea.Msg {
+		res, err := eng.ResolveWith(ctx, ref, ep, h, nil)
+		if err != nil {
+			return downloadPlanMsg{req: req, err: err}
+		}
+		plan, err := download.BuildPlan(ctx, f, res.Streams)
+		return downloadPlanMsg{req: req, res: res, plan: plan, err: err}
+	})
 }

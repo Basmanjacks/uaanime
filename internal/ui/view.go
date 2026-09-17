@@ -46,6 +46,12 @@ func (m Model) View() tea.View {
 		title = i18n.TuiSettingsTitle
 	case screenSettingValue:
 		title = settingTitle(m.settingID)
+	case screenDownloadQuality:
+		title = m.dlTitle
+	case screenDownloads:
+		title = m.downloadsTitle()
+	case screenDownloadDir:
+		title = i18n.TuiSetDlFolderTitle
 	default:
 		title = i18n.TuiAppTitle
 	}
@@ -77,7 +83,7 @@ func (m Model) View() tea.View {
 			body += styleRemote.Render(line) + "\n"
 		}
 	}
-	if m.screen == screenSearch && m.overlay == overlayNone {
+	if m.inputVisible() {
 		body += "  " + m.input.View() + "\n"
 	}
 	if m.screen == screenPlaying && m.overlay == overlayNone {
@@ -144,7 +150,7 @@ func (m Model) View() tea.View {
 	if m.screen == screenPlaying {
 		v.WindowTitle = fmt.Sprintf(i18n.TuiWindowTitle, m.currentTitleName(), m.pendingEp)
 	}
-	if m.screen == screenSearch {
+	if m.inputVisible() {
 		if c := m.input.Cursor(); c != nil {
 			c.X += 2
 			c.Y += 2
@@ -350,3 +356,10 @@ func (m Model) remoteQR(usedRows int) (string, bool) {
 }
 
 func (m Model) hint() string { return m.actionHint() }
+
+// inputVisible — чи стоїть у кадрі рядок текстового поля. Два екрани ділять
+// один textinput, тому і геометрія (relayout, listHeight), і курсор
+// рахуються в одному місці.
+func (m Model) inputVisible() bool {
+	return (m.screen == screenSearch || m.screen == screenDownloadDir) && m.overlay == overlayNone
+}

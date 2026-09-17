@@ -18,6 +18,10 @@ import (
 // fixtureTitleID — канонічний тайтл фікстур (Фрірен, 7 студій).
 const fixtureTitleID = "anitube:4465-frren-scho-provodzhaye-v-ostannyu-put-1-sezon"
 
+// fixtureTitleName — назва того самого тайтлу так, як вона стоїть у фікстурі
+// сторінки: headless-команди мусять дістати її з провайдера, а не лишити слаг.
+const fixtureTitleName = "Фрірен, що проводжає в останню путь (1 сезон)"
+
 func TestShellQuote(t *testing.T) {
 	t.Parallel()
 
@@ -194,6 +198,9 @@ func TestRunCommands(t *testing.T) {
 					t.Fatalf("argv = %q, очікував початок %q", argv, "vlc ")
 				}
 				mustContain(t, "argv", argv, "--play-and-exit")
+				// назва тайтлу дістається з провайдера навіть для тайтлу,
+				// якого немає в бібліотеці: у заголовку вікна не слаг
+				mustContain(t, "argv", argv, fixtureTitleName)
 			},
 		},
 		{
