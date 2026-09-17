@@ -104,6 +104,12 @@ type Provider interface {
 	Sources(ctx context.Context, ref TitleRef, episode int) ([]Source, error)
 }
 
+// Namer — провайдер, що вміє назвати тайтл за посиланням. Опційний: headless-команди
+// отримують ref лише зі слага, а назва потрібна для папки на диску й для бібліотеки.
+type Namer interface {
+	TitleName(ctx context.Context, ref TitleRef) (string, error)
+}
+
 // --- Санітизація недовірених рядків ---
 //
 // Усе, що приходить зі сторінки сайту або з диска (кеш, library.json), потрапляє

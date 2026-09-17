@@ -34,6 +34,8 @@ func (m *Model) episodeRows() []item {
 	}
 	progress := library.IndexProgress(titleID, m.eng.Lib.Progress)
 	episodes, _ := m.currentEpisodes()
+	// Одне читання папки завантажень на всю перебудову списку (див. savedFor).
+	saved := m.savedFor(m.ref)
 	width := episodeNumberWidth(episodes)
 	items := make([]item, 0, len(episodes))
 	for _, ep := range episodes {
@@ -46,6 +48,7 @@ func (m *Model) episodeRows() []item {
 		p, started := progress[ep.Number]
 		if started && p.Completed {
 			it.icon, it.badge = m.ic.Done, i18n.TuiEpDone
+			m.applyDownloadBadge(&it, ep.Number, saved)
 			items = append(items, it)
 			continue
 		}
@@ -70,6 +73,9 @@ func (m *Model) episodeRows() []item {
 				it.meta = at
 			}
 		}
+		// Стан завантаження — останнім: він перекриває бейдж вибору релізу,
+		// бо каже про дію, яка вже триває або вже дала файл на диску.
+		m.applyDownloadBadge(&it, ep.Number, saved)
 		items = append(items, it)
 	}
 	return items

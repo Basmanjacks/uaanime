@@ -14,7 +14,9 @@
 //     decodeURIComponent(escape(r))} і var rawVideo = _0xd("<base64>").
 //     Етап 2: base64 → XOR з ключем k → байти UTF-8.
 //   - rawVideo — URL master-плейлиста hls:manifest.m3u8?expires=…&sig=… (підпис живе ~2 год,
-//     тому URL ніколи не кешується) або Playerjs-список "[1080]url,[720]url".
+//     тому URL ніколи не кешується) або Playerjs-список варіантів. Форма списку,
+//     перевірена 2026-09-17: "[720p]https://s.moonanime.art/content/v/<id>/720/?expires=…&sig=…,[1080p]…/1080/…"
+//     — мітка "<висота>p" (не голе число), порядок за зростанням.
 //
 // Плеєри: VLC відкидає всі заголовки, крім Referer/User-Agent, але Accept: */* і
 // Accept-Language надсилає сам (перевірено VLC 3.0.17.3: маніфест, quality-плейлисти й
@@ -77,6 +79,15 @@ var (
 	// і Playerjs (`file: _0xd("…")`) з Referer сайту-каталогу. Ключ і кодування спільні.
 	reRawVideo = regexp.MustCompile(`(?:var\s+rawVideo\s*=|\bfile\s*:)\s*([\w$]+)\(\s*"([A-Za-z0-9+/=]*)"\s*\)`)
 	reLabeled  = regexp.MustCompile(`\[([^\]]+)\](https?://[^,\[\s]+)`)
+	// Мітка Playerjs не є числом: перевірено 2026-09-17 на Glass Moon
+	// (4465-frren…, серія 1) хост віддав
+	// "[720p]https://s.moonanime.art/content/v/<id>/720/?expires=…&sig=…,[1080p]…/1080/…"
+	// — тобто "<висота>p", у порядку зростання. strconv.Atoi на такому рядку
+	// падав і давав quality 0. Беремо перший запуск із 3–4 цифр із мітки
+	// (покриває і "[HD 720]"/"[FHD 1080]"), а якщо мітка нечислова ("[авто]") —
+	// пробуємо сегмент шляху URL.
+	reDigits   = regexp.MustCompile(`\d{3,4}`)
+	rePathQual = regexp.MustCompile(`/(\d{3,4})/`)
 )
 
 func playerChanged(what string) error {
@@ -120,6 +131,20 @@ type videoURL struct {
 	url     string
 }
 
+// qualityOf — висота варіанта з мітки Playerjs, із фолбеком на сегмент шляху URL.
+// 0 означає "невідомо" (плеєр обере сам), а не помилку.
+func qualityOf(label, rawURL string) int {
+	if d := reDigits.FindString(label); d != "" {
+		q, _ := strconv.Atoi(d)
+		return q
+	}
+	if m := rePathQual.FindStringSubmatch(rawURL); m != nil {
+		q, _ := strconv.Atoi(m[1])
+		return q
+	}
+	return 0
+}
+
 // parseVideoURLs віддзеркалює MaSource.parseVideoUrls зі скрипта хоста.
 func parseVideoURLs(s string) []videoURL {
 	s = strings.TrimSpace(s)
@@ -128,8 +153,7 @@ func parseVideoURLs(s string) []videoURL {
 	}
 	var out []videoURL
 	for _, m := range reLabeled.FindAllStringSubmatch(s, -1) {
-		q, _ := strconv.Atoi(strings.TrimSpace(m[1]))
-		out = append(out, videoURL{quality: q, url: m[2]})
+		out = append(out, videoURL{quality: qualityOf(m[1], m[2]), url: m[2]})
 	}
 	if len(out) == 0 {
 		return []videoURL{{url: s}}

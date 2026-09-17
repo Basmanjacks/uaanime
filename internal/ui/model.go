@@ -15,6 +15,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/Basmanjacks/uaanime/internal/download"
+	"github.com/Basmanjacks/uaanime/internal/httpx"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/player"
@@ -34,6 +36,11 @@ const (
 	screenSettings
 	screenSettingValue
 	screenBookmarks
+	// Екрани завантажень. Вибір якості й папка — транзитні (кадр у стеку),
+	// «Завантаження» — повноцінний екран зі списку домівки.
+	screenDownloadQuality
+	screenDownloads
+	screenDownloadDir
 )
 
 // RemoteInfo — стан веб-пульта після (пере)запуску. Err — фатально: пульт не
@@ -61,6 +68,15 @@ type Options struct {
 	RestartRemote func(mode string) RemoteInfo
 	// DetectPlayer — player.Detect за швом cmd; nil → без перевірки наявності.
 	DetectPlayer func(id string) (player.Player, bool, error)
+	// Downloads — черга завантажень на диск; nil = завантаження недоступні
+	// (тести без мережевого стенду). Менеджер належить cmd: він же його
+	// закриває на виході разом із пультом.
+	Downloads *download.Manager
+	// Fetcher — той самий HTTP-клієнт завантажувача, що й у менеджера: план
+	// якостей будується в UI, а транспорт (а з ним фікстури й тестові стенди)
+	// живе в cmd. nil при непорожньому Downloads → власний із дефолтним
+	// транспортом.
+	Fetcher *httpx.Fetcher
 }
 
 // view — стан екрана, який переживає перехід і повертається разом із кадром
@@ -87,6 +103,11 @@ type view struct {
 	// settingID — яке налаштування відкрито на екрані значень; у view, щоб
 	// заголовок пережив кадр стека.
 	settingID settingID
+
+	// dlTitle — заголовок екрана вибору якості («Завантажити серію 6 · Озв ·
+	// FanVoxUA»). У view, бо будується з відповіді резолву, якої після
+	// повернення в кадр уже немає.
+	dlTitle string
 }
 
 // clone — копія, яку не зачепить наступний пошук: слайси в моделі
@@ -191,6 +212,19 @@ type Model struct {
 	// стека.
 	easter string
 	nya    bool
+	// Черга завантажень. dl == nil — завантаження недоступні (тести): D каже
+	// про це й нічого не робить. downloads — останній знімок менеджера за
+	// ключем «provider:slug:серія» (той самий, яким дедуплікує сам менеджер);
+	// savedScratch — одноразовий кеш читань папки завантажень із життєвим
+	// циклом epsScratch плюс скидання при зміні папки й на кожному Done.
+	// quitArmed — перше інтерактивне «вийти» під час завантаження лише
+	// попередило.
+	dl           *download.Manager
+	fetcher      *httpx.Fetcher
+	downloads    map[string]download.Progress
+	savedScratch map[string]map[int][]download.SavedFile
+	quitArmed    bool
+
 	// Налаштування та пульт: cfg — той самий покажчик, що в cmd; remote —
 	// поточна адреса для екрана «Грає» та «Налаштування» ("" = вимкнено).
 	cfg    *store.Config
@@ -244,6 +278,11 @@ func New(eng *playback.Engine, opts Options) Model {
 	in.SetStyles(searchInputStyles())
 	in.SetVirtualCursor(false)
 
+	fetcher := opts.Fetcher
+	if fetcher == nil && opts.Downloads != nil {
+		fetcher = download.NewFetcher(nil)
+	}
+
 	m := Model{
 		badgeScheduled: &atomic.Bool{},
 		refreshEvery:   refreshInterval,
@@ -254,6 +293,10 @@ func New(eng *playback.Engine, opts Options) Model {
 		ic:             ic,
 		catalog:        map[provider.CatalogKind][]provider.TitleCard{},
 		epsScratch:     map[string][]provider.Episode{},
+		dl:             opts.Downloads,
+		fetcher:        fetcher,
+		downloads:      map[string]download.Progress{},
+		savedScratch:   map[string]map[int][]download.SavedFile{},
 		cfg:            opts.Cfg,
 		remote:         opts.Remote,
 		opts:           opts,
@@ -332,6 +375,9 @@ func (m Model) Init() tea.Cmd {
 		cmds = append(cmds, cmd)
 	}
 	if cmd := m.refreshTickCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if cmd := m.downloadEventsCmd(); cmd != nil {
 		cmds = append(cmds, cmd)
 	}
 	if len(cmds) == 0 {

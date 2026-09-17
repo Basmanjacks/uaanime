@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/Basmanjacks/uaanime/internal/download"
 	"github.com/Basmanjacks/uaanime/internal/playback"
 	"github.com/Basmanjacks/uaanime/internal/player"
 	"github.com/Basmanjacks/uaanime/internal/provider"
@@ -82,6 +83,18 @@ type (
 		catalog    map[provider.CatalogKind][]provider.TitleCard
 		err        error
 		refreshGen int
+	}
+	// downloadMsg — менеджер завантажень каже «щось змінилося»; авторитетний
+	// стан читається зі Snapshot. ok == false — канал закрито (Close), і
+	// переозброювати підписку більше нікуди.
+	downloadMsg struct{ ok bool }
+	// downloadPlanMsg — відповідь підготовки: реліз обрано, потоки зондовано,
+	// список якостей зібрано. req відсікає застарілі, як і в решті навігації.
+	downloadPlanMsg struct {
+		req  int
+		res  *playback.Resolved
+		plan *download.Plan
+		err  error
 	}
 	// nyaOffMsg — час кота вийшов; банер повертається до сезонного.
 	nyaOffMsg           struct{}

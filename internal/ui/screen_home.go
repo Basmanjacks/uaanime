@@ -20,6 +20,7 @@ func (m *Model) showHome() {
 
 func (m *Model) rebuildHome() {
 	m.epsScratch = map[string][]provider.Episode{}
+	m.resetSavedScratch()
 	m.errText = ""
 	m.homeSpacers = m.list.Height() >= 16
 	var items []item
@@ -53,6 +54,7 @@ func (m *Model) rebuildHome() {
 	if len(m.eng.Lib.Progress) > 0 {
 		items = append(items, item{title: i18n.TuiHistoryItem, payload: payloadHistory{}})
 	}
+	items = append(items, item{title: i18n.TuiDlItem, badge: m.downloadHomeBadge(), payload: payloadDownloads{}})
 	items = append(items, item{icon: m.ic.Settings, title: i18n.TuiSettingsItem, payload: payloadSettings{}})
 
 	items = append(items, m.catalogRows()...)
@@ -318,6 +320,7 @@ func (m *Model) titleEpisodes(t *library.LocalTitle) []provider.Episode {
 // перезаписано.
 func (m *Model) libraryFreshTotal() int {
 	m.epsScratch = map[string][]provider.Episode{}
+	m.resetSavedScratch()
 	total := 0
 	// Той самий набір, що й оновлюється (visibleRefs): дубль запису на один
 	// тайтл рахується один раз, як і запитується.

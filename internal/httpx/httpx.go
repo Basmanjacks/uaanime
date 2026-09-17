@@ -46,6 +46,28 @@ func NewClient(rt http.RoundTripper) *http.Client {
 	}
 }
 
+// Classify — єдина таблиця «мережева помилка → клас застосунку». Dial, DNS і
+// тайм-аути дають errs.ErrOffline, решта — errs.ErrProvider; UI показує на них
+// різні тексти. Живе тут, а не в кожного викликача, бо і Do, і Fetcher
+// (fetch.go) мусять класифікувати однаково: інакше той самий обрив мережі в
+// плеєрі й у завантажувачі виглядав би для людини по-різному.
+//
+// what — коротка дія українською для контексту («читання відповіді»); порожній
+// рядок опускається. err == nil повертає nil, щоб виклик писався одним рядком.
+func Classify(u, what string, err error) error {
+	if err == nil {
+		return nil
+	}
+	class := errs.ErrProvider
+	if errs.Offline(err) {
+		class = errs.ErrOffline
+	}
+	if what == "" {
+		return fmt.Errorf("%s: %w: %w", u, class, err)
+	}
+	return fmt.Errorf("%s: %s: %w: %w", u, what, class, err)
+}
+
 // Do виконує запит і повертає тіло, класифікуючи збої на три класи, які
 // розрізняє UI: офлайн, зламане джерело, відсутність потоку (останній —
 // справа викликача). Єдина точка читання HTTP-відповіді в застосунку:
@@ -53,10 +75,7 @@ func NewClient(rt http.RoundTripper) *http.Client {
 func Do(client *http.Client, req *http.Request) ([]byte, error) {
 	res, err := client.Do(req)
 	if err != nil {
-		if errs.Offline(err) {
-			return nil, fmt.Errorf("%s: %w: %w", req.URL, errs.ErrOffline, err)
-		}
-		return nil, fmt.Errorf("%s: %w: %w", req.URL, errs.ErrProvider, err)
+		return nil, Classify(req.URL.String(), "", err)
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
@@ -65,10 +84,7 @@ func Do(client *http.Client, req *http.Request) ([]byte, error) {
 	// +1 байт понад ліміт: рівно MaxBody не відрізнити від обрізаного більшого тіла.
 	body, err := io.ReadAll(io.LimitReader(res.Body, MaxBody+1))
 	if err != nil {
-		if errs.Offline(err) {
-			return nil, fmt.Errorf("%s: читання відповіді: %w: %w", req.URL, errs.ErrOffline, err)
-		}
-		return nil, fmt.Errorf("%s: читання відповіді: %w: %w", req.URL, errs.ErrProvider, err)
+		return nil, Classify(req.URL.String(), "читання відповіді", err)
 	}
 	if len(body) > MaxBody {
 		return nil, fmt.Errorf("%s: відповідь завелика (> %d байт): %w", req.URL, MaxBody, errs.ErrProvider)

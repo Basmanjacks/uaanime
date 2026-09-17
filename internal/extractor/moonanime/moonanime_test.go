@@ -94,6 +94,64 @@ func TestParseVideoURLs(t *testing.T) {
 	}
 }
 
+// TestParseVideoURLsLabels — мітки, які хост ставить у Playerjs-список.
+// Реальна форма (перевірено 2026-09-17, Glass Moon, Фрірен, 1 серія):
+// "[720p]https://s.moonanime.art/content/v/<id>/720/?expires=…&sig=…,[1080p]…/1080/…".
+func TestParseVideoURLsLabels(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []videoURL
+	}{
+		{
+			name: "реальна форма Glass Moon",
+			in:   "[720p]https://s.moonanime.art/content/v/vylqfkmvput/720/?expires=1&sig=a,[1080p]https://s.moonanime.art/content/v/vylqfkmvput/1080/?expires=1&sig=b",
+			want: []videoURL{
+				{1080, "https://s.moonanime.art/content/v/vylqfkmvput/1080/?expires=1&sig=b"},
+				{720, "https://s.moonanime.art/content/v/vylqfkmvput/720/?expires=1&sig=a"},
+			},
+		},
+		{
+			name: "мітка з p",
+			in:   "[1080p]https://cdn.example/a.m3u8",
+			want: []videoURL{{1080, "https://cdn.example/a.m3u8"}},
+		},
+		{
+			name: "мітка HD 720",
+			in:   "[HD 720]https://cdn.example/a.m3u8",
+			want: []videoURL{{720, "https://cdn.example/a.m3u8"}},
+		},
+		{
+			name: "мітка FHD 1080",
+			in:   "[FHD 1080]https://cdn.example/a.m3u8",
+			want: []videoURL{{1080, "https://cdn.example/a.m3u8"}},
+		},
+		{
+			name: "нечислова мітка без підказки в шляху",
+			in:   "[авто]https://cdn.example/master.m3u8",
+			want: []videoURL{{0, "https://cdn.example/master.m3u8"}},
+		},
+		{
+			name: "фолбек на сегмент шляху",
+			in:   "[x]https://a.example/content/v/abc/720/?e=1",
+			want: []videoURL{{720, "https://a.example/content/v/abc/720/?e=1"}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseVideoURLs(tt.in)
+			if len(got) != len(tt.want) {
+				t.Fatalf("parseVideoURLs = %+v, want %+v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("parseVideoURLs[%d] = %+v, want %+v", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestContract(t *testing.T) {
 	extractortest.Run(t,
 		func(c *http.Client) extractor.Extractor { return New(c) },

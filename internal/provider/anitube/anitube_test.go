@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -524,5 +525,95 @@ func TestSourcesInvalidSlugIsProviderError(t *testing.T) {
 	_, err := fixtureClient().Sources(t.Context(), provider.TitleRef{Provider: providerID, Slug: "../x"}, 1)
 	if !errors.Is(err, errs.ErrProvider) {
 		t.Fatalf("Sources error = %v, очікував ErrProvider", err)
+	}
+}
+
+// Назва читається з КОЖНОЇ форми сторінки тайтлу, а не лише з канонічної:
+// саме вона потрапляє в ім'я папки на диску й у бібліотеку.
+func TestTitleName(t *testing.T) {
+	tests := []struct {
+		file string
+		want string
+	}{
+		{"title-multi-studio", "Фрірен, що проводжає в останню путь (1 сезон)"},
+		{"title-ongoing", "Фрірен, що проводжає в останню путь (2 сезон)"},
+		{"title-single-release", "Покоївка, що лише їсть"},
+		{"title-dub-layout", "Судзуме зачиняє двері"},
+		{"title-flat-ova", "На бій проти титанів (ОВА-1)"},
+	}
+	if len(tests) != len(canonicalTitles) {
+		t.Fatalf("покрито %d фікстур із %d — нова фікстура без випадку в таблиці", len(tests), len(canonicalTitles))
+	}
+	for _, tc := range tests {
+		t.Run(tc.file, func(t *testing.T) {
+			name, err := fixtureClient().TitleName(t.Context(), CanonicalRef(tc.file))
+			if err != nil {
+				t.Fatalf("TitleName: %v", err)
+			}
+			if name != tc.want {
+				t.Errorf("TitleName = %q, очікував %q", name, tc.want)
+			}
+		})
+	}
+}
+
+// Клас помилки називання — той самий, що й у решти запитів: обрив мережі це
+// «немає з'єднання», а 503 — «джерело зламалось». UI показує на них різні тексти.
+func TestTitleNameErrorClasses(t *testing.T) {
+	tests := []struct {
+		name      string
+		transport http.RoundTripper
+		ref       provider.TitleRef
+		want      error
+	}{
+		{
+			name: "офлайн",
+			transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("мережі немає")}
+			}),
+			ref:  CanonicalRef("title-multi-studio"),
+			want: errs.ErrOffline,
+		},
+		{
+			name: "503",
+			transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(bytes.NewReader(nil)), Header: make(http.Header)}, nil
+			}),
+			ref:  CanonicalRef("title-multi-studio"),
+			want: errs.ErrProvider,
+		},
+		{
+			name: "сторінка без заголовка",
+			transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("<html><body>сміття</body></html>")), Header: make(http.Header)}, nil
+			}),
+			ref:  CanonicalRef("title-multi-studio"),
+			want: errs.ErrProvider,
+		},
+		{
+			name:      "невалідний слаг",
+			transport: FixtureTransport("testdata"),
+			ref:       provider.TitleRef{Provider: providerID, Slug: "../x"},
+			want:      errs.ErrProvider,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(httpx.NewClient(tc.transport)).TitleName(t.Context(), tc.ref)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("TitleName error = %v, очікував %v", err, tc.want)
+			}
+		})
+	}
+}
+
+// Назва зі сторінки — недовірений текст (те саме правило, що й для карток).
+func TestParseTitleNameIsCleaned(t *testing.T) {
+	name, err := parseTitleName([]byte("<h2 id-mal=\"\">Тайтл\x1b[2J<ul class=\"reset moder\"><li>ред.</li></ul></h2>"))
+	if err != nil {
+		t.Fatalf("parseTitleName: %v", err)
+	}
+	if name != "Тайтл" {
+		t.Fatalf("parseTitleName = %q, очікував %q", name, "Тайтл")
 	}
 }

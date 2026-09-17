@@ -193,7 +193,7 @@ func TestLoadConfigNormalizesPreferKind(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
 			s := openTemp(t)
-			if err := writeAtomic(s.configPath(), &Config{PreferKind: tt.in}); err != nil {
+			if err := WriteAtomic(s.configPath(), &Config{PreferKind: tt.in}); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := s.LoadConfig()
@@ -221,7 +221,7 @@ func TestLoadConfigNormalizesRemote(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := openTemp(t)
-			if err := writeAtomic(s.configPath(), &Config{Remote: tt.in}); err != nil {
+			if err := WriteAtomic(s.configPath(), &Config{Remote: tt.in}); err != nil {
 				t.Fatal(err)
 			}
 			cfg, err := s.LoadConfig()
@@ -449,7 +449,7 @@ func TestImportAcceptsValidBackup(t *testing.T) {
 func TestLoadEpisodesCleansOldCache(t *testing.T) {
 	s := openTemp(t)
 	ref := provider.TitleRef{Provider: "anitube", Slug: "1-x"}
-	if err := writeAtomic(s.episodesCachePath(ref), &episodesCache{
+	if err := WriteAtomic(s.episodesCachePath(ref), &episodesCache{
 		FetchedAt: time.Now(),
 		Episodes: []provider.Episode{{Number: 1, Releases: []provider.Release{
 			{Studio: "FanVox\x1b[2J", Kind: provider.Kind("\x1b")},
@@ -474,7 +474,7 @@ func TestLoadEpisodesCleansOldCache(t *testing.T) {
 
 func TestLoadCatalogCleansOldCache(t *testing.T) {
 	s := openTemp(t)
-	if err := writeAtomic(s.catalogCachePath("anitube", provider.CatalogFresh), &catalogCache{
+	if err := WriteAtomic(s.catalogCachePath("anitube", provider.CatalogFresh), &catalogCache{
 		FetchedAt: time.Now(),
 		Year:      time.Now().Year(),
 		Cards: []provider.TitleCard{

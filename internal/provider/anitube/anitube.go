@@ -9,6 +9,8 @@
 //     (сезонний топ у div.box з h2 «Найкраще», новинки — у div.news_2);
 //   - сторінка тайтлу містить JS-змінну dle_login_hash; id новини — це числовий
 //     префікс слага (JS-змінна news_id є не всюди, data-news_id — fallback);
+//   - назва тайтлу (перевірено 2026-09-17) — <h2 id-mal=""> у правій колонці
+//     div.rcol; див. parseTitleName;
 //   - плейлисти (перевірено 2026-09-01): GET /engine/ajax/playlists.php?news_id=N&xfield=playlist&user_hash=H →
 //     JSON {success, response}, response — HTML зі <li>: навігаційні (лише data-id)
 //     і серії (data-file + data-id);
@@ -398,17 +400,64 @@ func newsID(slug string, page []byte) (string, bool) {
 	return "", false
 }
 
-// allSources свідомо ігнорує ref.URL: він приходить із library.json або з кешу,
-// тобто з диска, і може бути порожнім чи вказувати на чужий хост. Єдине надійне
-// поле ідентичності — слаг, тому адреса будується з нього.
-func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provider.Source, error) {
-	if !provider.ValidSlug(ref.Slug) {
-		return nil, fmt.Errorf("невалідний слаг %q: %w", ref.Slug, errs.ErrProvider)
+// titlePage завантажує сторінку тайтлу. ref.URL свідомо ігнорується всіма, хто
+// сюди приходить: він походить із library.json або з кешу, тобто з диска, і може
+// бути порожнім чи вказувати на чужий хост. Єдине надійне поле ідентичності —
+// слаг, тому адреса будується з нього.
+func (c *Client) titlePage(ctx context.Context, slug string) (page []byte, pageURL string, err error) {
+	if !provider.ValidSlug(slug) {
+		return nil, "", fmt.Errorf("невалідний слаг %q: %w", slug, errs.ErrProvider)
 	}
-	pageURL := titleURL(ref.Slug)
-	page, err := c.get(ctx, pageURL, pageURL)
+	pageURL = titleURL(slug)
+	page, err = c.get(ctx, pageURL, pageURL)
 	if err != nil {
-		return nil, fmt.Errorf("сторінка тайтлу: %w", err)
+		return nil, "", fmt.Errorf("сторінка тайтлу: %w", err)
+	}
+	return page, pageURL, nil
+}
+
+// TitleName — реалізація provider.Namer поверх тієї самої сторінки тайтлу, яку
+// читають Episodes/Sources: іншого джерела назви для ref зі слага немає.
+func (c *Client) TitleName(ctx context.Context, ref provider.TitleRef) (string, error) {
+	page, pageURL, err := c.titlePage(ctx, ref.Slug)
+	if err != nil {
+		return "", err
+	}
+	name, err := parseTitleName(page)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", pageURL, err)
+	}
+	return name, nil
+}
+
+// Заголовок сторінки тайтлу (перевірено 2026-09-17 на всіх фікстурах title-*.html):
+//
+//	<div class="rcol" …><h2 id-mal="">Фрірен, що проводжає в останню путь (1 сезон)
+//	   <ul class="reset moder">…</ul></h2>
+//
+// Якір — атрибут id-mal: у розмітці він рівно один, тоді як решта h2 сторінки
+// несе службовий текст («Дивитися … онлайн», «КОМЕНТАРІ»). og:title і <title>
+// дали б ту саму назву з хвостом «українською онлайн», який довелося б різати
+// рядковими правилами, — зайва здогадка там, де є чистий вузол. Вкладений
+// <ul class="reset moder"> — кнопки модератора, у назву вони не входять.
+func parseTitleName(page []byte) (string, error) {
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(page))
+	if err != nil {
+		return "", fmt.Errorf("назва тайтлу: розбір HTML: %w: %w", errs.ErrProvider, err)
+	}
+	h2 := doc.Find("h2[id-mal]").First()
+	h2.Find("ul").Remove()
+	name := provider.CleanText(h2.Text())
+	if name == "" {
+		return "", fmt.Errorf("назва тайтлу: не знайдено h2[id-mal] (сайт змінив розмітку?): %w", errs.ErrProvider)
+	}
+	return name, nil
+}
+
+func (c *Client) allSources(ctx context.Context, ref provider.TitleRef) ([]provider.Source, error) {
+	page, pageURL, err := c.titlePage(ctx, ref.Slug)
+	if err != nil {
+		return nil, err
 	}
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(page))
 	if err != nil {

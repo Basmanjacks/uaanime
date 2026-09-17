@@ -61,8 +61,15 @@ func (m *Model) noteEaster(key string) tea.Cmd {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
+	// Попередження про завантаження діє рівно до наступної клавіші: «ще раз —
+	// перервати» має означати саме «ще раз», а не «колись потім».
+	switch key {
+	case "ctrl+c", "q", "Q":
+	default:
+		m.quitArmed = false
+	}
 	if key == "ctrl+c" {
-		return m.requestQuit()
+		return m.requestQuit(true)
 	}
 
 	// під час фільтрації всі клавіші належать списку
@@ -88,7 +95,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	if m.overlay != overlayNone {
 		return m.overlayKey(msg, key)
 	}
-	if m.screen != screenSearch || !m.input.Focused() {
+	if !m.inputFocused() {
 		if key == "?" {
 			m.openOverlay(overlayHelp)
 			return m, nil
@@ -108,7 +115,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	if (key == "m" || key == "M") && !m.list.SettingFilter() && (m.screen != screenSearch || !m.input.Focused()) {
+	if (key == "m" || key == "M") && !m.list.SettingFilter() && !m.inputFocused() {
 		switch m.screen {
 		case screenHome, screenSearch, screenEpisodes, screenBookmarks:
 			return m.bookmarkSelected()
@@ -120,7 +127,18 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 			return m.refreshNow()
 		}
 	}
-	if (key == "s" || key == "S") && !m.list.SettingFilter() && (m.screen != screenSearch || !m.input.Focused()) && m.screen == screenEpisodes {
+	// d і D рівноправні, як s/S чи m/M: у підказці клавіша велика, але людина
+	// тисне без Shift. Пейджинг списку на «d» (vim-звичка bubbles) цього не
+	// вартий — PgDn і →/l лишаються.
+	if (key == "d" || key == "D") && !m.list.SettingFilter() && !m.inputFocused() {
+		switch m.screen {
+		case screenEpisodes:
+			return m.requestDownload()
+		case screenHome, screenBookmarks, screenHistory, screenSearch:
+			return m.openDownloads()
+		}
+	}
+	if (key == "s" || key == "S") && !m.list.SettingFilter() && !m.inputFocused() && m.screen == screenEpisodes {
 		it, ok := m.list.SelectedItem().(item)
 		if !ok {
 			return m, nil
@@ -141,7 +159,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 	case screenHome:
 		switch key {
 		case "q", "Q":
-			return m, tea.Quit
+			return m.requestQuit(true)
 		case "enter":
 			return m.openSelected()
 		case "/":
@@ -247,7 +265,7 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case screenStudio:
+	case screenStudio, screenDownloadQuality:
 		switch key {
 		case "esc":
 			m.back()
@@ -256,10 +274,44 @@ func (m Model) handleKey(msg tea.KeyPressMsg, key string) (tea.Model, tea.Cmd) {
 			return m.openSelected()
 		}
 
+	case screenDownloads:
+		switch key {
+		case "esc":
+			m.back()
+			return m, nil
+		case "enter":
+			return m.openSelected()
+		case "x", "X":
+			return m.removeDownload()
+		}
+
+	case screenDownloadDir:
+		// Поле вводу володіє клавішами, як на екрані пошуку: решта — це текст
+		// шляху, а не команди списку.
+		switch key {
+		case "esc":
+			m.input.Blur()
+			m.back()
+			return m, nil
+		case "enter":
+			return m.saveDownloadDir()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
+
 	case screenPlaying:
 		return m.playingKey(key)
 	}
 
+	// Під --debug непізнана клавіша показує своє ім'я: інакше «натиснув — і
+	// нічого» не відрізнити від не тієї розкладки чи не того протоколу
+	// клавіатури в терміналі.
+	if m.opts.Debug && len([]rune(key)) == 1 {
+		m.status = fmt.Sprintf(i18n.TuiDebugKey, key)
+		m.statusKind = statusInfo
+		m.statusGen++
+	}
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	// Курсор ніколи не зупиняється на заголовку секції: він не робить нічого,
@@ -405,6 +457,7 @@ func (m Model) bookmarkSelected() (tea.Model, tea.Cmd) {
 	case screenBookmarks:
 		f := m.snapshot()
 		m.epsScratch = map[string][]provider.Episode{}
+		m.resetSavedScratch()
 		refreshCmd = m.restoreRows(f)
 	case screenSearch:
 		// setItems завершується list.Select, а той працює у видимому
@@ -613,7 +666,20 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 	case payloadSettings:
 		m, _ = m.openSettings()
 		return m, nil
+	case payloadDownloads:
+		return m.openDownloads()
+	case payloadQuality:
+		return m.enqueueQuality(p.height)
+	case payloadDownload:
+		return m.retryDownload(p)
+	case payloadSavedFile:
+		return m.playSaved(p)
 	case payloadSetting:
+		// Папка завантажень — не перемикач зі списку значень: її вводять
+		// текстом, тому Enter веде на власний екран.
+		if p.id == settingDownloadDir {
+			return m.showDownloadDir(), nil
+		}
 		if len(m.settingValues(p.id)) < 2 {
 			return m, nil
 		}
@@ -685,4 +751,11 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		return m, m.resolveCmd(m.ref, m.pendingEp, req, m.eng.ResolveHints(m.ref, m.pendingEp))
 	}
 	return m, nil
+}
+
+// inputFocused — чи належать клавіші текстовому полю. Полем володіють два
+// екрани (пошук і папка завантажень), тож умова живе в одному місці: інакше
+// «?» на екрані шляху відкривало б довідку замість того, щоб набратися.
+func (m Model) inputFocused() bool {
+	return (m.screen == screenSearch || m.screen == screenDownloadDir) && m.input.Focused()
 }

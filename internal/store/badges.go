@@ -24,5 +24,5 @@ func (s *Store) SaveBadgeCursor(cursor string) error {
 	if err := os.MkdirAll(filepath.Join(s.dir, "cache"), 0700); err != nil {
 		return err
 	}
-	return writeAtomic(filepath.Join(s.dir, "cache", "badge-cursor.json"), &badgeCursor{Cursor: cursor})
+	return WriteAtomic(filepath.Join(s.dir, "cache", "badge-cursor.json"), &badgeCursor{Cursor: cursor})
 }

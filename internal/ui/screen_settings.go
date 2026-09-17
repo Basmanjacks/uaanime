@@ -3,12 +3,15 @@ package ui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
 // settingID — ключ налаштування на екрані; збігається з полем config.json
@@ -21,6 +24,9 @@ const (
 	settingKind     settingID = "kind"
 	settingStudio   settingID = "studio"
 	settingRemote   settingID = "remote"
+	// settingDownloadDir — шосте з восьми. Значення не зі списку, а текстом,
+	// тому ←/→ на ньому нічого не робить, а Enter веде на екран із полем.
+	settingDownloadDir settingID = "download_dir"
 )
 
 // settingsOrder — порядок рядків у секції «Перегляд»; пульт живе у своїй.
@@ -44,6 +50,8 @@ func settingTitle(id settingID) string {
 		return i18n.TuiSetStudio
 	case settingRemote:
 		return i18n.TuiSetRemote
+	case settingDownloadDir:
+		return i18n.TuiSetDlFolder
 	}
 	return ""
 }
@@ -60,6 +68,8 @@ func (m *Model) settingCurrent(id settingID) string {
 		return m.cfg.FavoriteStudio
 	case settingRemote:
 		return m.cfg.Remote
+	case settingDownloadDir:
+		return m.cfg.DownloadDir
 	}
 	return ""
 }
@@ -119,6 +129,11 @@ func (m *Model) settingValues(id settingID) []settingValue {
 // settingLabel — підпис поточного значення для рядка «назва · значення».
 func (m *Model) settingLabel(id settingID) string {
 	cur := m.settingCurrent(id)
+	// Шлях показуємо з ~ замість домівки: так він читається як те, що людина
+	// сама набрала б у полі, і вміщується у вузький рядок.
+	if id == settingDownloadDir {
+		return shortenHome(cur)
+	}
 	values := m.settingValues(id)
 	if id == settingStudio && cur == "" && len(values) == 1 {
 		return i18n.TuiSetStudioEmpty
@@ -138,6 +153,11 @@ func (m *Model) showSettings(cursor int) {
 	for _, id := range settingsOrder {
 		items = append(items, item{title: settingTitle(id), meta: m.settingLabel(id), payload: payloadSetting{id: id}})
 	}
+	items = append(items,
+		item{header: true, spacer: true},
+		item{header: true, title: i18n.TuiBlockDownloads},
+		item{title: settingTitle(settingDownloadDir), meta: m.settingLabel(settingDownloadDir), payload: payloadSetting{id: settingDownloadDir}},
+		m.note(i18n.TuiDlFolderNote))
 	items = append(items,
 		item{header: true, spacer: true},
 		item{header: true, title: i18n.TuiBlockRemote},
@@ -230,6 +250,8 @@ func (m *Model) applySetting(id settingID, value string) (status, errText string
 		m.cfg.FavoriteStudio = value
 	case settingRemote:
 		m.cfg.Remote = value
+	case settingDownloadDir:
+		m.cfg.DownloadDir = value
 	}
 	var saveErr error
 	if m.eng.Store != nil {
@@ -243,6 +265,10 @@ func (m *Model) applySetting(id settingID, value string) (status, errText string
 		m.eng.Prefs.PreferKind = provider.Kind(m.cfg.PreferKind)
 	case settingStudio:
 		m.eng.Prefs.FavoriteStudio = m.cfg.FavoriteStudio
+	case settingDownloadDir:
+		m.eng.DownloadDir = m.cfg.DownloadDir
+		// Кеш вмісту папки описував стару папку — на диску тепер інша правда.
+		m.resetSavedScratch()
 	case settingPlayer:
 		if m.opts.DetectPlayer != nil {
 			p, fallback, err := m.opts.DetectPlayer(m.cfg.Player)
@@ -334,4 +360,59 @@ func (m Model) pickSettingValue(p payloadSettingValue) Model {
 	m.showSettings(cursor)
 	m.status, m.errText = status, errText
 	return m
+}
+
+// showDownloadDir — екран шляху: те саме поле вводу, що й у пошуку, плюс три
+// довідкові рядки. Окремий екран, а не діалог: діалогів у цьому TUI немає, а
+// «заголовок + поле + список + підказка» — та сама геометрія, що й у пошуку.
+func (m Model) showDownloadDir() Model {
+	m.stack = append(m.stack, m.snapshot())
+	m.setScreen(screenDownloadDir)
+	m.input.SetValue(shortenHome(m.cfg.DownloadDir))
+	m.input.SetSuggestions(nil)
+	m.input.CursorEnd()
+	_ = m.input.Focus()
+	_ = m.setItems([]item{
+		m.note(i18n.TuiDlPathNoteHome),
+		m.note(i18n.TuiDlPathNoteCreate),
+		m.note(i18n.TuiDlPathNoteSub),
+	}, 0)
+	m.errText, m.status = "", ""
+	m.statusKind = statusInfo
+	m.statusGen++
+	return m
+}
+
+// saveDownloadDir — Enter на екрані шляху. Папку не міняємо, поки черга жива:
+// файл, докачаний у стару папку, став би невидимим для пошуку збережених
+// серій, а завдання тримає знімок Dir і однаково писало б у стару.
+func (m Model) saveDownloadDir() (tea.Model, tea.Cmd) {
+	if m.downloadsActive() {
+		m.status = i18n.TuiDlPathBusy
+		m.statusKind = statusWarning
+		m.statusGen++
+		return m, nil
+	}
+	path := store.ExpandHome(strings.TrimSpace(m.input.Value()))
+	if !filepath.IsAbs(path) {
+		m.errText = i18n.TuiDlPathInvalid
+		return m, nil
+	}
+	path = filepath.Clean(path)
+	if err := store.EnsureDownloadDir(path); err != nil {
+		m.errText = fmt.Sprintf(i18n.TuiDlPathNoWrite, shortenHome(path))
+		return m, nil
+	}
+	m.input.Blur()
+	cursor := -1
+	if n := len(m.stack); n > 0 && m.stack[n-1].screen == screenSettings {
+		cursor = m.stack[n-1].cursor
+		m.stack = m.stack[:n-1]
+	}
+	status, errText := m.applySetting(settingDownloadDir, path)
+	m.showSettings(cursor)
+	m.status, m.errText = status, errText
+	m.statusKind = statusSuccess
+	m.statusGen++
+	return m, nil
 }

@@ -84,7 +84,9 @@ func noteTitles(t *testing.T, m Model) []string {
 	t.Helper()
 	var notes []string
 	for _, it := range homeItems(t, m) {
-		if it.note {
+		// Сталий рядок секції «Завантаження» не несе стану — перевірки нижче
+		// про адресу пульта й каталог даних, тому його пропускаємо.
+		if it.note && it.title != i18n.TuiDlFolderNote {
 			notes = append(notes, it.title)
 		}
 	}

@@ -133,10 +133,20 @@ func (m *Model) setScreen(s screen) {
 	}
 	m.setDelegate(false)
 	m.list.ResetFilter()
-	// Домівка — це секції з дій, а не однорідний список; «/» там означає
-	// «шукати нове», тому вбудований фільтр вимкнено.
-	m.list.SetFilteringEnabled(s != screenHome && s != screenSettings && s != screenSettingValue)
+	m.list.SetFilteringEnabled(filteringEnabled(s))
 	m.relayout()
+}
+
+// filteringEnabled — де вбудований фільтр списку має сенс. Домівка й
+// налаштування — це секції з дій, а не однорідний список («/» на домівці
+// означає «шукати нове»); екрани завантаження — короткі списки, а на екрані
+// шляху «/» є частиною самого шляху.
+func filteringEnabled(s screen) bool {
+	switch s {
+	case screenHome, screenSettings, screenSettingValue, screenDownloadQuality, screenDownloadDir:
+		return false
+	}
+	return true
 }
 
 // firstRow — індекс першого рядка, який можна вибрати. Курсор ніколи не стоїть
@@ -210,7 +220,7 @@ func (m *Model) listHeight() int {
 	if m.overlay == overlayBudget {
 		n -= len(m.budgetNoteLines())
 	}
-	if m.screen == screenSearch && m.overlay == overlayNone {
+	if m.inputVisible() {
 		n--
 	}
 	return max(1, n)
@@ -258,6 +268,7 @@ func (m *Model) restoreRows(f frame) tea.Cmd {
 		return nil
 	case screenBookmarks:
 		m.epsScratch = map[string][]provider.Episode{}
+		m.resetSavedScratch()
 		rows = m.bookmarkRows()
 	case screenHistory:
 		m.historyShown = f.historyShown
@@ -266,6 +277,9 @@ func (m *Model) restoreRows(f frame) tea.Cmd {
 		rows = m.visibleHistoryRows()
 	case screenEpisodes:
 		rows = m.episodeRows()
+	case screenDownloads:
+		m.resetSavedScratch()
+		rows = m.downloadRows()
 	case screenSearch:
 		m.setDelegate(len(m.cards) > 0)
 		rows = m.searchRows()

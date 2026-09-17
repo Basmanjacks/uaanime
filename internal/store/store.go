@@ -61,7 +61,7 @@ func Open(dir string) (*Store, error) {
 }
 
 // migrateModes доводить права наявної інсталяції до 0700/0600: MkdirAll не
-// чіпає режим уже створеного каталогу, а writeAtomic не торкається файлів,
+// чіпає режим уже створеного каталогу, а WriteAtomic не торкається файлів,
 // які цього запуску не переписувалися. Помилки ігноруються — чужий власник
 // або read-only ФС не привід не запускатися.
 func migrateModes(dir string) {
@@ -122,7 +122,7 @@ func (s *Store) LoadHealth() *Health {
 }
 
 func (s *Store) SaveHealth(h *Health) error {
-	return writeAtomic(filepath.Join(s.dir, "state", "health.json"), h)
+	return WriteAtomic(filepath.Join(s.dir, "state", "health.json"), h)
 }
 
 func (s *Store) libraryPath() string { return filepath.Join(s.dir, "library.json") }
@@ -130,11 +130,13 @@ func (s *Store) configPath() string  { return filepath.Join(s.dir, "config.json"
 func (s *Store) journalPath() string { return filepath.Join(s.dir, "state", "current.json") }
 func (s *Store) remotePath() string  { return filepath.Join(s.dir, "state", "remote.json") }
 
-// writeAtomic: tmp у тому самому каталозі + rename — атомарно на одній ФС.
+// WriteAtomic: tmp у тому самому каталозі + rename — атомарно на одній ФС.
 // Ім'я tmp унікальне (CreateTemp), інакше два одночасні записувачі писали б
 // в один файл і rename віддав би суміш. CreateTemp одразу створює 0600 —
 // саме той режим, який нам потрібен, тому Chmod не потрібен.
-func writeAtomic(path string, v any) error {
+// Експортована, бо цей самий сенс потрібен sidecar-ам завантажень
+// (`internal/download`); залежність іде в один бік — store про download не знає.
+func WriteAtomic(path string, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
@@ -199,10 +201,10 @@ func (s *Store) LoadLibrary() (*library.Library, error) {
 }
 
 func (s *Store) SaveLibrary(lib *library.Library) error {
-	return writeAtomic(s.libraryPath(), lib)
+	return WriteAtomic(s.libraryPath(), lib)
 }
 
-// Config — користувацькі налаштування. Ціль брифу: ≤ 8 налаштувань.
+// Config — користувацькі налаштування. Ціль брифу: ≤ 8 налаштувань (зараз 6).
 // Невідомі ключі (як мертвий `providers` зі старих версій) encoding/json
 // ігнорує, тому старий config.json читається; ключ зникає при першому SaveConfig.
 type Config struct {
@@ -211,6 +213,7 @@ type Config struct {
 	Player         string `json:"player,omitempty"`      // vlc | mpv
 	Autoplay       string `json:"autoplay,omitempty"`    // always | never
 	Remote         string `json:"remote,omitempty"`      // on | open | off
+	DownloadDir    string `json:"download_dir,omitempty"`
 }
 
 func (s *Store) LoadConfig() (*Config, error) {
@@ -226,7 +229,7 @@ func (s *Store) LoadConfig() (*Config, error) {
 // не лежить значення, якого LoadConfig не повернув би.
 func (s *Store) SaveConfig(cfg *Config) error {
 	normalizeConfig(cfg)
-	return writeAtomic(s.configPath(), cfg)
+	return WriteAtomic(s.configPath(), cfg)
 }
 
 // DefaultConfig — конфіг з усіма дефолтами; те, що LoadConfig повертає без файла.
@@ -264,6 +267,21 @@ func normalizeConfig(cfg *Config) {
 	default:
 		cfg.Remote = "on"
 	}
+	// Шлях чиститься так само, як назва студії: він показується в терміналі,
+	// а в полі вводу (чи в чужому бекапі) могло бути що завгодно, аж до NUL,
+	// з яким syscall відмовив би посеред завантаження.
+	cfg.DownloadDir = filepath.Clean(ExpandHome(provider.CleanText(cfg.DownloadDir)))
+	if !filepath.IsAbs(cfg.DownloadDir) {
+		// Відносний шлях означав би різні папки для різних CWD: те саме
+		// налаштування вело б у випадкове місце, звідки запустили бінар.
+		// Порожній рядок і сміття Clean теж дає сюди («.», «../etc»).
+		cfg.DownloadDir = DefaultDownloadDir()
+	}
+	// Навмисно НЕ робимо тут stat/mkdir: normalizeConfig виконується на кожному
+	// LoadConfig, а холодний старт має вкладатися в 100 мс (TestBinaryColdStart);
+	// звернення до ФС (тим паче до мережевого тому) цей бюджет з'їдає.
+	// Існування й доступність папки перевіряє EnsureDownloadDir — лише перед
+	// самим записом, і ProbeDownloadDir — для doctor.
 }
 
 // RemoteIdentity — постійні порт і токен веб-пульта: закладка на телефоні має
@@ -297,7 +315,7 @@ func (s *Store) LoadRemoteIdentity() (RemoteIdentity, error) {
 }
 
 func (s *Store) SaveRemoteIdentity(id RemoteIdentity) error {
-	return writeAtomic(s.remotePath(), id)
+	return WriteAtomic(s.remotePath(), id)
 }
 
 func newRemoteToken() string {
@@ -325,7 +343,7 @@ type Journal struct {
 }
 
 func (s *Store) WriteJournal(j *Journal) error {
-	return writeAtomic(s.journalPath(), j)
+	return WriteAtomic(s.journalPath(), j)
 }
 
 func (s *Store) removeJournal() error {

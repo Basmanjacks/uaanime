@@ -55,7 +55,7 @@ func (s *Store) SaveEpisodes(ref provider.TitleRef, eps []provider.Episode) erro
 	if err := os.MkdirAll(filepath.Join(s.dir, "cache"), 0700); err != nil {
 		return err
 	}
-	return writeAtomic(s.episodesCachePath(ref), &episodesCache{
+	return WriteAtomic(s.episodesCachePath(ref), &episodesCache{
 		FetchedAt: time.Now(),
 		Episodes:  eps,
 	})
@@ -92,7 +92,7 @@ func (s *Store) SaveCatalog(providerID string, kind provider.CatalogKind, cards 
 	if err := os.MkdirAll(filepath.Join(s.dir, "cache"), 0700); err != nil {
 		return err
 	}
-	return writeAtomic(s.catalogCachePath(providerID, kind), &catalogCache{
+	return WriteAtomic(s.catalogCachePath(providerID, kind), &catalogCache{
 		FetchedAt: time.Now(),
 		Year:      time.Now().Year(),
 		Cards:     cards,

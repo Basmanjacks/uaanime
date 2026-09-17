@@ -11,6 +11,7 @@ const (
   uaanime episodes <title-id> [--json]
   uaanime resolve <title-id> <серія> [--json]
   uaanime play <title-id> <серія> [--dry-run]
+  uaanime download <title-id> <серія> [--quality 1080] [--dir шлях] [--json]
   uaanime doctor [--json]
   uaanime export > backup.json
   uaanime import backup.json
@@ -33,7 +34,7 @@ const (
 	MsgEpisodeDone      = "Серію %d завершено"
 	MsgProgressSaved    = "Прогрес збережено: %02d:%02d"
 	MsgStudioPinned     = "Студію закріплено за тайтлом: %s"
-	MsgNeedTTY          = "TUI потребує термінала; headless-команди: search/episodes/resolve/play/doctor/export/import"
+	MsgNeedTTY          = "TUI потребує термінала; headless-команди: search/episodes/resolve/play/download/doctor/export/import"
 	MsgImported         = "Бібліотеку відновлено з бекапа (попередня — library.json.bak)"
 	MsgOffline          = "немає з'єднання — перевір інтернет"
 	MsgInternalError    = "внутрішня помилка: %v"
