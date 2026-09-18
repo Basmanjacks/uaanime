@@ -39,7 +39,7 @@ func (m *Model) rebuildHome() {
 			items = sectionGap(items, 1, m.homeSpacers)
 		}
 		items = append(items, item{header: true, title: i18n.TuiBlockLibrary})
-		items = append(items, lib[:min(5, len(lib))]...)
+		items = append(items, lib[:min(homeBookmarkRows, len(lib))]...)
 		items = append(items, item{title: fmt.Sprintf(i18n.TuiAllBookmarks, len(lib)), payload: payloadBookmarks{}})
 		own += len(lib)
 	}
