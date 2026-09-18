@@ -13,20 +13,21 @@ import (
 
 func TestUsabilityHomeBookmarksAndRemoveSelection(t *testing.T) {
 	m := newTestModel(t)
-	seedTestPlanned(&m, testRefs("book", 9))
+	const total = homeBookmarkRows + 4 // більше за ліміт домівки: інакше обрізання нічим не перевірити
+	seedTestPlanned(&m, testRefs("book", total))
 	n := 0
 	for _, v := range m.list.Items() {
 		if v.(item).role == "lib" {
 			n++
 		}
 	}
-	if n != 5 {
-		t.Fatalf("home bookmarks=%d want5", n)
+	if n != homeBookmarkRows {
+		t.Fatalf("home bookmarks=%d want%d", n, homeBookmarkRows)
 	}
 	selectTestItem(t, &m, func(i item) bool { return i.key() == "bookmarks" })
 	m, _ = pressTestKey(t, m, tea.KeyEnter, "")
-	if len(m.list.Items()) != 9 {
-		t.Fatalf("all bookmarks=%d", len(m.list.Items()))
+	if len(m.list.Items()) != total {
+		t.Fatalf("all bookmarks=%d want%d", len(m.list.Items()), total)
 	}
 	m.list.Select(3)
 	next := m.list.Items()[4].(item).key()
