@@ -234,7 +234,7 @@ make lint    # gofmt + go vet + golangci-lint
 `UAANIME_FIXTURES=1` — провайдер читає збережені сторінки замість мережі.
 `make record-fixtures` — переписати фікстури з живого сайту (вручну, не в CI);
 `make record-fixtures-new` — дописати лише нові, не чіпаючи наявних регресійних.
-Як лагодити парсер після зміни сайту — `.claude/skills/provider-repair/SKILL.md`.
+Як лагодити парсер після зміни сайту — `.agents/skills/provider-repair/SKILL.md`.
 
 ## Правові зауваги
 

@@ -1,10 +1,5 @@
 # AGENTS.md
 
-Instructions for AI coding agents working in this repo (Claude Code, Codex, others).
-`CLAUDE.md` is a symlink to this file — edit **this** one.
-
-Keep this file short. It is read on every session. Product spec lives in `docs/`.
-
 > **Status:** the stack is decided and closed — see `docs/adr-001-stack.md` (2026-08-31).
 > Go **1.25+** (dictated by Charm v2 go directives), layout `internal/` only, no `pkg/anisrc`.
 > Do not reopen stack questions.
@@ -42,32 +37,6 @@ Headless commands — use these to verify your own work, the TUI needs a TTY:
 ```
 
 `UAANIME_FIXTURES=1` makes the provider read `testdata/` instead of the network.
-
----
-
-## Layout
-
-```
-cmd/uaanime/          entrypoint, flag parsing, headless commands
-internal/provider/    site-specific scraping — the ONLY package that knows HTML
-internal/extractor/   video host → playable stream + required headers
-internal/providertest/ shared contract tests every provider must pass
-internal/extractortest/ the same for extractors — every video host passes it
-internal/playertest/   controllable fake player + session for end-to-end tests (cmd, ui)
-internal/playback/    orchestration: preference pick → extract → player session → journal
-internal/player/      зовнішні плеєри: VLC (RC/TCP) і mpv (JSON IPC)
-internal/store/       library.json, config.json, progress journal, metadata cache, atomic writes
-internal/download/    HLS → один .ts на диску, черга, sidecar-ідентичність збережених серій
-internal/downloadtest/ httptest-стенд HLS/прямих файлів для тестів
-internal/library/     domain logic: progress, completion, studio preference resolution
-internal/ui/          bubbletea models and views
-internal/remote/      web remote for the phone: OUR OWN embedded page, not scraping
-internal/i18n/        all user-facing strings
-internal/httpx/       shared HTTP client identity + fixture transport plumbing
-internal/qr/          QR encoder for the remote address (stdlib, byte mode, ECC L, v1–6)
-tools/record/         manual fixture recorder (never in CI)
-docs/               product spec, architecture notes
-```
 
 ---
 
@@ -119,25 +88,17 @@ Check the v2 upgrade guide before writing UI code.
 
 ## Style
 
-- `gofmt` is the formatter; no debate.
 - Errors wrapped with `%w` and context; sentinel errors in `internal/errs`.
 - No `interface{}`/`any` in domain types.
 - One abstraction per real reason. If an interface has one implementation and does not make a test simpler, delete it.
-- Comments explain *why*, not *what*. Site-specific parsing gets a comment with the page structure it assumes
-  and the date it was last verified.
-
----
-
-## When a provider breaks
-
-This is the recurring maintenance task. Follow `.claude/skills/provider-repair/SKILL.md`.
-Short version: record a fresh fixture, fix the parser against it, keep the old fixture as a regression test.
+- Site-specific parsing gets a comment with the page structure it assumes and the date it was
+  last verified.
 
 ---
 
 ## Don't
 
-- Don't add features from `docs/future.md` unless asked.
+- Don't add unrequested features beyond the current product scope (`docs/build-brief.md`).
 - Don't turn this into a library manager or tracker sync client. Downloading single episodes
   to a folder the user picks IS in scope since 2026-09-16 (package `internal/download`) —
   that is the only downloading we do.
