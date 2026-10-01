@@ -15,6 +15,7 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/download"
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
@@ -63,6 +64,16 @@ func (a *app) cmdDownload(id string, ep int, opt options) int {
 	// NoLocal: завантажувач іде по потоки навіть тоді, коли серія вже лежить
 	// на диску — інакше після збереженого 720p не можна було б узяти 1080p.
 	hints.NoLocal = true
+	// Автоматичний вибір завершується до черги. Далі свіжі потоки шукаються
+	// лише для цієї пари, незалежно від змін переваг і працездатності хостів.
+	selectCtx, cancelSelect := context.WithTimeout(sigCtx, planTimeout)
+	selected, err := eng.ResolveWith(selectCtx, ref, ep, hints, nil)
+	cancelSelect()
+	if err != nil {
+		a.printCommandError(err)
+		return 1
+	}
+	hints.Release = provider.Release{Studio: selected.Source.Studio, Kind: selected.Source.Kind}
 	resolve := func(ctx context.Context) (download.Target, error) {
 		res, err := eng.ResolveWith(ctx, ref, ep, hints, nil)
 		if err != nil {
@@ -88,6 +99,7 @@ func (a *app) cmdDownload(id string, ep int, opt options) int {
 	jobID, err := mgr.Enqueue(download.Job{
 		Ref:     ref,
 		Episode: ep,
+		Release: hints.Release,
 		Height:  opt.quality,
 		Dir:     dir,
 		Resolve: resolve,

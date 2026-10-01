@@ -16,13 +16,6 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
-// dlKey — ключ знімка черги. Той самий, яким дедуплікує сам менеджер
-// (download.jobKey): серія тайтлу або в роботі, або ні, і двох записів про неї
-// бути не може.
-func dlKey(ref provider.TitleRef, ep int) string {
-	return download.RefKey(ref) + ":" + strconv.Itoa(ep)
-}
-
 // downloadDir — папка завантажень зі знімка конфігу; порожньо, коли конфігу
 // немає взагалі (бенчмарк рендера будує модель напряму).
 func (m *Model) downloadDir() string {
@@ -85,35 +78,67 @@ func bestSaved(files []download.SavedFile) download.SavedFile {
 
 // ---- бейджі екрана серій ----
 
-// applyDownloadBadge доповнює рядок серії станом завантаження. Бейдж
-// перекриває те, що поставив перегляд: «на диску» дієвіше за «переглянуто» —
-// саме воно каже, що Enter не піде в мережу. Іконку не чіпаємо: ✓ у колонці
-// ліворуч лишається позначкою перегляду.
-func (m *Model) applyDownloadBadge(it *item, ep int, saved map[int][]download.SavedFile) {
-	if files := saved[ep]; len(files) > 0 {
-		it.badge, it.badgeWarn = i18n.TuiDlBadgeSaved, false
-		if h := bestSaved(files).Height; h > 0 {
-			if it.meta == "" {
-				it.meta = i18n.QualityLabel(h)
-			} else {
-				it.meta += metaSep + i18n.QualityLabel(h)
-			}
+// applyDownloadBadge відображає активні варіанти серії та точний локальний
+// збіг з обраним релізом. Інший файл не обіцяє офлайн-запуск цього релізу.
+func (m *Model) applyDownloadBadge(it *item, ep int, saved map[int][]download.SavedFile, selected *provider.Source) {
+	var p download.Progress
+	found := false
+	for _, job := range m.downloads {
+		if !job.Ref.Same(m.ref) || job.Episode != ep {
+			continue
+		}
+		if !found || downloadBadgeRank(job.State) < downloadBadgeRank(p.State) || (job.State == p.State && job.ID < p.ID) {
+			p, found = job, true
+		}
+	}
+	if found && !p.State.Terminal() {
+		switch p.State {
+		case download.StateQueued:
+			it.badge, it.badgeWarn = i18n.TuiDlBadgeQueued, false
+		case download.StateResolving:
+			it.badge, it.badgeWarn = i18n.TuiDlBadgePreparing, false
+		case download.StateRunning:
+			it.badge, it.badgeWarn = fmt.Sprintf(i18n.TuiDlBadgeActive, downloadPercent(p)), false
 		}
 		return
 	}
-	p, ok := m.downloads[dlKey(m.ref, ep)]
-	if !ok {
+	if files := saved[ep]; len(files) > 0 {
+		it.badge, it.badgeWarn = i18n.TuiDlOtherSaved, false
+		var matching []download.SavedFile
+		for _, f := range files {
+			if selected != nil && f.Studio == selected.Studio && f.Kind == selected.Kind {
+				matching = append(matching, f)
+			}
+		}
+		if len(matching) == 0 {
+			return
+		}
+		it.badge = i18n.TuiDlBadgeSaved
+		if h := bestSaved(matching).Height; h > 0 {
+			if it.meta != "" {
+				it.meta += metaSep
+			}
+			it.meta += i18n.QualityLabel(h)
+		}
 		return
 	}
-	switch p.State {
-	case download.StateQueued:
-		it.badge, it.badgeWarn = i18n.TuiDlBadgeQueued, false
-	case download.StateResolving:
-		it.badge, it.badgeWarn = i18n.TuiDlBadgePreparing, false
-	case download.StateRunning:
-		it.badge, it.badgeWarn = fmt.Sprintf(i18n.TuiDlBadgeActive, downloadPercent(p)), false
-	case download.StateFailed:
+	if found && p.State == download.StateFailed {
 		it.badge, it.badgeWarn = i18n.TuiDlBadgeFailed, true
+	}
+}
+
+func downloadBadgeRank(state download.State) int {
+	switch state {
+	case download.StateRunning:
+		return 0
+	case download.StateResolving:
+		return 1
+	case download.StateQueued:
+		return 2
+	case download.StateFailed:
+		return 3
+	default:
+		return 4
 	}
 }
 
@@ -152,18 +177,6 @@ func (m Model) requestDownload() (tea.Model, tea.Cmd) {
 		m.statusGen++
 		return m, nil
 	}
-	if files := m.savedFor(m.ref)[p.num]; len(files) > 0 {
-		m.status = fmt.Sprintf(i18n.TuiDlAlready, p.num)
-		m.statusKind = statusInfo
-		m.statusGen++
-		return m, nil
-	}
-	if job, ok := m.downloads[dlKey(m.ref, p.num)]; ok && !job.State.Terminal() {
-		m.status = fmt.Sprintf(i18n.TuiDlAlreadyQueued, p.num)
-		m.statusKind = statusInfo
-		m.statusGen++
-		return m, nil
-	}
 	snap := m.snapshot()
 	req := m.beginNav()
 	m.pending = &snap
@@ -173,7 +186,19 @@ func (m Model) requestDownload() (tea.Model, tea.Cmd) {
 	m.status = i18n.TuiDlPreparing
 	m.statusKind = statusLoading
 	m.statusGen++
-	return m, m.downloadPlanCmd(m.ref, p.num, req, m.eng.ResolveHints(m.ref, p.num))
+	return m, m.releaseChoicesCmd(m.ref, p.num, req, studioDownload)
+}
+
+func (m Model) prepareDownloadRelease(src provider.Source) (tea.Model, tea.Cmd) {
+	snap := m.snapshot()
+	req := m.beginNav()
+	m.pending, m.pendingReq = &snap, req
+	m.dlRelease = provider.Release{Studio: src.Studio, Kind: src.Kind}
+	h := m.eng.ResolveHints(m.ref, m.pendingEp)
+	h.Release = m.dlRelease
+	m.status, m.statusKind = i18n.TuiDlPreparing, statusLoading
+	m.statusGen++
+	return m, m.downloadPlanCmd(m.ref, m.pendingEp, req, h)
 }
 
 // showDownloadQuality — екран вибору якості: рядки якостей, курсор на
@@ -182,13 +207,32 @@ func (m Model) requestDownload() (tea.Model, tea.Cmd) {
 func (m *Model) showDownloadQuality(res *playback.Resolved, plan *download.Plan) {
 	m.setScreen(screenDownloadQuality)
 	m.dlTitle = m.downloadQualityTitle(res)
+	m.dlRelease = provider.Release{Studio: res.Source.Studio, Kind: res.Source.Kind}
+	saved := download.Saved(m.downloadDir(), res.Ref)[res.Episode]
 	items := make([]item, 0, len(plan.Qualities)+3)
 	for _, q := range plan.Qualities {
-		items = append(items, item{
+		p := payloadQuality{height: q.Height, bytes: q.Bytes, exact: q.Exact}
+		for _, f := range saved {
+			if f.Studio == m.dlRelease.Studio && f.Kind == m.dlRelease.Kind && f.Height == q.Height {
+				p.saved = true
+			}
+		}
+		for _, job := range m.dl.Snapshot() {
+			if job.Ref.Same(res.Ref) && job.Episode == res.Episode && job.Release == m.dlRelease && job.RequestedHeight == q.Height && !job.State.Terminal() {
+				p.queued = true
+			}
+		}
+		it := item{
 			title:   i18n.QualityLabel(q.Height),
 			meta:    qualitySize(q.Bytes, q.Exact),
-			payload: payloadQuality{height: q.Height, bytes: q.Bytes, exact: q.Exact},
-		})
+			payload: p,
+		}
+		if p.saved {
+			it.badge = i18n.TuiDlBadgeSaved
+		} else if p.queued {
+			it.badge = i18n.TuiDlBadgeQueued
+		}
+		items = append(items, it)
 	}
 	approx := false
 	for _, q := range plan.Qualities {
@@ -247,13 +291,16 @@ func (m Model) enqueueQuality(height int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ref, ep := m.ref, m.pendingEp
-	if _, err := m.dl.Enqueue(m.downloadJob(ref, ep, height)); err != nil {
+	if _, err := m.dl.Enqueue(m.downloadJob(ref, ep, m.dlRelease, height)); err != nil {
 		m.errText = m.errorText(err)
 		return m, nil
 	}
 	// Знімок оновлюємо ДО повернення: рядки серій перебудовує сам back(), і
 	// бейдж «у черзі» має бути в моделі вже на цей момент.
 	m.applyDownloadSnapshot()
+	if len(m.stack) > 0 && m.stack[len(m.stack)-1].screen == screenStudio && m.stack[len(m.stack)-1].studioAction == studioDownload {
+		m.stack = m.stack[:len(m.stack)-1]
+	}
 	m.back()
 	m.status = fmt.Sprintf(i18n.TuiDlQueued, ep, i18n.Downloads(len(m.downloads)))
 	m.statusKind = statusSuccess
@@ -265,14 +312,16 @@ func (m Model) enqueueQuality(height int) (tea.Model, tea.Cmd) {
 // потоків протухають (правило 5), тож їх здобувають на старті завдання, а не
 // в момент постановки. Замикання тримає лише знімок підказок і рушій —
 // бібліотеки воно не торкається (правило 10).
-func (m *Model) downloadJob(ref provider.TitleRef, ep, height int) download.Job {
+func (m *Model) downloadJob(ref provider.TitleRef, ep int, release provider.Release, height int) download.Job {
 	eng := m.eng
 	h := m.eng.ResolveHints(ref, ep)
 	h.NoLocal = true
 	h.StartSec = 0
+	h.Release = release
 	return download.Job{
 		Ref:     ref,
 		Episode: ep,
+		Release: release,
 		Height:  height,
 		Dir:     m.downloadDir(),
 		Resolve: func(ctx context.Context) (download.Target, error) {
@@ -362,6 +411,9 @@ func (m *Model) nowRows() []item {
 			payload: payloadDownload{id: p.ID, state: p.State, ref: p.Ref, ep: p.Episode},
 		}
 		parts := []string{}
+		if p.Release.Studio != "" {
+			parts = append(parts, p.Release.Studio, i18n.KindShort(p.Release.Kind))
+		}
 		if p.Height > 0 {
 			parts = append(parts, i18n.QualityLabel(p.Height))
 		}
@@ -392,9 +444,7 @@ func (m *Model) nowRows() []item {
 	return items
 }
 
-// savedRows — по секції на тайтл: «ФРІРЕН · 3 серії · 3,6 ГБ» і рядки серій.
-// Кілька файлів однієї серії (720p, докачане потім 1080p) дають один рядок —
-// найвищої якості: обирати між ними все одно буде library.Pick у резолві.
+// savedRows показує кожний файл окремо; розмір тайтлу включає всі варіанти.
 func (m *Model) savedRows() []item {
 	dir := m.downloadDir()
 	if dir == "" {
@@ -408,7 +458,9 @@ func (m *Model) savedRows() []item {
 		var total int64
 		for ep, files := range t.Files {
 			eps = append(eps, ep)
-			total += bestSaved(files).Bytes
+			for _, f := range files {
+				total += f.Bytes
+			}
 		}
 		if len(eps) == 0 {
 			continue
@@ -420,22 +472,28 @@ func (m *Model) savedRows() []item {
 		items = append(items, item{header: true, title: m.refName(t.Ref) + metaSep + i18n.Episodes(len(eps)) + metaSep + i18n.Bytes(total)})
 		width := len(strconv.Itoa(eps[len(eps)-1]))
 		for _, ep := range eps {
-			f := bestSaved(t.Files[ep])
-			parts := []string{}
-			if f.Height > 0 {
-				parts = append(parts, i18n.QualityLabel(f.Height))
+			for _, f := range t.Files[ep] {
+				parts := []string{}
+				if f.Studio != "" && provider.ValidKind(f.Kind) {
+					parts = append(parts, f.Studio, i18n.KindShort(f.Kind))
+				} else {
+					parts = append(parts, i18n.TuiDlUnknownRelease)
+				}
+				if f.Height > 0 {
+					parts = append(parts, i18n.QualityLabel(f.Height))
+				}
+				parts = append(parts, i18n.Bytes(f.Bytes))
+				if !f.ModTime.IsZero() {
+					parts = append(parts, humanDate(f.ModTime, m.now()))
+				}
+				items = append(items, item{
+					icon:    m.ic.Done,
+					title:   fmt.Sprintf(i18n.TuiEpisodeNoPad, width, ep),
+					meta:    strings.Join(parts, metaSep),
+					role:    download.RefKey(t.Ref),
+					payload: payloadSavedFile{ref: t.Ref, ep: ep, path: f.Path},
+				})
 			}
-			parts = append(parts, i18n.Bytes(f.Bytes))
-			if !f.ModTime.IsZero() {
-				parts = append(parts, humanDate(f.ModTime, m.now()))
-			}
-			items = append(items, item{
-				icon:    m.ic.Done,
-				title:   fmt.Sprintf(i18n.TuiEpisodeNoPad, width, ep),
-				meta:    strings.Join(parts, metaSep),
-				role:    download.RefKey(t.Ref),
-				payload: payloadSavedFile{ref: t.Ref, ep: ep, path: f.Path},
-			})
 		}
 	}
 	return items
@@ -498,12 +556,7 @@ func (m Model) retryDownload(p payloadDownload) (tea.Model, tea.Cmd) {
 	if p.state != download.StateFailed && p.state != download.StateCancelled {
 		return m, nil
 	}
-	m.dl.Forget(p.id)
-	height := 0
-	if prog, ok := m.downloads[dlKey(p.ref, p.ep)]; ok {
-		height = prog.Height
-	}
-	if _, err := m.dl.Enqueue(m.downloadJob(p.ref, p.ep, height)); err != nil {
+	if _, err := m.dl.Retry(p.id); err != nil {
 		m.errText = m.errorText(err)
 		return m, nil
 	}
@@ -526,7 +579,9 @@ func (m Model) playSaved(p payloadSavedFile) (tea.Model, tea.Cmd) {
 	m.status = i18n.TuiResolving
 	m.statusKind = statusLoading
 	m.statusGen++
-	return m, m.resolveCmd(p.ref, p.ep, req, m.eng.ResolveHints(p.ref, p.ep))
+	h := m.eng.ResolveHints(p.ref, p.ep)
+	h.LocalPath = p.path
+	return m, m.resolveCmd(p.ref, p.ep, req, h)
 }
 
 // ---- знімок черги ----
@@ -553,10 +608,10 @@ func (m *Model) applyDownloadSnapshot() bool {
 		return false
 	}
 	snap := m.dl.Snapshot()
-	next := make(map[string]download.Progress, len(snap))
+	next := make(map[int64]download.Progress, len(snap))
 	changed := len(snap) != len(m.downloads)
 	for _, p := range snap {
-		key := dlKey(p.Ref, p.Episode)
+		key := p.ID
 		next[key] = p
 		old, had := m.downloads[key]
 		if !had || old.State != p.State || downloadPercent(old) != downloadPercent(p) {

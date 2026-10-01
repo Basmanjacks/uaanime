@@ -20,6 +20,8 @@ var (
 	ErrStreamExpired = errors.New("посилання на відео застаріло")
 	// ErrAlreadySaved — файл того самого релізу й якості вже лежить на диску.
 	ErrAlreadySaved = errors.New("серія вже збережена")
+	// ErrSavedFileMissing — файл, явно вибраний у списку, вже видалено.
+	ErrSavedFileMissing = errors.New("збереженого файла немає")
 	// ErrDownloadBusy — інший процес тримає lock цього тайтлу.
 	ErrDownloadBusy = errors.New("інше завантаження цього тайтлу триває")
 )

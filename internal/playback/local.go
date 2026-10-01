@@ -9,82 +9,127 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
-// localHostID — «хост» збереженої серії. Не порожній рядок, щоб у журналі й
-// діагностиці було видно, що потік узяли з диска, а не з мережі.
 const localHostID = "local"
 
-// localResolved — серія з диска або nil, якщо збереженого файла немає.
-//
-// Пошук іде за provider+slug (див. download.Index), тому headless `play`, де
-// ref приходить без Name, знаходить файл так само, як TUI.
-//
-// Вибір релізу робить той самий library.Pick, що й для мережевих джерел:
-// правило 4 діє й на диску — дубляж 720p у папці не має тихо програтися
-// субтитрами 1080p лише тому, що вони більші. Мережу ця функція не чіпає
-// взагалі, тож async-safe і працює офлайн.
-func localResolved(ref provider.TitleRef, ep int, h Hints) *Resolved {
-	title := download.Index(h.DownloadDir)[download.RefKey(ref)]
+func releaseOf(s provider.Source) provider.Release {
+	return provider.Release{Studio: s.Studio, Kind: s.Kind}
+}
+
+func matchingRelease(sources []provider.Source, release provider.Release) []provider.Source {
+	var out []provider.Source
+	for _, s := range sources {
+		if releaseOf(s) == release {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func savedEpisode(ref provider.TitleRef, h Hints) download.SavedTitle {
+	if h.NoLocal || h.DownloadDir == "" {
+		return download.SavedTitle{}
+	}
+	return download.Index(h.DownloadDir)[download.RefKey(ref)]
+}
+
+// preferredLocal — короткий офлайн-шлях лише для бажаного релізу. Інший
+// локальний реліз не може випередити бажаний онлайн-реліз. Метадані кешу
+// доповнюють вибір, але не підтверджують працездатність віддаленого хоста.
+func (e *Engine) preferredLocal(ref provider.TitleRef, ep int, h Hints, title download.SavedTitle) *Resolved {
 	files := title.Files[ep]
-	if len(files) == 0 {
+	sources := localSources(files, ep)
+	if len(sources) == 0 {
 		return nil
 	}
-
-	// Ім'я потрібне лише для заголовка вікна плеєра й пульта: підказка з
-	// бібліотеки найсвіжіша, sidecar зберіг те, що було на момент
-	// завантаження, slug — остання лінія, аби заголовок не був порожнім.
-	name := h.Name
-	if name == "" {
-		name = title.Ref.Name
-	}
-	if name == "" {
-		name = ref.Slug
-	}
-
-	pin := library.Pin{Studio: h.StudioPin, Kind: h.KindPin}
-	res := &Resolved{
-		Ref:        ref,
-		Episode:    ep,
-		Local:      true,
-		Pin:        pin,
-		Prefs:      h.Prefs,
-		HostID:     localHostID,
-		StartSec:   h.StartSec,
-		Name:       name,
-		MediaTitle: fmt.Sprintf("%s · %d", name, ep),
-	}
-
-	sources := localSources(files, ep)
-	chosen, candidates := library.Pick(sources, pin, h.Prefs)
-	if chosen == nil {
-		// Жодного файла з відомим релізом (усі перенесені руками й упізнані
-		// лише за іменем — або sidecar-и без типу, на яких Pick пасує):
-		// вибирати нема з чого, тому без Pick — найвища якість, порожній
-		// Source і нульове відхилення. Казати «інша студія», не знаючи
-		// студії, було б брехнею.
-		best := bestFile(files, "", "")
-		res.Source = provider.Source{Episode: ep}
-		res.Stream, res.Streams = localStream(best)
-		res.Candidates = []provider.Source{res.Source}
-		res.Playable = res.Candidates
+	if h.Release != (provider.Release{}) {
+		f, ok := fileForRelease(files, h.Release)
+		if !ok {
+			return nil
+		}
+		res := resolvedFile(ref, ep, h, title.Ref.Name, f)
+		res.Pin = library.Pin{Studio: h.Release.Studio, Kind: h.Release.Kind}
 		return res
 	}
-	res.Source = *chosen
+	known := append([]provider.Source(nil), sources...)
+	memo, hasFreshEvidence := e.cachedSources(ref, ep)
+	known = append(known, memo...)
+	if e.Store != nil {
+		episodes, fresh, found := e.Store.LoadEpisodes(ref)
+		if found {
+			for _, episode := range episodes {
+				if episode.Number == ep {
+					releases := library.SourcesFromReleases(episode)
+					hasFreshEvidence = hasFreshEvidence || (fresh && len(releases) > 0)
+					known = append(known, releases...)
+					break
+				}
+			}
+		}
+	}
+	pin := library.Pin{Studio: h.StudioPin, Kind: h.KindPin}
+	chosen, candidates := library.Pick(known, pin, h.Prefs)
+	if chosen == nil {
+		return nil
+	}
+	wantKind := h.Prefs.PreferKind
+	if wantKind == "" {
+		wantKind = provider.KindDub
+	}
+	switch {
+	case pin.Studio != "":
+		if chosen.Studio != pin.Studio || (pin.Kind != "" && chosen.Kind != pin.Kind) {
+			return nil
+		}
+		// Wildcard без метаданих потрібного типу не доводить, що його немає онлайн.
+		if pin.Kind == "" && chosen.Kind != wantKind && !hasFreshEvidence {
+			return nil
+		}
+	case h.Prefs.FavoriteStudio != "":
+		if chosen.Studio != h.Prefs.FavoriteStudio || (chosen.Kind != wantKind && !hasFreshEvidence) {
+			return nil
+		}
+	default:
+		if chosen.Kind != wantKind && !hasFreshEvidence {
+			return nil
+		}
+	}
+	f, ok := fileForRelease(files, releaseOf(*chosen))
+	if !ok {
+		return nil
+	}
+	// Для першого вибору відомі онлайн-альтернативи теж мають бути в пікері.
+	for _, s := range candidates {
+		if _, ok := fileForRelease(files, releaseOf(s)); !ok {
+			return nil
+		}
+	}
+	res := resolvedFile(ref, ep, h, title.Ref.Name, f)
 	res.Deviation = library.DeviationOf(pin, *chosen)
-	res.Stream, res.Streams = localStream(bestFile(files, chosen.Studio, chosen.Kind))
-	// Локальні джерела не мають embed, тому e.playable їх би відсіяв: фільтр
-	// «є екстрактор» для файла на диску безглуздий, лишається лише дедуплікація.
 	res.Candidates = library.ReleaseChoices(candidates)
 	res.Playable = library.ReleaseChoices(sources)
 	return res
 }
 
-// localSources — файли серії як джерела для Pick. Файли без релізу в sidecar
-// пропускаються: Pick на порожньому Kind повертає nil (див. preference.go),
-// і одна безіменна знахідка сховала б справжні релізи поруч.
+func resolvedFile(ref provider.TitleRef, ep int, h Hints, savedName string, f download.SavedFile) *Resolved {
+	name := h.Name
+	if name == "" {
+		name = savedName
+	}
+	if name == "" {
+		name = ref.Slug
+	}
+	stream, streams := localStream(f)
+	source := provider.Source{Episode: ep, Studio: f.Studio, Kind: f.Kind}
+	return &Resolved{Ref: ref, Episode: ep, Local: true, Pin: library.Pin{Studio: h.StudioPin, Kind: h.KindPin}, Prefs: h.Prefs,
+		HostID: localHostID, StartSec: h.StartSec, Name: name, MediaTitle: fmt.Sprintf("%s · %d", name, ep), Source: source,
+		Stream: stream, Streams: streams, Playable: []provider.Source{source}}
+}
+
+// localSources не вгадує реліз з імені: лише повні відомі пари з sidecar.
 func localSources(files []download.SavedFile, ep int) []provider.Source {
 	out := make([]provider.Source, 0, len(files))
 	for _, f := range files {
-		if f.Studio == "" && f.Kind == "" {
+		if f.Studio == "" || !provider.ValidKind(f.Kind) {
 			continue
 		}
 		out = append(out, provider.Source{Episode: ep, Studio: f.Studio, Kind: f.Kind})
@@ -92,27 +137,32 @@ func localSources(files []download.SavedFile, ep int) []provider.Source {
 	return out
 }
 
-// bestFile — найбільша якість серед файлів обраного релізу. Порядок з Index
-// уже такий, але покладатися на нього означало б зв'язати два пакети мовчазною
-// угодою про сортування.
-func bestFile(files []download.SavedFile, studio string, kind provider.Kind) download.SavedFile {
+func fileForRelease(files []download.SavedFile, release provider.Release) (download.SavedFile, bool) {
 	var best download.SavedFile
 	found := false
 	for _, f := range files {
-		if studio != "" || kind != "" {
-			if f.Studio != studio || f.Kind != kind {
-				continue
-			}
+		if f.Studio != release.Studio || f.Kind != release.Kind {
+			continue
 		}
 		if !found || f.Height > best.Height {
 			best, found = f, true
 		}
 	}
-	return best
+	return best, found
 }
 
-// localStream — шлях до файла замість URL і жодних заголовків: плеєр відкриває
-// його з диска, посилати Referer нікуди.
+func (e *Engine) playableWithLocal(sources []provider.Source, files []download.SavedFile) []provider.Source {
+	var out []provider.Source
+	for _, source := range sources {
+		_, local := fileForRelease(files, releaseOf(source))
+		_, remote := extractor.Find(e.Extractors, source.Embed)
+		if local || remote {
+			out = append(out, source)
+		}
+	}
+	return out
+}
+
 func localStream(f download.SavedFile) (extractor.Stream, []extractor.Stream) {
 	s := extractor.Stream{URL: f.Path, Quality: f.Height}
 	return s, []extractor.Stream{s}

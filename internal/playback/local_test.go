@@ -2,12 +2,15 @@ package playback
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Basmanjacks/uaanime/internal/download"
+	"github.com/Basmanjacks/uaanime/internal/errs"
 	"github.com/Basmanjacks/uaanime/internal/extractor"
 	"github.com/Basmanjacks/uaanime/internal/i18n"
 	"github.com/Basmanjacks/uaanime/internal/library"
@@ -155,6 +158,7 @@ func TestResolveWithLocalRespectsPickAndPin(t *testing.T) {
 
 	// Пін на студію, якої на диску немає: грає дубляж, що є, і про підміну
 	// попереджає той самий Warning, що й для мережі.
+	engine.Provider = sourcesStub(nil) // онлайн-релізів справді немає; лише тепер дозволений fallback
 	missing := Hints{DownloadDir: dir, StudioPin: "Missing"}
 	res, err = engine.ResolveWith(t.Context(), localRef, 3, missing, nil)
 	if err != nil {
@@ -177,7 +181,7 @@ func TestResolveWithLocalNameParsedTakesHighestQuality(t *testing.T) {
 
 	engine := &Engine{Provider: hostileProvider(t), Lib: &library.Library{}}
 
-	res, err := engine.ResolveWith(t.Context(), localRef, 7, Hints{DownloadDir: dir}, nil)
+	res, err := engine.ResolveWith(t.Context(), localRef, 7, Hints{DownloadDir: dir, LocalPath: best}, nil)
 	if err != nil {
 		t.Fatalf("ResolveWith: %v", err)
 	}
@@ -187,7 +191,7 @@ func TestResolveWithLocalNameParsedTakesHighestQuality(t *testing.T) {
 	if res.Source.Studio != "" || res.Source.Kind != "" || res.Deviation != library.DeviationNone {
 		t.Fatalf("Source = %+v, Deviation = %v — реліз невідомий", res.Source, res.Deviation)
 	}
-	if len(res.Candidates) != 1 || len(res.Playable) != 1 {
+	if len(res.Candidates) != 0 || len(res.Playable) != 1 {
 		t.Fatalf("Candidates = %+v, Playable = %+v", res.Candidates, res.Playable)
 	}
 	// Name з marker-а: sidecar-ів немає, а slug у заголовку вікна — некрасиво.
@@ -292,5 +296,197 @@ func TestResolveKeepsAllStreamsSortedByQuality(t *testing.T) {
 	}
 	if res.Stream.URL != res.Streams[0].URL {
 		t.Fatalf("Stream = %+v, очікував Streams[0]", res.Stream)
+	}
+}
+
+func TestResolveWithLocalMismatchUsesRequestedOnlineRelease(t *testing.T) {
+	for _, tc := range []struct {
+		name, savedStudio, wantedStudio string
+		savedKind, wantedKind           provider.Kind
+		unknown, favorite               bool
+	}{
+		{name: "different studio", savedStudio: "A", wantedStudio: "B", savedKind: provider.KindDub, wantedKind: provider.KindDub},
+		{name: "same studio different kind", savedStudio: "A", wantedStudio: "A", savedKind: provider.KindDub, wantedKind: provider.KindSub},
+		{name: "global favorite", savedStudio: "A", wantedStudio: "B", savedKind: provider.KindDub, wantedKind: provider.KindDub, favorite: true},
+		{name: "unknown release", wantedStudio: "B", wantedKind: provider.KindSub, unknown: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: tc.savedStudio, Kind: tc.savedKind, Height: 720, Ext: ".ts"}, !tc.unknown)
+			calls := 0
+			engine := testEngine(nil, []extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://video.invalid/wanted.mp4"}}}})
+			engine.Provider = providertest.Stub{IDValue: "stub", SourcesFn: func(context.Context, provider.TitleRef, int) ([]provider.Source, error) {
+				calls++
+				return []provider.Source{{Episode: 1, Studio: tc.wantedStudio, Kind: tc.wantedKind, Embed: "https://handled.invalid/embed"}}, nil
+			}}
+			h := Hints{DownloadDir: dir, StudioPin: tc.wantedStudio, KindPin: tc.wantedKind}
+			if tc.favorite {
+				h.StudioPin = ""
+				h.KindPin = ""
+				h.Prefs = library.Prefs{FavoriteStudio: tc.wantedStudio, PreferKind: tc.wantedKind}
+			}
+			res, err := engine.ResolveWith(t.Context(), localRef, 1, h, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Local || res.Source.Studio != tc.wantedStudio || res.Source.Kind != tc.wantedKind || calls != 1 {
+				t.Fatalf("wanted online %s/%s, got %+v; provider calls=%d", tc.wantedStudio, tc.wantedKind, res, calls)
+			}
+		})
+	}
+}
+
+func TestResolveExplicitReleaseDoesNotFallbackToAnotherRelease(t *testing.T) {
+	engine := testEngine([]provider.Source{
+		{Episode: 1, Studio: "A", Kind: provider.KindDub, Embed: "https://handled.invalid/a"},
+		{Episode: 1, Studio: "B", Kind: provider.KindDub, Embed: "https://handled.invalid/b"},
+	}, []extractor.Extractor{
+		stubExtractor{handle: "https://handled.invalid/a", err: errs.ErrNoStream},
+		stubExtractor{handle: "https://handled.invalid/b", streams: []extractor.Stream{{URL: "https://video.invalid/b.mp4"}}},
+	})
+	_, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{Release: provider.Release{Studio: "A", Kind: provider.KindDub}}, nil)
+	if !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("explicit unavailable release fell back: %v", err)
+	}
+}
+
+func TestResolveExactLocalReleaseAndOfflineMismatch(t *testing.T) {
+	dir := t.TempDir()
+	file := saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "A", Kind: provider.KindSub, Height: 720, Ext: ".ts"}, true)
+	engine := &Engine{Provider: hostileProvider(t)}
+	res, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, Release: provider.Release{Studio: "A", Kind: provider.KindSub}}, nil)
+	if err != nil || res.Stream.URL != file {
+		t.Fatalf("exact offline local: %+v %v", res, err)
+	}
+	engine.Provider = providertest.Stub{IDValue: "stub", SourcesFn: func(context.Context, provider.TitleRef, int) ([]provider.Source, error) { return nil, errs.ErrOffline }}
+	_, err = engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, StudioPin: "B", KindPin: provider.KindDub}, nil)
+	if !errors.Is(err, errs.ErrOffline) {
+		t.Fatalf("offline missing release: %v", err)
+	}
+}
+
+func TestBeginExplicitSavedFileSeedsOnlyEmptyKnownPin(t *testing.T) {
+	for _, tc := range []struct {
+		name, existing, studio string
+		kind                   provider.Kind
+	}{
+		{name: "known subtitles", studio: "B", kind: provider.KindSub},
+		{name: "existing pin", existing: "A", studio: "B", kind: provider.KindSub},
+		{name: "unknown file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := store.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine := &Engine{Store: st, Lib: &library.Library{}, Player: fakePlayer{}}
+			if tc.existing != "" {
+				if err := engine.PinStudio(localRef, tc.existing, provider.KindDub); err != nil {
+					t.Fatal(err)
+				}
+			}
+			id, _, err := engine.Begin(&Resolved{Ref: localRef, Episode: 1, Local: true, ExplicitLocal: true, Source: provider.Source{Studio: tc.studio, Kind: tc.kind}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := engine.Lib.EntryLookup(id)
+			wantStudio, wantKind := tc.studio, tc.kind
+			if tc.existing != "" {
+				wantStudio, wantKind = tc.existing, provider.KindDub
+			}
+			if entry.StudioPin != wantStudio || entry.KindPin != wantKind {
+				t.Fatalf("pin=%s/%s, wanted %s/%s", entry.StudioPin, entry.KindPin, wantStudio, wantKind)
+			}
+		})
+	}
+}
+
+func TestResolveExtractorOfflineDoesNotSwitchToOtherLocalRelease(t *testing.T) {
+	dir := t.TempDir()
+	saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "A", Kind: provider.KindDub, Height: 720, Ext: ".ts"}, true)
+	engine := testEngine([]provider.Source{{Episode: 1, Studio: "B", Kind: provider.KindDub, Embed: "https://handled.invalid/b"}}, []extractor.Extractor{stubExtractor{err: errs.ErrOffline}})
+	_, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, StudioPin: "B", KindPin: provider.KindDub}, nil)
+	if !errs.Offline(err) {
+		t.Fatalf("extractor offline switched release instead of reporting offline: %v", err)
+	}
+}
+
+func TestLocalFastPathIncludesFreshSourceChoices(t *testing.T) {
+	dir := t.TempDir()
+	saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "A", Kind: provider.KindSub, Height: 720, Ext: ".ts"}, true)
+	st, err := store.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveEpisodes(localRef, []provider.Episode{{Number: 1, Releases: []provider.Release{{Studio: "A", Kind: provider.KindSub}}}}); err != nil {
+		t.Fatal(err)
+	}
+	engine := testEngine([]provider.Source{{Episode: 1, Studio: "B", Kind: provider.KindDub, Embed: "https://handled.invalid/b"}}, []extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://video.invalid/b.mp4"}}}})
+	engine.Store = st
+	if _, err := engine.ReleaseChoices(t.Context(), localRef, 1); err != nil {
+		t.Fatal(err)
+	}
+	res, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, StudioPin: "A", Prefs: library.Prefs{PreferKind: provider.KindDub}}, nil)
+	if err != nil || res.Local || res.Source.Studio != "B" || res.Source.Kind != provider.KindDub {
+		t.Fatalf("fresh dub hidden by stale local choice: %+v %v", res, err)
+	}
+}
+
+func TestExpiredEpisodeMetadataCannotHidePreferredOnlineKind(t *testing.T) {
+	dir := t.TempDir()
+	saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "A", Kind: provider.KindSub, Height: 720, Ext: ".ts"}, true)
+	dataDir := t.TempDir()
+	st, err := store.Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := struct {
+		FetchedAt time.Time          `json:"fetched_at"`
+		Episodes  []provider.Episode `json:"episodes"`
+	}{
+		FetchedAt: time.Now().Add(-2 * time.Hour), Episodes: []provider.Episode{{Number: 1, Releases: []provider.Release{{Studio: "A", Kind: provider.KindSub}}}},
+	}
+	cache := filepath.Join(dataDir, "cache", "episodes-stub-1-frieren.json")
+	if err := os.MkdirAll(filepath.Dir(cache), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteAtomic(cache, old); err != nil {
+		t.Fatal(err)
+	}
+	engine := testEngine([]provider.Source{{Episode: 1, Studio: "B", Kind: provider.KindDub, Embed: "https://handled.invalid/b"}}, []extractor.Extractor{stubExtractor{streams: []extractor.Stream{{URL: "https://video.invalid/b.mp4"}}}})
+	engine.Store = st
+	res, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, StudioPin: "A"}, nil)
+	if err != nil || res.Local || res.Source.Studio != "B" {
+		t.Fatalf("expired metadata hid online release: %+v %v", res, err)
+	}
+}
+
+func TestExplicitSavedPathDoesNotSubstituteDeletedFile(t *testing.T) {
+	dir := t.TempDir()
+	file := saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "A", Kind: provider.KindDub, Height: 720, Ext: ".ts"}, true)
+	saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "B", Kind: provider.KindSub, Height: 1080, Ext: ".ts"}, true)
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	engine := &Engine{Provider: hostileProvider(t)}
+	_, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, LocalPath: file}, nil)
+	if !errors.Is(err, errs.ErrSavedFileMissing) {
+		t.Fatalf("deleted file: %v", err)
+	}
+}
+
+func TestResolveHostOfflineCanUseAnotherOnlineDubWithoutLocalFallback(t *testing.T) {
+	dir := t.TempDir()
+	saveFile(t, dir, download.Parts{Title: localTitleName, Episode: 1, Studio: "B", Kind: provider.KindDub, Height: 720, Ext: ".ts"}, true)
+	engine := testEngine([]provider.Source{
+		{Episode: 1, Studio: "A", Kind: provider.KindDub, Embed: "https://handled.invalid/a"},
+		{Episode: 1, Studio: "B", Kind: provider.KindDub, Embed: "https://handled.invalid/b"},
+	}, []extractor.Extractor{
+		stubExtractor{handle: "https://handled.invalid/a", err: errs.ErrOffline},
+		stubExtractor{handle: "https://handled.invalid/b", streams: []extractor.Stream{{URL: "https://video.invalid/b.mp4"}}},
+	})
+	res, err := engine.ResolveWith(t.Context(), localRef, 1, Hints{DownloadDir: dir, StudioPin: "A", KindPin: provider.KindDub}, nil)
+	if err != nil || res.Local || res.Source.Studio != "B" || res.Deviation != library.DeviationStudio {
+		t.Fatalf("per-host offline must retain online dub fallback: %+v %v", res, err)
 	}
 }

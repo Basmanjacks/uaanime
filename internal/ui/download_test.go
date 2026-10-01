@@ -119,6 +119,14 @@ func (h *dlHarness) pressPlan(t *testing.T) {
 		t.Fatal("D не повернув команди підготовки")
 	}
 	h.m, _ = updateTestModel(t, m, cmd())
+	if h.m.screen == screenStudio && h.m.studioAction == studioDownload {
+		m, cmd = pressTestKey(t, h.m, tea.KeyEnter, "")
+		if cmd == nil {
+			t.Fatal("release choice did not prepare quality")
+		}
+		h.m, _ = updateTestModel(t, m, cmd())
+	}
+	mustScreen(t, h.m, screenDownloadQuality)
 }
 
 // waitState крутить знімок менеджера, доки завдання не дійде до потрібного
@@ -224,15 +232,21 @@ func TestDownloadJourneyQualityToSavedAndLocalPlay(t *testing.T) {
 	}
 
 	// D на збереженій серії більше не качає: каже, що вона вже на диску.
-	h.m, _ = pressTestKey(t, h.m, 'D', "D")
+	h.pressPlan(t)
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEnter, "")
 	if want := fmt.Sprintf(i18n.TuiDlAlready, 1); h.m.status != want {
-		t.Errorf("статус D на збереженій = %q, want %q", h.m.status, want)
+		t.Errorf("saved quality status = %q", h.m.status)
 	}
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEsc, "")
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEsc, "")
 
 	// Enter — грає з диска: плеєр отримує шлях до файла, а не URL.
 	selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 1 })
 	tr := &trace{}
 	h.m = press(t, h.m, tr, tea.KeyEnter, "")
+	if h.m.screen == screenStudio {
+		h.m = press(t, h.m, tr, tea.KeyEnter, "")
+	}
 	starts := h.player.Starts()
 	if len(starts) != 1 {
 		t.Fatalf("запусків плеєра = %d, want 1", len(starts))
@@ -263,10 +277,13 @@ func TestDownloadDuplicateKeepsOneJob(t *testing.T) {
 	h.waitState(t, 2, download.StateRunning)
 	h.sync(t)
 
-	h.m, _ = pressTestKey(t, h.m, 'D', "D")
+	h.pressPlan(t)
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEnter, "")
 	if want := fmt.Sprintf(i18n.TuiDlAlreadyQueued, 2); h.m.status != want {
-		t.Errorf("статус повторного D = %q, want %q", h.m.status, want)
+		t.Errorf("duplicate status = %q", h.m.status)
 	}
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEsc, "")
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEsc, "")
 	mustScreen(t, h.m, screenEpisodes)
 	if got := len(h.mgr.Snapshot()); got != 1 {
 		t.Fatalf("завдань = %d, want 1", got)
@@ -686,4 +703,217 @@ func TestDownloadFailedBadgeAndRetry(t *testing.T) {
 		t.Fatalf("завдань після повтору = %d, want 1", got)
 	}
 	h.waitState(t, 1, download.StateFailed)
+}
+
+func TestDownloadOffersReleaseChoiceWithPlaybackPin(t *testing.T) {
+	h := newDownloadModel(t, downloadtest.HLSOptions{Segments: 1})
+	h.openEpisodes(t)
+	if err := h.m.eng.PinStudio(h.m.ref, "FANVOXUA", provider.KindDub); err != nil {
+		t.Fatal(err)
+	}
+	selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 1 })
+	m, cmd := pressTestKey(t, h.m, 'D', "D")
+	if cmd == nil {
+		t.Fatal("no release discovery command")
+	}
+	h.m, _ = updateTestModel(t, m, cmd())
+	mustScreen(t, h.m, screenStudio)
+	if len(h.m.list.Items()) < 3 {
+		t.Fatal("download alternatives missing")
+	}
+}
+func TestDownloadExistingOtherVariantDoesNotBlockChoice(t *testing.T) {
+	h := newDownloadModel(t, downloadtest.HLSOptions{Segments: 1})
+	h.openEpisodes(t)
+	if err := h.m.eng.PinStudio(h.m.ref, "Glass Moon", provider.KindSub); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(h.dlDir, download.FolderName(h.m.ref.Name))
+	if err := os.MkdirAll(folder, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := download.Path(h.dlDir, folder, download.Parts{Title: h.m.ref.Name, Episode: 1, Studio: "FANVOXUA", Kind: provider.KindDub, Height: 720, Ext: ".ts"})
+	if err := os.WriteFile(path, []byte("media"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := download.WriteSidecar(path, download.Sidecar{Provider: h.m.ref.Provider, Slug: h.m.ref.Slug, Episode: 1, Studio: "FANVOXUA", Kind: provider.KindDub, Height: 720}); err != nil {
+		t.Fatal(err)
+	}
+	h.m.resetSavedScratch()
+	selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 1 })
+	m, cmd := pressTestKey(t, h.m, 'D', "D")
+	if cmd == nil {
+		t.Fatalf("existing other release blocked download: %q", m.status)
+	}
+	h.m, _ = updateTestModel(t, m, cmd())
+	mustScreen(t, h.m, screenStudio)
+}
+
+func TestSavedListShowsEveryVariantAndPlaysSelectedFile(t *testing.T) {
+	h := newDownloadModel(t, downloadtest.HLSOptions{Segments: 1})
+	h.openEpisodes(t)
+	if err := h.m.eng.PinStudio(h.m.ref, "FANVOXUA", provider.KindDub); err != nil {
+		t.Fatal(err)
+	}
+	folder := filepath.Join(h.dlDir, download.FolderName(h.m.ref.Name))
+	if err := os.MkdirAll(folder, 0755); err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]string{}
+	for _, p := range []download.Parts{
+		{Title: h.m.ref.Name, Episode: 1, Studio: "FANVOXUA", Kind: provider.KindDub, Height: 720, Ext: ".ts"},
+		{Title: h.m.ref.Name, Episode: 1, Studio: "Glass Moon", Kind: provider.KindSub, Height: 1080, Ext: ".ts"},
+	} {
+		path := download.Path(h.dlDir, folder, p)
+		paths[p.Studio] = path
+		if err := os.WriteFile(path, []byte("media"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := download.WriteSidecar(path, download.Sidecar{Provider: h.m.ref.Provider, Slug: h.m.ref.Slug, Episode: 1, Studio: p.Studio, Kind: p.Kind, Height: p.Height}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	count := 0
+	var selected payloadSavedFile
+	for _, row := range h.m.savedRows() {
+		if p, ok := row.payload.(payloadSavedFile); ok {
+			count++
+			if p.path == paths["Glass Moon"] {
+				selected = p
+			}
+		}
+	}
+	if count != 2 || selected.path != paths["Glass Moon"] {
+		t.Fatalf("unexpected saved rows %d %+v", count, selected)
+	}
+	_, cmd := h.m.playSaved(selected)
+	msg, ok := cmd().(resolvedMsg)
+	if !ok || msg.err != nil {
+		t.Fatalf("unexpected message %+v", msg)
+	}
+	if msg.res.Stream.URL != paths["Glass Moon"] {
+		t.Fatalf("unexpected resolution %+v", msg.res)
+	}
+	if h.m.eng.Lib.EntryLookup(h.m.eng.Lib.TitleByRef(h.m.ref).ID).StudioPin != "FANVOXUA" {
+		t.Fatal("file selection changed existing pin")
+	}
+}
+
+func (h *dlHarness) planRelease(t *testing.T, studio string, kind provider.Kind) {
+	t.Helper()
+	m, cmd := pressTestKey(t, h.m, 'D', "D")
+	if cmd == nil {
+		t.Fatalf("no discovery command: %q", m.status)
+	}
+	h.m, _ = updateTestModel(t, m, cmd())
+	mustScreen(t, h.m, screenStudio)
+	selectTestItem(t, &h.m, func(it item) bool {
+		p, ok := it.payload.(payloadStudio)
+		return ok && p.src.Studio == studio && p.src.Kind == kind
+	})
+	m, cmd = pressTestKey(t, h.m, tea.KeyEnter, "")
+	if cmd == nil {
+		t.Fatal("no quality command")
+	}
+	h.m, _ = updateTestModel(t, m, cmd())
+	mustScreen(t, h.m, screenDownloadQuality)
+}
+
+func TestDownloadMultipleReleasesAndQualitiesKeepPlaybackPin(t *testing.T) {
+	h := newDownloadModel(t, downloadtest.HLSOptions{Segments: 1})
+	h.openEpisodes(t)
+	if err := h.m.eng.PinStudio(h.m.ref, "FANVOXUA", provider.KindDub); err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []struct {
+		studio string
+		kind   provider.Kind
+		height int
+	}{
+		{"Glass Moon", provider.KindSub, 720},
+		{"Glass Moon", provider.KindSub, 1080},
+		{"FANVOXUA", provider.KindDub, 1080},
+	} {
+		selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadEp); return ok && p.num == 1 })
+		h.planRelease(t, variant.studio, variant.kind)
+		selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadQuality); return ok && p.height == variant.height })
+		h.m, _ = pressTestKey(t, h.m, tea.KeyEnter, "")
+		mustScreen(t, h.m, screenEpisodes)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			done := false
+			for _, p := range h.mgr.Snapshot() {
+				if p.Release == (provider.Release{Studio: variant.studio, Kind: variant.kind}) && p.RequestedHeight == variant.height {
+					if p.State == download.StateFailed {
+						t.Fatalf("download failed: %v", p.Err)
+					}
+					done = p.State == download.StateDone
+				}
+			}
+			if done {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("download stalled: %+v", h.mgr.Snapshot())
+			}
+			time.Sleep(time.Millisecond)
+		}
+		h.sync(t)
+	}
+	files := download.Saved(h.dlDir, h.m.ref)[1]
+	if len(files) != 3 {
+		t.Fatalf("saved variants: %+v", files)
+	}
+	entry := h.m.eng.Lib.EntryLookup(h.m.eng.Lib.TitleByRef(h.m.ref).ID)
+	if entry.StudioPin != "FANVOXUA" || entry.KindPin != provider.KindDub {
+		t.Fatalf("download changed playback pin: %+v", entry)
+	}
+	if len(h.m.eng.Lib.Progress) != 0 {
+		t.Fatal("download created viewing progress")
+	}
+}
+
+func TestDownloadRetryKeepsOriginalReleaseQualityAndDirectory(t *testing.T) {
+	h := newDownloadModel(t, downloadtest.HLSOptions{Segments: 1})
+	h.srv.FailSegment(0, 1, 403)
+	h.openEpisodes(t)
+	h.planRelease(t, "Glass Moon", provider.KindSub)
+	selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadQuality); return ok && p.height == 720 })
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEnter, "")
+	failed := h.waitState(t, 1, download.StateFailed)
+	h.sync(t)
+	if err := h.m.eng.PinStudio(h.m.ref, "FANVOXUA", provider.KindDub); err != nil {
+		t.Fatal(err)
+	}
+	h.settings.DownloadDir = t.TempDir()
+	h.m.eng.DownloadDir = h.settings.DownloadDir
+	h.m.showDownloads()
+	selectTestItem(t, &h.m, func(it item) bool { p, ok := it.payload.(payloadDownload); return ok && p.id == failed.ID })
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEnter, "")
+	done := h.waitState(t, 1, download.StateDone)
+	if done.Release != (provider.Release{Studio: "Glass Moon", Kind: provider.KindSub}) || done.Height != 720 || done.RequestedHeight != 720 || done.Dir != h.dlDir {
+		t.Fatalf("retry changed variant: %+v", done)
+	}
+	files := download.Saved(h.dlDir, h.m.ref)[1]
+	if len(files) != 1 || files[0].Kind != provider.KindSub {
+		t.Fatalf("retry sidecar: %+v", files)
+	}
+}
+
+func TestDownloadBackAndStaleDiscovery(t *testing.T) {
+	h := newDownloadModel(t, downloadtest.HLSOptions{Segments: 1})
+	h.openEpisodes(t)
+	m, cmd := pressTestKey(t, h.m, 'D', "D")
+	late := cmd()
+	m, _ = pressTestKey(t, m, tea.KeyEsc, "")
+	h.m, _ = updateTestModel(t, m, late)
+	mustScreen(t, h.m, screenEpisodes)
+	h.planRelease(t, "Glass Moon", provider.KindSub)
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEsc, "")
+	mustScreen(t, h.m, screenStudio)
+	h.m, _ = pressTestKey(t, h.m, tea.KeyEsc, "")
+	mustScreen(t, h.m, screenEpisodes)
+	if len(h.mgr.Snapshot()) != 0 || len(h.m.eng.Lib.Entries) != 0 {
+		t.Fatal("cancelled choice mutated state")
+	}
 }

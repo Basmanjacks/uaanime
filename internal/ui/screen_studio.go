@@ -19,7 +19,12 @@ import (
 // та, що обере резолв (nil, коли невідомо). Пари з інших серій теж видно: людина
 // має бачити весь вибір тайтлу, а не лише те, що встигло вийти для цієї серії.
 func (m *Model) showStudioChoice(playable, failed []provider.Source, willPlay *provider.Source) {
+	m.showReleaseChoice(playable, failed, willPlay, studioPlay)
+}
+
+func (m *Model) showReleaseChoice(playable, failed []provider.Source, willPlay *provider.Source, action studioAction) {
 	m.setScreen(screenStudio)
+	m.studioAction = action
 	pin := m.studioPin()
 	episodes, _ := m.currentEpisodes()
 	coverage, total := library.ReleaseCoverage(episodes)
@@ -46,6 +51,9 @@ func (m *Model) showStudioChoice(playable, failed []provider.Source, willPlay *p
 		}
 	}
 	for key, n := range coverage {
+		if action == studioDownload {
+			continue
+		}
 		if _, ok := rows[key]; ok {
 			continue
 		}
@@ -132,6 +140,9 @@ func (m *Model) showStudioChoice(playable, failed []provider.Source, willPlay *p
 		switch {
 		case isWill(key):
 			it.badge = i18n.TuiPickWillPlay
+			if action == studioDownload {
+				it.badge = i18n.TuiDlSelected
+			}
 		case r.failed:
 			it.badge, it.badgeWarn = i18n.TuiPickFailed, true
 		case !r.playable && r.inMeta:

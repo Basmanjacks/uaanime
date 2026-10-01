@@ -99,10 +99,16 @@ func (m *Model) resolveCmd(ref provider.TitleRef, ep, req int, h playback.Hints)
 }
 
 func (m *Model) studiosCmd(ref provider.TitleRef, ep, req int) tea.Cmd {
+	return m.releaseChoicesCmd(ref, ep, req, studioPlay)
+}
+
+func (m *Model) releaseChoicesCmd(ref provider.TitleRef, ep, req int, action studioAction) tea.Cmd {
 	eng := m.eng
+	h := eng.ResolveHints(ref, ep)
+	h.NoLocal = action == studioDownload
 	return asyncCmd(45*time.Second, func(ctx context.Context) tea.Msg {
-		choices, err := eng.ReleaseChoices(ctx, ref, ep)
-		return studiosMsg{choices: choices, err: err, req: req}
+		choices, err := eng.ReleaseChoicesWith(ctx, ref, ep, h)
+		return studiosMsg{choices: choices, err: err, req: req, action: action}
 	})
 }
 

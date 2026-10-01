@@ -34,6 +34,7 @@ type (
 		req int
 	}
 	studiosMsg struct {
+		action  studioAction
 		choices []provider.Source
 		err     error
 		req     int

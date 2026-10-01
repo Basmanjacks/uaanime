@@ -252,6 +252,19 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.failNav(msg.err)
 			return m, nil
 		}
+		if msg.action == studioDownload {
+			if len(msg.choices) == 1 {
+				m.dlRelease = provider.Release{Studio: msg.choices[0].Studio, Kind: msg.choices[0].Kind}
+				h := m.eng.ResolveHints(m.ref, m.pendingEp)
+				h.Release = m.dlRelease
+				return m, m.downloadPlanCmd(m.ref, m.pendingEp, msg.req, h)
+			}
+			_ = m.closeOverlay()
+			m.commitPending(msg.req)
+			willPlay, _ := library.Pick(msg.choices, m.studioPin(), m.eng.Prefs)
+			m.showReleaseChoice(msg.choices, nil, willPlay, studioDownload)
+			return m, nil
+		}
 		_ = m.closeOverlay()
 		m.commitPending(msg.req)
 		m.stack = append(m.stack, m.snapshot())

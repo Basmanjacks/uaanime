@@ -114,45 +114,21 @@ func BuildPlan(ctx context.Context, f *httpx.Fetcher, streams []extractor.Stream
 	return filePlan(valid, probed, probeErr)
 }
 
-// Pick обирає якість під побажання людини. height == 0 — «найкраща».
-// Точного збігу немає → беремо найближчу НИЖЧУ: 720p замість проханих 1080p
-// чесніше, ніж мовчки віддати вдвічі більший файл. Нижчої немає — беремо
-// найближчу вищу, бо відмовити людині через відсутність рівно 480p було б
-// гірше за файл, який вона все одно зможе подивитися.
+// Pick обирає точну якість. height == 0 означає «найвища доступна».
+// Явне прохання не підміняється, якщо якість зникла до старту завдання.
 func (p *Plan) Pick(height int) (Quality, bool) {
 	if p == nil || len(p.Qualities) == 0 {
 		return Quality{}, false
 	}
-	if height <= 0 {
+	if height == 0 {
 		return p.Qualities[0], true
 	}
-	var lower, higher *Quality
-	for i := range p.Qualities {
-		q := &p.Qualities[i]
-		switch {
-		case q.Height == height:
-			return *q, true
-		case q.Height <= 0:
-			continue
-		case q.Height < height:
-			if lower == nil || q.Height > lower.Height {
-				lower = q
-			}
-		default:
-			if higher == nil || q.Height < higher.Height {
-				higher = q
-			}
+	for _, q := range p.Qualities {
+		if q.Height == height {
+			return q, true
 		}
 	}
-	switch {
-	case lower != nil:
-		return *lower, true
-	case higher != nil:
-		return *higher, true
-	}
-	// Лишилися самі якості з невідомою висотою («авто» одного медіаплейлиста):
-	// вона задовольняє будь-яке прохання, бо іншої просто не існує.
-	return p.Qualities[0], true
+	return Quality{}, false
 }
 
 // Heights — висоти плану для повідомлення «є лише такі якості».

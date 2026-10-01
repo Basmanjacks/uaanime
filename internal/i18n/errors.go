@@ -44,6 +44,8 @@ func ErrorText(err error) string {
 		text = MsgStreamExpired
 	case errors.Is(err, errs.ErrAlreadySaved):
 		text = MsgAlreadySaved
+	case errors.Is(err, errs.ErrSavedFileMissing):
+		text = MsgSavedFileMissing
 	case errors.Is(err, errs.ErrDownloadBusy):
 		text = MsgDownloadBusy
 	case errors.Is(err, errs.ErrProvider):

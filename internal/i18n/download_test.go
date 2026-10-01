@@ -17,6 +17,7 @@ func TestDownloadErrorsHaveOwnText(t *testing.T) {
 		errs.ErrUnsupportedStream: MsgStreamUnsupported,
 		errs.ErrStreamExpired:     MsgStreamExpired,
 		errs.ErrAlreadySaved:      MsgAlreadySaved,
+		errs.ErrSavedFileMissing:  MsgSavedFileMissing,
 		errs.ErrDownloadBusy:      MsgDownloadBusy,
 	}
 	seen := map[string]bool{}

@@ -26,6 +26,13 @@ import (
 
 type screen int
 
+type studioAction int
+
+const (
+	studioPlay studioAction = iota
+	studioDownload
+)
+
 const (
 	screenHome screen = iota
 	screenSearch
@@ -107,7 +114,9 @@ type view struct {
 	// dlTitle — заголовок екрана вибору якості («Завантажити серію 6 · Озв ·
 	// FanVoxUA»). У view, бо будується з відповіді резолву, якої після
 	// повернення в кадр уже немає.
-	dlTitle string
+	dlTitle      string
+	dlRelease    provider.Release
+	studioAction studioAction
 }
 
 // clone — копія, яку не зачепить наступний пошук: слайси в моделі
@@ -221,7 +230,7 @@ type Model struct {
 	// попередило.
 	dl           *download.Manager
 	fetcher      *httpx.Fetcher
-	downloads    map[string]download.Progress
+	downloads    map[int64]download.Progress
 	savedScratch map[string]map[int][]download.SavedFile
 	quitArmed    bool
 
@@ -298,7 +307,7 @@ func New(eng *playback.Engine, opts Options) Model {
 		epsScratch:     map[string][]provider.Episode{},
 		dl:             opts.Downloads,
 		fetcher:        fetcher,
-		downloads:      map[string]download.Progress{},
+		downloads:      map[int64]download.Progress{},
 		savedScratch:   map[string]map[int][]download.SavedFile{},
 		cfg:            opts.Cfg,
 		remote:         opts.Remote,

@@ -237,10 +237,10 @@ func TestPlanPick(t *testing.T) {
 	}{
 		{"найкраща за замовчуванням", full, 0, 1080, true},
 		{"точний збіг", full, 720, 720, true},
-		{"немає 900 — беремо нижчу 720", full, 900, 720, true},
-		{"немає 360 — беремо вищу 480", full, 360, 480, true},
-		{"вище за все — найвища", full, 4320, 1080, true},
-		{"лише авто", auto, 1080, 0, true},
+		{"немає 900", full, 900, 0, false},
+		{"немає 360", full, 360, 0, false},
+		{"вище за все", full, 4320, 0, false},
+		{"лише авто, явна якість відсутня", auto, 1080, 0, false},
 		{"порожній план", &Plan{}, 0, 0, false},
 		{"nil-план", nil, 720, 0, false},
 	}
@@ -251,5 +251,17 @@ func TestPlanPick(t *testing.T) {
 				t.Fatalf("Pick(%d) = %d, %v; очікували %d, %v", c.ask, q.Height, ok, c.want, c.ok)
 			}
 		})
+	}
+}
+
+func TestPlanPickDoesNotSubstituteExplicitQuality(t *testing.T) {
+	for _, qualities := range [][]Quality{{{Height: 720}}, {{Height: 2160}}, {{Height: 0}}} {
+		plan := &Plan{Qualities: qualities}
+		if q, ok := plan.Pick(1080); ok {
+			t.Errorf("requested 1080, substituted %+v", q)
+		}
+		if _, ok := plan.Pick(0); !ok {
+			t.Error("automatic highest quality unavailable")
+		}
 	}
 }

@@ -38,6 +38,9 @@ func (m Model) View() tea.View {
 		title = m.currentTitleName()
 	case screenStudio:
 		title = i18n.TuiPickerTitle
+		if m.studioAction == studioDownload {
+			title = fmt.Sprintf(i18n.TuiDlReleaseTitle, m.pendingEp)
+		}
 	case screenBookmarks:
 		title = i18n.TuiBookmarksTitle
 	case screenHistory:

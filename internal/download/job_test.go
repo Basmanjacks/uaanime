@@ -446,7 +446,7 @@ func TestRunFileReplacedPayloadIsNotStitched(t *testing.T) {
 
 // ------------------------------------------------------------- власність цілі
 
-func TestRunAlreadySavedWritesMissingSidecar(t *testing.T) {
+func TestRunMissingSidecarPreservesUnknownFile(t *testing.T) {
 	quick(t, time.Second)
 	dir := t.TempDir()
 	s := downloadtest.NewHLS(t, downloadtest.HLSOptions{Segments: 4, Referer: streamHeaders["Referer"]})
@@ -460,23 +460,24 @@ func TestRunAlreadySavedWritesMissingSidecar(t *testing.T) {
 	if err := os.Remove(sidecarPath(first.Path)); err != nil {
 		t.Fatalf("прибрати sidecar: %v", err)
 	}
-	before := len(s.Paths())
+	before := readFile(t, first.Path)
+	second, err := run(t.Context(), f, jobFor(dir, refFrieren, 6, 720, s.URL()), nil)
+	if err != nil || second.Path == first.Path {
+		t.Fatalf("unknown file reused: %+v %v", second, err)
+	}
+	if !bytes.Equal(before, readFile(t, first.Path)) {
+		t.Fatal("unknown media changed")
+	}
+	if _, ok := readSidecar(first.Path); ok {
+		t.Fatal("unknown file was attributed to requested release")
+	}
+	if _, ok := readSidecar(second.Path); !ok {
+		t.Fatal("new known variant has no sidecar")
+	}
 
-	_, err = run(t.Context(), f, jobFor(dir, refFrieren, 6, 720, s.URL()), nil)
-	if !errors.Is(err, errs.ErrAlreadySaved) {
-		t.Fatalf("err = %v, очікували ErrAlreadySaved", err)
-	}
-	for _, path := range s.Paths()[before:] {
-		if strings.Contains(path, "segment") {
-			t.Errorf("по наявний файл ходили в мережу за %s", path)
-		}
-	}
-	if _, ok := readSidecar(first.Path); !ok {
-		t.Error("sidecar не дописано (reconciliation)")
-	}
 }
 
-func TestRunAlreadySavedKeepsForeignFolderIntact(t *testing.T) {
+func TestRunMissingSidecarKeepsForeignFileIntact(t *testing.T) {
 	quick(t, time.Second)
 	dir := t.TempDir()
 	s := downloadtest.NewHLS(t, downloadtest.HLSOptions{Segments: 4, Referer: streamHeaders["Referer"]})
@@ -494,8 +495,9 @@ func TestRunAlreadySavedKeepsForeignFolderIntact(t *testing.T) {
 	// паспорт не можна.
 	writeMedia(t, folder, "чужий.ts", 10, &Sidecar{Provider: refOther.Provider, Slug: refOther.Slug, Episode: 1})
 
-	if _, err := run(t.Context(), f, jobFor(dir, refFrieren, 6, 720, s.URL()), nil); !errors.Is(err, errs.ErrAlreadySaved) {
-		t.Fatalf("err = %v, очікували ErrAlreadySaved", err)
+	second, err := run(t.Context(), f, jobFor(dir, refFrieren, 6, 720, s.URL()), nil)
+	if err != nil || second.Path == first.Path {
+		t.Fatalf("unknown file reused: %+v %v", second, err)
 	}
 	if _, ok := readSidecar(first.Path); ok {
 		t.Error("sidecar дописано в папку з файлами іншого тайтлу")
@@ -693,5 +695,72 @@ func TestRunResolveFailure(t *testing.T) {
 	}
 	if got := entries(t, dir); len(got) != 0 {
 		t.Errorf("до резолюції на диску нічого створювати не можна: %v", got)
+	}
+}
+
+func TestRunDistinctReleasesWithCollidingNames(t *testing.T) {
+	quick(t, time.Second)
+	dir := t.TempDir()
+	srv := downloadtest.NewHLS(t, downloadtest.HLSOptions{Segments: 1, Referer: streamHeaders["Referer"]})
+	f := fetcherFor(downloadtest.Transport(srv.Rewrites()))
+	paths := map[string]bool{}
+	for i, studio := range []string{"Team/A", "Team:A", "Team/A"} {
+		job := jobFor(dir, refFrieren, 1, 720, srv.URL())
+		base := job.Resolve
+		job.Release = provider.Release{Studio: studio, Kind: provider.KindDub}
+		job.Resolve = func(ctx context.Context) (Target, error) {
+			target, err := base(ctx)
+			target.Studio = studio
+			return target, err
+		}
+		p, err := run(t.Context(), f, job, nil)
+		if i == 2 {
+			if !errors.Is(err, errs.ErrAlreadySaved) {
+				t.Fatalf("duplicate: %v", err)
+			}
+		} else {
+			if err != nil {
+				t.Fatalf("different release %s: %v", studio, err)
+			}
+			if paths[p.Path] {
+				t.Fatal("different releases share path")
+			}
+			paths[p.Path] = true
+			sc, ok := readSidecar(p.Path)
+			if !ok || sc.Studio != studio {
+				t.Fatalf("wrong sidecar %+v", sc)
+			}
+		}
+	}
+	if len(paths) != 2 {
+		t.Fatalf("variants: %v", paths)
+	}
+}
+
+func TestRunQualityGoneAfterPreflightDoesNotSubstitute(t *testing.T) {
+	srv := downloadtest.NewFile(t, []byte("media"), downloadtest.FileOptions{})
+	f := fetcherFor(downloadtest.Transport(srv.Rewrites()))
+	initial, err := BuildPlan(t.Context(), f, []extractor.Stream{{URL: srv.URL(), Quality: 1080, Headers: streamHeaders}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := initial.Pick(1080); !ok {
+		t.Fatal("preflight lacked selected quality")
+	}
+	j := Job{Ref: refFrieren, Episode: 1, Height: 1080, Dir: t.TempDir(), Release: provider.Release{Studio: "A", Kind: provider.KindDub},
+		Resolve: func(context.Context) (Target, error) {
+			return Target{Studio: "A", Kind: provider.KindDub, Name: "Example", Streams: []extractor.Stream{{URL: srv.URL(), Quality: 720, Headers: streamHeaders}}}, nil
+		},
+	}
+	if _, err := run(t.Context(), f, j, nil); !errors.Is(err, errs.ErrNoStream) {
+		t.Fatalf("quality substituted after preflight: %v", err)
+	}
+	if files := Saved(j.Dir, j.Ref)[1]; len(files) != 0 {
+		t.Fatalf("unrequested file created: %+v", files)
+	}
+	j.Height = 0
+	p, err := run(t.Context(), f, j, nil)
+	if err != nil || p.Height != 720 || p.RequestedHeight != 0 {
+		t.Fatalf("automatic quality: %+v %v", p, err)
 	}
 }

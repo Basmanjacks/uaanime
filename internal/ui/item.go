@@ -85,7 +85,7 @@ func (i item) key() string {
 	case payloadDownload:
 		return "dl:" + strconv.FormatInt(payload.id, 10)
 	case payloadSavedFile:
-		return "saved:" + payload.ref.Provider + ":" + payload.ref.Slug + ":" + strconv.Itoa(payload.ep)
+		return "saved:" + payload.path
 	}
 	return ""
 }
@@ -122,9 +122,10 @@ type (
 	// payloadQuality — рядок екрана вибору якості. bytes == 0 означає
 	// «розмір невідомий», exact == false — оцінка за бітрейтом.
 	payloadQuality struct {
-		height int
-		bytes  int64
-		exact  bool
+		height        int
+		bytes         int64
+		exact         bool
+		saved, queued bool
 	}
 	// payloadDownload — завдання черги на екрані «Завантаження».
 	payloadDownload struct {

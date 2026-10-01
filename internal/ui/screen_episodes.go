@@ -45,14 +45,14 @@ func (m *Model) episodeRows() []item {
 			role:    m.ref.Provider + ":" + m.ref.Slug,
 			payload: payloadEp{num: ep.Number},
 		}
+		chosen, cands := library.Pick(library.SourcesFromReleases(ep), pin, m.eng.Prefs)
 		p, started := progress[ep.Number]
 		if started && p.Completed {
 			it.icon, it.badge = m.ic.Done, i18n.TuiEpDone
-			m.applyDownloadBadge(&it, ep.Number, saved)
+			m.applyDownloadBadge(&it, ep.Number, saved, chosen)
 			items = append(items, it)
 			continue
 		}
-		chosen, cands := library.Pick(library.SourcesFromReleases(ep), pin, m.eng.Prefs)
 		if chosen != nil {
 			it.meta = releaseSummary(*chosen, ep)
 			switch {
@@ -75,7 +75,7 @@ func (m *Model) episodeRows() []item {
 		}
 		// Стан завантаження — останнім: він перекриває бейдж вибору релізу,
 		// бо каже про дію, яка вже триває або вже дала файл на диску.
-		m.applyDownloadBadge(&it, ep.Number, saved)
+		m.applyDownloadBadge(&it, ep.Number, saved, chosen)
 		items = append(items, it)
 	}
 	return items

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -86,6 +87,7 @@ type ResolveFunc func(ctx context.Context) (Target, error)
 type Job struct {
 	Ref     provider.TitleRef
 	Episode int
+	Release provider.Release
 	Height  int
 	Dir     string
 	Resolve ResolveFunc
@@ -126,20 +128,23 @@ func (s State) String() string {
 // Progress — знімок стану завдання. Лише значення: його копіюють у модель UI
 // і читають з іншої горутини, тож нічого, що можна змінити ззовні, тут немає.
 type Progress struct {
-	ID           int64
-	Ref          provider.TitleRef
-	Episode      int
-	Height       int
-	State        State
-	Bytes        int64
-	Total        int64
-	SegmentsDone int
-	Segments     int
-	BytesPerSec  float64
-	ETA          time.Duration
-	Path         string
-	Dir          string
-	Err          error
+	ID      int64
+	Ref     provider.TitleRef
+	Episode int
+	Release provider.Release
+	// RequestedHeight — початковий вибір; Height нижче — фактична якість.
+	RequestedHeight int
+	Height          int
+	State           State
+	Bytes           int64
+	Total           int64
+	SegmentsDone    int
+	Segments        int
+	BytesPerSec     float64
+	ETA             time.Duration
+	Path            string
+	Dir             string
+	Err             error
 	// Exact — Total названий сервером, а не оцінений за бітрейтом.
 	Exact bool
 }
@@ -153,11 +158,13 @@ func run(ctx context.Context, f *httpx.Fetcher, j Job, report func(Progress)) (P
 		report = func(Progress) {}
 	}
 	p := Progress{
-		Ref:     j.Ref,
-		Episode: j.Episode,
-		Height:  j.Height,
-		Dir:     j.Dir,
-		State:   StateResolving,
+		Ref:             j.Ref,
+		Episode:         j.Episode,
+		Release:         j.Release,
+		RequestedHeight: j.Height,
+		Height:          j.Height,
+		Dir:             j.Dir,
+		State:           StateResolving,
 	}
 	report(p)
 
@@ -187,6 +194,9 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 	tgt, err := j.Resolve(ctx)
 	if err != nil {
 		return err
+	}
+	if j.Release != (provider.Release{}) && j.Release != (provider.Release{Studio: tgt.Studio, Kind: tgt.Kind}) {
+		return fmt.Errorf("обраний реліз недоступний: %w", errs.ErrNoStream)
 	}
 	plan, err := BuildPlan(ctx, f, tgt.Streams)
 	if err != nil {
@@ -240,7 +250,16 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 		Height:   q.Height,
 	}
 
-	if err := reserve(final, folder, j.Ref, sc); err != nil {
+	// Метадані визначають варіант навіть після перейменування тайтлу/файла.
+	for _, existing := range Saved(j.Dir, j.Ref)[j.Episode] {
+		if existing.Studio == sc.Studio && existing.Kind == sc.Kind && existing.Height == sc.Height {
+			p.Path = existing.Path
+			return fmt.Errorf("%s: %w", filepath.Base(existing.Path), errs.ErrAlreadySaved)
+		}
+	}
+	final, err = reserve(final, sc)
+	p.Path = final
+	if err != nil {
 		return err
 	}
 	var part *os.File
@@ -305,53 +324,62 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 	return nil
 }
 
-// reserve займає ім'я фінального файла нульовим плейсхолдером під ref-локом.
-// Так другий процес (або друга якість тієї ж серії) одразу бачить, що місце
-// зайняте, ще до першого байта з мережі.
-func reserve(final, folder string, ref provider.TitleRef, sc Sidecar) error {
-	for range 2 {
-		f, err := os.OpenFile(final, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+// reserve займає шлях під ref-локом. Відмінний або невідомий паспорт
+// існуючого файла означає колізію, а не «обраний реліз уже збережено».
+func reserve(final string, sc Sidecar) (string, error) {
+	original := final
+	for attempt := 0; attempt < 3; attempt++ {
+		f, err := os.OpenFile(final, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
 		if err == nil {
 			_ = f.Close()
-			return nil
+			return final, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
-			return diskError(final, err)
+			return final, diskError(final, err)
 		}
-		info, serr := os.Stat(final)
-		if serr != nil {
-			if errors.Is(serr, os.ErrNotExist) {
-				continue // зник між OpenFile і Stat — пробуємо ще раз
+		info, err := os.Stat(final)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-			return diskError(final, serr)
+			return final, diskError(final, err)
 		}
-		if info.Size() > 0 {
-			reconcile(final, folder, ref, sc)
-			return fmt.Errorf("%s: %w", filepath.Base(final), errs.ErrAlreadySaved)
+		existing, known := readSidecar(final)
+		same := known && sameVariant(existing, sc)
+		if info.Size() > 0 || (known && !same) {
+			if same {
+				return final, fmt.Errorf("%s: %w", filepath.Base(final), errs.ErrAlreadySaved)
+			}
+			if final != original {
+				return final, fmt.Errorf("колізія імені %s: %w", filepath.Base(final), errs.ErrProvider)
+			}
+			final = collisionPath(original, sc)
+			continue
 		}
-		// Нуль байтів під нашим локом означає, що живого власника немає:
-		// це резервація процесу, вбитого kill -9.
+		// Нульовий плейсхолдер під нашим локом уже не має живого власника.
 		if err := os.Remove(final); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return diskError(final, err)
+			return final, diskError(final, err)
 		}
 	}
-	return fmt.Errorf("%s: не вдалося зарезервувати ім'я: %w", final, errs.ErrProvider)
+	return final, fmt.Errorf("не вдалося зарезервувати %s: %w", filepath.Base(final), errs.ErrProvider)
 }
 
-// reconcile дописує sidecar до файла, збереженого старішою версією або
-// перенесеного руками. Мовчки, бо це не мета операції: людина просила
-// завантажити серію, і «вже є» — достатня відповідь.
-//
-// Чужу папку не чіпаємо: sidecar іншого ref поруч означає, що файл із
-// однаковим іменем належить не нам, і приписувати йому наш паспорт не можна.
-func reconcile(final, folder string, ref provider.TitleRef, sc Sidecar) {
-	if _, ok := readSidecar(final); ok {
-		return
+func sameVariant(a, b Sidecar) bool {
+	return a.Provider == b.Provider && a.Slug == b.Slug && a.Episode == b.Episode && a.Studio == b.Studio && a.Kind == b.Kind && a.Height == b.Height
+}
+
+func collisionPath(path string, sc Sidecar) string {
+	identity := fmt.Sprintf("%s\x00%s\x00%d\x00%s\x00%s\x00%d", sc.Provider, sc.Slug, sc.Episode, sc.Studio, sc.Kind, sc.Height)
+	hash := sha256.Sum256([]byte(identity))
+	suffix := fmt.Sprintf("~%x", hash[:8])
+	ext := filepath.Ext(path)
+	stem := strings.TrimSuffix(filepath.Base(path), ext)
+	tag := ""
+	if i := strings.LastIndex(stem, " ["); i >= 0 {
+		stem, tag = stem[:i], stem[i:]
 	}
-	if ownedByOther(folder, ref) {
-		return
-	}
-	_ = WriteSidecar(final, sc)
+	stem = truncBytes(stem, maxFileBytes-len(suffix)-len(tag)-len(ext))
+	return filepath.Join(filepath.Dir(path), stem+suffix+tag+ext)
 }
 
 // checkSpace відмовляє ДО першого байта з мережі: витратити півгодини трафіку,

@@ -109,13 +109,16 @@ type Resolved struct {
 	// moonanime віддає окремий прямий файл на кожну якість, і, лишаючи самий
 	// перший, ми втрачали 720p/480p ще до побудови плану.
 	Streams []extractor.Stream
-	// Local — грає файл із диска: Stream.URL це шлях, заголовків немає,
-	// провайдера й екстрактор не чіпали взагалі.
-	Local      bool
-	HostID     string
-	StartSec   float64 // resume-позиція, 0 = з початку
-	Name       string  // назва тайтлу без номера серії (для пульта)
-	MediaTitle string  // Name · Episode — заголовок вікна плеєра
+	// Local — грає файл із диска: Stream.URL це шлях, заголовків немає.
+	// Провайдер міг уточнювати вибір релізу; екстрактор для цього файла не потрібен.
+	Local bool
+	// ExplicitLocal — користувач відкрив конкретний файл, а не автоматичний
+	// підбір за перевагами. Лише такий локальний запуск може створити пін.
+	ExplicitLocal bool
+	HostID        string
+	StartSec      float64 // resume-позиція, 0 = з початку
+	Name          string  // назва тайтлу без номера серії (для пульта)
+	MediaTitle    string  // Name · Episode — заголовок вікна плеєра
 	// Candidates непорожній, коли на переможному ярусі >1 студії і піна немає:
 	// інтерфейс може спитати один раз і закріпити. Source при цьому вже
 	// детермінований — headless-режим грає без питань.
@@ -167,12 +170,8 @@ func (e *Engine) playable(sources []provider.Source) []provider.Source {
 // Кеш віддається, лише якщо він свіжий і справді містить потрібну серію.
 func (e *Engine) sources(ctx context.Context, ref provider.TitleRef, ep int) ([]provider.Source, error) {
 	key := sourceKey{Provider: ref.Provider, Slug: ref.Slug, Episode: ep}
-
-	e.sourcesMu.Lock()
-	cached, ok := e.sourcesCache[key]
-	e.sourcesMu.Unlock()
-	if ok && time.Since(cached.at) < sourcesTTL && hasEpisode(cached.sources, ep) {
-		return cached.sources, nil
+	if cached, ok := e.cachedSources(ref, ep); ok {
+		return cached, nil
 	}
 
 	sources, err := e.Provider.Sources(ctx, ref, ep)
@@ -186,6 +185,17 @@ func (e *Engine) sources(ctx context.Context, ref provider.TitleRef, ep int) ([]
 	e.sourcesCache[key] = sourcesEntry{at: time.Now(), sources: sources}
 	e.sourcesMu.Unlock()
 	return sources, nil
+}
+
+func (e *Engine) cachedSources(ref provider.TitleRef, ep int) ([]provider.Source, bool) {
+	key := sourceKey{Provider: ref.Provider, Slug: ref.Slug, Episode: ep}
+	e.sourcesMu.Lock()
+	cached, ok := e.sourcesCache[key]
+	e.sourcesMu.Unlock()
+	if !ok || time.Since(cached.at) >= sourcesTTL || !hasEpisode(cached.sources, ep) {
+		return nil, false
+	}
+	return cached.sources, true
 }
 
 func hasEpisode(sources []provider.Source, ep int) bool {
@@ -219,11 +229,19 @@ func byQuality(streams []extractor.Stream) []extractor.Stream {
 
 // ReleaseChoices повертає відтворювані пари (студія, тип) серії. async-safe.
 func (e *Engine) ReleaseChoices(ctx context.Context, ref provider.TitleRef, ep int) ([]provider.Source, error) {
+	return e.ReleaseChoicesWith(ctx, ref, ep, Hints{NoLocal: true})
+}
+
+// ReleaseChoicesWith додає локальні релізи зі знімка папки; навіть коли
+// провайдер недоступний, їх можна свідомо обрати в пікері. async-safe.
+func (e *Engine) ReleaseChoicesWith(ctx context.Context, ref provider.TitleRef, ep int, h Hints) ([]provider.Source, error) {
+	files := savedEpisode(ref, h).Files[ep]
+	local := localSources(files, ep)
 	sources, err := e.sources(ctx, ref, ep)
-	if err != nil {
+	if err != nil && len(local) == 0 {
 		return nil, err
 	}
-	choices := library.ReleaseChoices(e.playable(sources))
+	choices := library.ReleaseChoices(append(local, e.playable(sources)...))
 	if len(choices) == 0 {
 		return nil, fmt.Errorf("серія %d: немає відтворюваних студій: %w", ep, errs.ErrNoStream)
 	}
@@ -233,6 +251,11 @@ func (e *Engine) ReleaseChoices(ctx context.Context, ref provider.TitleRef, ep i
 // Hints — знімок бібліотеки для одного Resolve. ЛИШЕ значення: покажчик або
 // слайс із Library означав би, що фонова горутина далі читає її пам'ять.
 type Hints struct {
+	// Release — точний вибір для цього запиту; нуль означає автоматичний Pick.
+	Release provider.Release
+	// LocalPath — конкретний файл зі списку завантаженого. Не підміняється
+	// іншим файлом або онлайн-потоком, якщо його вже видалили.
+	LocalPath string
 	HasEntry  bool
 	StudioPin string
 	KindPin   provider.Kind
@@ -283,16 +306,29 @@ func (e *Engine) Resolve(ctx context.Context, ref provider.TitleRef, ep int, onE
 // ResolveWith — та сама вибірка, але з уже знятими підказками: мережа й
 // екстрактори, жодного звертання до Lib. async-safe.
 func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int, h Hints, onEvent func(Event)) (*Resolved, error) {
-	// Диск перевіряється ДО провайдера: збережена серія має грати без жодного
-	// мережевого запиту, тобто й у літаку, і коли сайт лежить.
-	if !h.NoLocal && h.DownloadDir != "" {
-		if res := localResolved(ref, ep, h); res != nil {
-			return res, nil
+	title := savedEpisode(ref, h)
+	files := title.Files[ep]
+	if h.LocalPath != "" {
+		for _, f := range files {
+			if f.Path == h.LocalPath {
+				res := resolvedFile(ref, ep, h, title.Ref.Name, f)
+				res.ExplicitLocal = true
+				res.Pin = library.Pin{Studio: f.Studio, Kind: f.Kind}
+				return res, nil
+			}
 		}
+		return nil, fmt.Errorf("локальний файл серії %d: %w", ep, errs.ErrSavedFileMissing)
+	}
+	if res := e.preferredLocal(ref, ep, h, title); res != nil {
+		return res, nil
 	}
 	sources, err := e.sources(ctx, ref, ep)
 	if err != nil {
 		return nil, err
+	}
+	sources = append(localSources(files, ep), sources...)
+	if h.Release != (provider.Release{}) {
+		sources = matchingRelease(sources, h.Release)
 	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("серія %d: провайдер не повернув джерел: %w", ep, errs.ErrNoStream)
@@ -300,14 +336,27 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 	name := h.Name
 
 	pin := library.Pin{Studio: h.StudioPin, Kind: h.KindPin}
+	if h.Release != (provider.Release{}) {
+		pin = library.Pin{Studio: h.Release.Studio, Kind: h.Release.Kind}
+	}
 	remaining := sources
 	var failures []error
+	var offlineErr error
 	var failed []provider.Source // джерела з екстрактором, які впали цього разу
 	for len(remaining) > 0 {
 		chosen, candidates := library.Pick(remaining, pin, h.Prefs)
 		if chosen == nil {
 			failures = append(failures, fmt.Errorf("неможливо обрати реліз: %w", errs.ErrProvider))
 			break
+		}
+		if f, ok := fileForRelease(files, releaseOf(*chosen)); ok && offlineErr == nil {
+			res := resolvedFile(ref, ep, h, title.Ref.Name, f)
+			res.Pin = pin
+			res.Deviation = library.DeviationOf(pin, *chosen)
+			res.Candidates = library.ReleaseChoices(e.playableWithLocal(candidates, files))
+			res.Playable = library.ReleaseChoices(e.playableWithLocal(sources, files))
+			res.Failed = library.ReleaseChoices(failed)
+			return res, nil
 		}
 		ex, ok := extractor.Find(e.Extractors, chosen.Embed)
 		if !ok {
@@ -323,6 +372,12 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			}
 			failed = append(failed, *chosen)
 			remaining = without(remaining, *chosen)
+			if errs.Offline(err) {
+				// Джерела можуть бути в memo, поки мережа вже недоступна.
+				// Інший онлайн-хост може працювати; автоматичний перехід
+				// на інший локальний переклад потребує свідомого вибору.
+				offlineErr = err
+			}
 			continue
 		}
 		streams = byQuality(validStreams(streams))
@@ -351,10 +406,13 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 			StartSec:   h.StartSec,
 			Name:       name,
 			MediaTitle: fmt.Sprintf("%s · %d", name, ep),
-			Candidates: e.playable(candidates),
-			Playable:   library.ReleaseChoices(e.playable(sources)),
+			Candidates: e.playableWithLocal(candidates, files),
+			Playable:   library.ReleaseChoices(e.playableWithLocal(sources, files)),
 			Failed:     library.ReleaseChoices(failed),
 		}, nil
+	}
+	if offlineErr != nil {
+		return nil, fmt.Errorf("серія %d: мережа недоступна: %w", ep, errs.WithClass(errs.ErrOffline, errors.Join(failures...)))
 	}
 	return nil, aggregateFailures(ep, failures)
 }
@@ -625,13 +683,12 @@ func (e *Engine) Begin(res *Resolved) (titleID, pinnedStudio string, err error) 
 	// піде тією самою озвучкою без питань. Тип субтитрів неявно не
 	// закріплюється: wildcard означає «озвучення цієї студії, щойно буде».
 	//
-	// Файл із диска нічого не пінує: завантаження не торкається бібліотеки, і
-	// студія збереженого файла (може, єдина, що була тоді на сайті) не має
-	// тихо ставати перевагою для всіх наступних серій із мережі.
-	if entry.StudioPin == "" && !res.Local {
+	// Автоматичний локальний вибір нічого не пінує. Свідомий запуск рядка
+	// відомого файла створює лише порожній пін, з точним типом, включно з sub.
+	if entry.StudioPin == "" && (!res.Local || res.ExplicitLocal) && res.Source.Studio != "" && provider.ValidKind(res.Source.Kind) {
 		entry.StudioPin = res.Source.Studio
 		entry.KindPin = res.Source.Kind
-		if entry.KindPin == provider.KindSub {
+		if entry.KindPin == provider.KindSub && !res.ExplicitLocal {
 			entry.KindPin = ""
 		}
 		pinnedStudio = res.Source.Studio

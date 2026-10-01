@@ -3,7 +3,6 @@ package download
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -27,7 +26,7 @@ type Manager struct {
 
 	mu      sync.Mutex
 	entries []*entry
-	byKey   map[string]*entry
+	byKey   map[jobKey]*entry
 	events  chan struct{}
 	wake    chan struct{}
 	done    chan struct{}
@@ -51,40 +50,47 @@ type entry struct {
 func NewManager(f *httpx.Fetcher) *Manager {
 	return &Manager{
 		f:      f,
-		byKey:  make(map[string]*entry),
+		byKey:  make(map[jobKey]*entry),
 		events: make(chan struct{}, 1),
 		wake:   make(chan struct{}, 1),
 		done:   make(chan struct{}),
 	}
 }
 
-// jobKey — ключ дедуплікації. Той самий, яким UI індексує свій знімок: серія
-// тайтлу або вже в роботі, або ні, і двох записів про неї бути не може.
-func jobKey(ref provider.TitleRef, ep int) string {
-	return RefKey(ref) + ":" + strconv.Itoa(ep)
+// jobKey ідентифікує запитаний варіант; Name та URL не є ідентичністю тайтлу.
+type jobKey struct {
+	provider, slug string
+	episode        int
+	release        provider.Release
+	height         int
 }
 
-// Enqueue ставить серію в чергу. Повторний виклик для тієї самої серії, яка
-// ще не завершилася, повертає наявний id і нічого не додає: людина натиснула
-// D двічі, а не попросила два файли.
+func keyFor(j Job) jobKey {
+	return jobKey{j.Ref.Provider, j.Ref.Slug, j.Episode, j.Release, j.Height}
+}
+
+// Enqueue ставить варіант серії в чергу. Повторний виклик для того самого
+// релізу й запитаної якості, який ще не завершився, повертає наявний id.
 func (m *Manager) Enqueue(j Job) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
 		return 0, fmt.Errorf("менеджер завантажень закрито: %w", errs.ErrCancelled)
 	}
-	key := jobKey(j.Ref, j.Episode)
+	key := keyFor(j)
 	if e, ok := m.byKey[key]; ok && !e.prog.State.Terminal() {
 		return e.prog.ID, nil
 	}
 	id := m.nextID.Add(1)
 	e := &entry{job: j, prog: Progress{
-		ID:      id,
-		Ref:     j.Ref,
-		Episode: j.Episode,
-		Height:  j.Height,
-		Dir:     j.Dir,
-		State:   StateQueued,
+		ID:              id,
+		Ref:             j.Ref,
+		Episode:         j.Episode,
+		Release:         j.Release,
+		RequestedHeight: j.Height,
+		Height:          j.Height,
+		Dir:             j.Dir,
+		State:           StateQueued,
 	}}
 	m.entries = append(m.entries, e)
 	m.byKey[key] = e
@@ -137,12 +143,30 @@ func (m *Manager) Forget(id int64) bool {
 			break
 		}
 	}
-	key := jobKey(e.job.Ref, e.job.Episode)
+	key := keyFor(e.job)
 	if m.byKey[key] == e {
 		delete(m.byKey, key)
 	}
 	m.signalLocked()
 	return true
+}
+
+// Retry повторює початковий запит зі свіжою резолюцією потоків. Переваги
+// перегляду, фактична якість і поточна папка не змінюють завдання.
+func (m *Manager) Retry(id int64) (int64, error) {
+	m.mu.Lock()
+	e := m.find(id)
+	if e == nil || (e.prog.State != StateFailed && e.prog.State != StateCancelled) {
+		m.mu.Unlock()
+		return 0, fmt.Errorf("завдання не можна повторити: %w", errs.ErrCancelled)
+	}
+	j := e.job
+	m.mu.Unlock()
+	newID, err := m.Enqueue(j)
+	if err == nil {
+		m.Forget(id)
+	}
+	return newID, err
 }
 
 // Snapshot — авторитетний стан черги: спершу активне й те, що чекає (у порядку

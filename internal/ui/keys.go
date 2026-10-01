@@ -669,6 +669,15 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 	case payloadDownloads:
 		return m.openDownloads()
 	case payloadQuality:
+		if p.saved || p.queued {
+			m.status = fmt.Sprintf(i18n.TuiDlAlready, m.pendingEp)
+			if p.queued {
+				m.status = fmt.Sprintf(i18n.TuiDlAlreadyQueued, m.pendingEp)
+			}
+			m.statusKind = statusInfo
+			m.statusGen++
+			return m, nil
+		}
 		return m.enqueueQuality(p.height)
 	case payloadDownload:
 		return m.retryDownload(p)
@@ -739,6 +748,9 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 			m.statusGen++
 			return m, nil
 		}
+		if m.studioAction == studioDownload {
+			return m.prepareDownloadRelease(p.src)
+		}
 		if err := m.eng.PinStudio(m.ref, p.src.Studio, p.pinKind); err != nil {
 			m.errText = m.errorText(err)
 			return m, nil
@@ -748,7 +760,9 @@ func (m Model) openSelected() (tea.Model, tea.Cmd) {
 		m.statusKind = statusLoading
 		m.statusGen++
 		// підказки знімаються ПІСЛЯ PinStudio: новий пін має потрапити у вибір
-		return m, m.resolveCmd(m.ref, m.pendingEp, req, m.eng.ResolveHints(m.ref, m.pendingEp))
+		h := m.eng.ResolveHints(m.ref, m.pendingEp)
+		h.Release = provider.Release{Studio: p.src.Studio, Kind: p.src.Kind}
+		return m, m.resolveCmd(m.ref, m.pendingEp, req, h)
 	}
 	return m, nil
 }

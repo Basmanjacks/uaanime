@@ -1,6 +1,7 @@
 package download
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/Basmanjacks/uaanime/internal/downloadtest"
 	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/Basmanjacks/uaanime/internal/provider"
 )
 
 // waitFor крутить Snapshot, доки умова не стане правдою. Читати Events тут
@@ -282,5 +284,50 @@ func TestManagerRunsFailedJobAndKeepsItInSnapshot(t *testing.T) {
 	again, _ := m.Enqueue(jobFor(dir, refFrieren, 6, 720, s.URL()))
 	if again == id {
 		t.Error("повторна постановка після провалу віддала старий id")
+	}
+}
+
+func TestManagerDifferentQualitiesAreDifferentJobs(t *testing.T) {
+	m := NewManager(nil)
+	t.Cleanup(m.Close)
+	blocked := func(ctx context.Context) (Target, error) { <-ctx.Done(); return Target{}, ctx.Err() }
+	a, err := m.Enqueue(Job{Ref: refFrieren, Episode: 1, Height: 720, Resolve: blocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := m.Enqueue(Job{Ref: refFrieren, Episode: 1, Height: 1080, Resolve: blocked})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b || len(m.Snapshot()) != 2 {
+		t.Fatalf("different variants collapsed: %d %d %+v", a, b, m.Snapshot())
+	}
+}
+
+func TestManagerDifferentReleasesAreDifferentJobs(t *testing.T) {
+	m := NewManager(nil)
+	t.Cleanup(m.Close)
+	blocked := func(ctx context.Context) (Target, error) { <-ctx.Done(); return Target{}, ctx.Err() }
+	j := Job{Ref: refFrieren, Episode: 1, Height: 720, Release: provider.Release{Studio: "A", Kind: provider.KindDub}, Resolve: blocked}
+	a, err := m.Enqueue(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Release.Kind = provider.KindSub
+	b, err := m.Enqueue(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.Release.Studio = "B"
+	c, err := m.Enqueue(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := m.Enqueue(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b || a == c || b == c || c != again || len(m.Snapshot()) != 3 {
+		t.Fatalf("variant keys: %d %d %d %d", a, b, c, again)
 	}
 }
