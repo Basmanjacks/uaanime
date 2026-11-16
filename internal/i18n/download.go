@@ -20,6 +20,11 @@ const (
 	MsgDownloadDirNoWrite     = "завантаження: %s (немає доступу на запис)"
 	MsgDownloadQualityMissing = "якості %dp немає; є: %s"
 	MsgDownloadQualityAuto    = "авто"
+	// MsgDownloadsEmpty — `downloads` без жодного збереженого файла.
+	MsgDownloadsEmpty = "збережених серій немає"
+	// MsgDownloadsUnknownRelease — файл без службового файла: студія й тип
+	// невідомі.
+	MsgDownloadsUnknownRelease = "переклад невідомий"
 
 	TuiDlItem           = "Завантаження"
 	TuiDlTitle          = "Завантаження"

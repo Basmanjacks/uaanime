@@ -64,6 +64,9 @@ type SavedFile struct {
 	Height  int
 	Bytes   int64
 	ModTime time.Time
+	// Known — метадані з достовірного sidecar-а. false — файл знайдено лише
+	// за marker-ом папки: серія й якість узяті з імені, студія й тип невідомі.
+	Known bool
 }
 
 // SavedTitle — усе збережене для одного тайтлу. Folders може бути кілька:
@@ -241,6 +244,7 @@ func scanFolder(folder string, acc map[string]*titleAcc) {
 			ref = provider.TitleRef{Provider: sc.Provider, Slug: sc.Slug, Name: sc.Name}
 			ep = sc.Episode
 			f.Studio, f.Kind, f.Height = sc.Studio, sc.Kind, sc.Height
+			f.Known = true
 		case hasMarker:
 			// Файл перенесли руками або sidecar загубився: ref дає marker,
 			// серію й якість — ім'я, студія й тип лишаються невідомими.

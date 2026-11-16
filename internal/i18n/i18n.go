@@ -12,6 +12,7 @@ const (
   uaanime resolve <title-id> <серія> [--studio назва] [--kind тип] [--json]
   uaanime play <title-id> <серія> [--dry-run]
   uaanime download <title-id> <серія> [--studio назва] [--kind тип] [--quality 1080] [--dir шлях] [--json]
+  uaanime downloads [--dir шлях] [--json]  # що вже збережено на диску
   uaanime doctor [--json]
   uaanime export > backup.json
   uaanime import backup.json

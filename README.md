@@ -138,6 +138,7 @@ uaanime episodes <title-id> [--fresh] --json
 uaanime resolve <title-id> <серія> [--studio назва] [--kind тип] --json
 uaanime play <title-id> <серія> [--dry-run]
 uaanime download <title-id> <серія> [--studio назва] [--kind тип] [--quality 1080] [--dir шлях] [--json]
+uaanime downloads [--dir шлях] [--json]
 uaanime doctor
 uaanime export > backup.json
 uaanime import backup.json
@@ -187,6 +188,21 @@ uaanime version [--json]     # або uaanime --version
   `release_unavailable` або `host_unsupported`. Інший реліз мовчки не підставляється.
 
 Прапорці діють лише на цей запуск: пін, бібліотека й `config.json` не змінюються.
+
+`downloads` показує, що вже лежить у `download_dir` (або в `--dir`): лише читає диск, без
+мережі. Текстом — по рядку на файл (title-id, серія, переклад, якість, шлях). Під `--json` —
+масив тайтлів, відсортований за назвою, серії — за номером, файли — за шляхом:
+
+```json
+[{"id": "anitube:6108-psay", "name": "Псайрен", "folders": ["/…/Псайрен"],
+  "episodes": [{"number": 6, "files": [{"path": "/…/Псайрен - 06 - Рідний Голос [Озв, 1080p].ts",
+     "studio": "Рідний Голос", "kind": "voiceover", "height": 1080, "bytes": 393872408,
+     "modified": "2026-11-16T19:09:58Z", "known": true}]}]}]
+```
+
+`modified` — час зміни файла в UTC (RFC 3339). `known: false` — файл без службового файла
+серії: номер серії й якість узято з імені, `studio` і `kind` порожні. Теки, яких uaanime не
+створював (без службових файлів), не показуються; відсутня папка — порожній масив.
 
 Дані живуть в одному каталозі (`~/Library/Application Support/uaanime` на macOS) —
 `export`/`import` переносять усе.

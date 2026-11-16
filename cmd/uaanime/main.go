@@ -279,6 +279,9 @@ var commands = map[string]command{
 		}
 		return a.cmdDownload(args[1], ep, opt)
 	}},
+	"downloads": {readOnly: true, minArgs: 1, maxArgs: 1, run: func(a *app, _ context.Context, _ []string, opt options) int {
+		return a.cmdDownloads(opt)
+	}},
 }
 
 func run(args []string) (code int) {
