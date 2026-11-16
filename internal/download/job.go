@@ -204,7 +204,7 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 	}
 	q, ok := plan.Pick(j.Height)
 	if !ok {
-		return fmt.Errorf("якості %dp немає (є %v): %w", j.Height, plan.Heights(), errs.ErrNoStream)
+		return fmt.Errorf("якості %dp немає (є %v): %w", j.Height, plan.Heights(), errs.ErrQualityMissing)
 	}
 
 	p.Height, p.Total, p.Exact = q.Height, q.Bytes, q.Exact

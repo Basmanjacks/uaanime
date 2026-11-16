@@ -31,7 +31,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -338,30 +337,13 @@ func (c *Client) Episodes(ctx context.Context, ref provider.TitleRef) ([]provide
 	if err != nil {
 		return nil, err
 	}
-	byEp := map[int]map[provider.Release]bool{}
-	for _, s := range sources {
-		if byEp[s.Episode] == nil {
-			byEp[s.Episode] = map[provider.Release]bool{}
-		}
-		byEp[s.Episode][provider.Release{Studio: s.Studio, Kind: s.Kind}] = true
-	}
-	eps := make([]provider.Episode, 0, len(byEp))
-	for num, rels := range byEp {
-		ep := provider.Episode{Number: num}
-		for r := range rels {
-			ep.Releases = append(ep.Releases, r)
-		}
-		sort.Slice(ep.Releases, func(i, j int) bool {
-			a, b := ep.Releases[i], ep.Releases[j]
-			if a.Studio != b.Studio {
-				return a.Studio < b.Studio
-			}
-			return a.Kind < b.Kind
-		})
-		eps = append(eps, ep)
-	}
-	sort.Slice(eps, func(i, j int) bool { return eps[i].Number < eps[j].Number })
-	return eps, nil
+	return provider.EpisodesFromSources(sources), nil
+}
+
+// TitleSources — реалізація provider.TitleSourcer: сайт і так віддає
+// плейлисти всіх серій одним запитом, Sources лише фільтрує їх.
+func (c *Client) TitleSources(ctx context.Context, ref provider.TitleRef) ([]provider.Source, error) {
+	return c.allSources(ctx, ref)
 }
 
 func (c *Client) Sources(ctx context.Context, ref provider.TitleRef, episode int) ([]provider.Source, error) {

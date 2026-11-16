@@ -378,3 +378,33 @@ func TestEpisodesCacheTTLIsOneHour(t *testing.T) {
 		}
 	}
 }
+
+// Джерела в кеші серій — необов'язкове поле: старий запис без нього
+// читається як і раніше, а джерела лишаються невідомими (nil), не порожніми.
+func TestEpisodeSourcesCacheIsBackwardCompatible(t *testing.T) {
+	s := openTemp(t)
+	ref := provider.TitleRef{Provider: "anitube", Slug: "1-x"}
+	old := []byte(`{"fetched_at":"` + time.Now().Format(time.RFC3339Nano) + `","episodes":[{"number":1,"releases":[{"studio":"A","kind":"dub"}]}]}`)
+	if err := os.MkdirAll(filepath.Dir(s.episodesCachePath(ref)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.episodesCachePath(ref), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	eps, sources, fresh, found := s.LoadEpisodeSources(ref)
+	if !found || !fresh || len(eps) != 1 || sources != nil {
+		t.Fatalf("старий запис: eps=%v sources=%v fresh=%v found=%v", eps, sources, fresh, found)
+	}
+
+	src := []provider.Source{{Studio: "A\x1b[2J", Kind: "weird", Embed: "https://h.invalid/e", Episode: 1}}
+	if err := s.SaveEpisodeSources(ref, eps, src); err != nil {
+		t.Fatal(err)
+	}
+	_, sources, _, _ = s.LoadEpisodeSources(ref)
+	if len(sources) != 1 || sources[0].Studio != "A" || sources[0].Kind != provider.KindMulti || sources[0].Embed != src[0].Embed {
+		t.Fatalf("джерела з диска не очищено: %+v", sources)
+	}
+	if got, _, found := s.LoadEpisodes(ref); !found || !reflect.DeepEqual(got, eps) {
+		t.Fatalf("LoadEpisodes після запису з джерелами: %v", got)
+	}
+}

@@ -30,6 +30,31 @@ var canonicalTitles = []struct {
 	{"title-flat-ova", "1917-na-by-proti-titanv-ova"},                            // OVA, лише плеєр без рівнів студії/типу
 }
 
+// syntheticTitles — фікстури, складені вручну, а не записані з сайту: стан,
+// якого на живому сайті не зловиш на замовлення. FixtureTransport їх віддає,
+// а make record-fixtures не переписує.
+var syntheticTitles = []struct {
+	File string
+	Slug string
+}{
+	// серія 1: обидва релізи на ashdi; серія 2: озвучка Glass Moon лише на
+	// непідтримуваному хості, субтитри K0wbassa на ashdi; серія 3: усі
+	// релізи лише на непідтримуваному хості.
+	{"title-synthetic-hosts", "9000001-synthetic-hosts"},
+}
+
+// fixtureTitles — канонічні й синтетичні тайтли разом, для транспорту.
+func fixtureTitles() []struct{ File, Slug string } {
+	out := make([]struct{ File, Slug string }, 0, len(canonicalTitles)+len(syntheticTitles))
+	for _, ct := range canonicalTitles {
+		out = append(out, struct{ File, Slug string }{ct.File, ct.Slug})
+	}
+	for _, st := range syntheticTitles {
+		out = append(out, struct{ File, Slug string }{st.File, st.Slug})
+	}
+	return out
+}
+
 const (
 	searchFixtureQuery = "фрірен"
 	searchPagedQuery   = "аніме"
@@ -71,7 +96,7 @@ func (t fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 	case strings.HasSuffix(req.URL.Path, "playlists.php"):
 		newsID := req.URL.Query().Get("news_id")
-		for _, ct := range canonicalTitles {
+		for _, ct := range fixtureTitles() {
 			if strings.HasPrefix(ct.Slug, newsID+"-") {
 				return t.serve(ct.File + "-playlists.json")
 			}
@@ -80,7 +105,7 @@ func (t fixtureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		// Головна — джерело обох добірок каталогу (топ сезону і новинки).
 		return t.serve("catalog-fresh.html")
 	default:
-		for _, ct := range canonicalTitles {
+		for _, ct := range fixtureTitles() {
 			if strings.Contains(req.URL.Path, ct.Slug) {
 				return t.serve(ct.File + ".html")
 			}

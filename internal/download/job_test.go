@@ -752,7 +752,7 @@ func TestRunQualityGoneAfterPreflightDoesNotSubstitute(t *testing.T) {
 			return Target{Studio: "A", Kind: provider.KindDub, Name: "Example", Streams: []extractor.Stream{{URL: srv.URL(), Quality: 720, Headers: streamHeaders}}}, nil
 		},
 	}
-	if _, err := run(t.Context(), f, j, nil); !errors.Is(err, errs.ErrNoStream) {
+	if _, err := run(t.Context(), f, j, nil); !errors.Is(err, errs.ErrQualityMissing) {
 		t.Fatalf("quality substituted after preflight: %v", err)
 	}
 	if files := Saved(j.Dir, j.Ref)[1]; len(files) != 0 {

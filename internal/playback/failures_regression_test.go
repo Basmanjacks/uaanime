@@ -17,10 +17,12 @@ func TestAggregateFailuresHasOneClass(t *testing.T) {
 		{"absent", []error{errs.ErrNoStream, errs.ErrNoStream}, errs.ErrNoStream},
 		{"mixed", []error{errs.ErrNoStream, errs.ErrProvider}, errs.ErrProvider},
 		{"mixed offline", []error{errs.ErrOffline, errs.ErrNoStream}, errs.ErrProvider},
+		{"unsupported hosts", []error{errs.ErrHostUnsupported, errs.ErrHostUnsupported}, errs.ErrHostUnsupported},
+		{"unsupported and absent", []error{errs.ErrHostUnsupported, errs.ErrNoStream}, errs.ErrNoStream},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := aggregateFailures(1, tc.failures)
-			for _, class := range []error{errs.ErrOffline, errs.ErrProvider, errs.ErrNoStream} {
+			for _, class := range []error{errs.ErrOffline, errs.ErrProvider, errs.ErrNoStream, errs.ErrHostUnsupported} {
 				if errors.Is(err, class) != errors.Is(tc.want, class) {
 					t.Fatalf("classification %v: %v", class, err)
 				}

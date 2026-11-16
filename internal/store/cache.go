@@ -45,6 +45,11 @@ const episodesTTL = time.Hour
 type episodesCache struct {
 	FetchedAt time.Time          `json:"fetched_at"`
 	Episodes  []provider.Episode `json:"episodes"`
+	// Sources — джерела (embed-сторінки плеєрів, не потоки) тих самих серій,
+	// якщо їх записав `episodes`: за ними без мережі видно, які релізи вміє
+	// хоч один екстрактор. Старі записи поля не мають — тоді джерела
+	// невідомі, і `episodes` перепитує провайдера, а не вгадує.
+	Sources []provider.Source `json:"sources,omitempty"`
 }
 
 func (s *Store) episodesCachePath(ref provider.TitleRef) string {
@@ -61,17 +66,54 @@ func (s *Store) SaveEpisodes(ref provider.TitleRef, eps []provider.Episode) erro
 	})
 }
 
+// SaveEpisodeSources записує серії разом із джерелами, з яких їх зібрано.
+func (s *Store) SaveEpisodeSources(ref provider.TitleRef, eps []provider.Episode, sources []provider.Source) error {
+	if err := os.MkdirAll(filepath.Join(s.dir, "cache"), 0700); err != nil {
+		return err
+	}
+	return WriteAtomic(s.episodesCachePath(ref), &episodesCache{
+		FetchedAt: time.Now(),
+		Episodes:  eps,
+		Sources:   sources,
+	})
+}
+
 // LoadEpisodes повертає кешовані серії; fresh=false означає, що TTL сплив
 // і дані годяться лише як офлайн-fallback.
 func (s *Store) LoadEpisodes(ref provider.TitleRef) (eps []provider.Episode, fresh bool, found bool) {
+	eps, _, fresh, found = s.LoadEpisodeSources(ref)
+	return eps, fresh, found
+}
+
+// LoadEpisodeSources — LoadEpisodes плюс джерела; sources == nil означає, що
+// запис їх не має (старий формат або записаний без них).
+func (s *Store) LoadEpisodeSources(ref provider.TitleRef) (eps []provider.Episode, sources []provider.Source, fresh bool, found bool) {
 	var c episodesCache
 	ok, err := readJSON(s.episodesCachePath(ref), &c)
 	if err != nil || !ok {
-		return nil, false, false
+		return nil, nil, false, false
 	}
 	// Кеш, записаний до появи санітизації, може нести сирі рядки зі сторінки,
 	// а перший кадр домівки й headless `episodes` читають його без провайдера.
-	return provider.CleanEpisodes(c.Episodes), time.Since(c.FetchedAt) < episodesTTL, true
+	return provider.CleanEpisodes(c.Episodes), cleanSources(c.Sources), time.Since(c.FetchedAt) < episodesTTL, true
+}
+
+// cleanSources чистить студію так само, як CleanEpisode, щоб джерела
+// зіставлялися з очищеними релізами; embed лишається як є — він іде лише в
+// extractor.Find, який сам суворо звіряє хост.
+func cleanSources(sources []provider.Source) []provider.Source {
+	if sources == nil {
+		return nil
+	}
+	out := make([]provider.Source, 0, len(sources))
+	for _, src := range sources {
+		src.Studio = provider.CleanText(src.Studio)
+		if !provider.ValidKind(src.Kind) {
+			src.Kind = provider.KindMulti
+		}
+		out = append(out, src)
+	}
+	return out
 }
 
 // Кеш блоків каталогу (топ сезону, свіжі). Оновлюється рідше за серії:

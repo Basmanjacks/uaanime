@@ -25,6 +25,11 @@ func TestErrorText(t *testing.T) {
 		{
 			name: "no stream",
 			err:  fmt.Errorf("серія: %w", errs.ErrNoStream),
+			want: MsgNoStream,
+		},
+		{
+			name: "host unsupported",
+			err:  fmt.Errorf("embed: %w", errs.ErrHostUnsupported),
 			want: MsgNoPlayableHost,
 		},
 		{
@@ -88,5 +93,35 @@ func TestDebugDiagnosticsAreOptInAndClean(t *testing.T) {
 	}
 	if got := ErrorTextWithDebug(err, false); got != ErrorText(err) {
 		t.Fatalf("default: %q", got)
+	}
+}
+
+// Коди --json — контракт для скриптів: кожен клас має свій код, підклас
+// перемагає загальний, невідоме — internal.
+func TestErrorCode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		err  error
+		want string
+	}{
+		{errs.ErrOffline, CodeOffline},
+		{errs.WithClass(errs.ErrOffline, errors.New("dial")), CodeOffline},
+		{errs.ErrProvider, CodeProvider},
+		{errs.ErrNoStream, CodeNoStream},
+		{errs.ErrHostUnsupported, CodeHostUnsupported},
+		{errs.WithClass(errs.ErrHostUnsupported, errors.New("embed")), CodeHostUnsupported},
+		{errs.ErrReleaseUnavailable, CodeReleaseUnavailable},
+		{errs.ErrQualityMissing, CodeQualityMissing},
+		{errs.ErrCancelled, CodeCancelled},
+		{errs.ErrAlreadySaved, "already_saved"},
+		{errs.ErrStoreBusy, "store_busy"},
+		{errs.ErrPlayerStart, "player"},
+		{errors.New("невідома помилка"), CodeInternal},
+	}
+	for _, tt := range tests {
+		err := fmt.Errorf("контекст: %w", tt.err)
+		if got := ErrorCode(err); got != tt.want {
+			t.Errorf("ErrorCode(%v) = %q, want %q", err, got, tt.want)
+		}
 	}
 }

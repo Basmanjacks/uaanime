@@ -8,37 +8,48 @@ const (
 	MsgUsage = `використання:
   uaanime                              # TUI
   uaanime search <запит> [--json]
-  uaanime episodes <title-id> [--json]
+  uaanime episodes <title-id> [--fresh] [--json]
   uaanime resolve <title-id> <серія> [--json]
   uaanime play <title-id> <серія> [--dry-run]
   uaanime download <title-id> <серія> [--quality 1080] [--dir шлях] [--json]
   uaanime doctor [--json]
   uaanime export > backup.json
   uaanime import backup.json
-  --debug                              # технічні подробиці помилок`
-	MsgBadEpisode       = "номер серії має бути додатним числом, отримано: %s"
-	MsgBadTitleID       = "невалідний ідентифікатор тайтлу: %s"
-	MsgNothingFound     = "нічого не знайдено"
-	MsgResolving        = "Шукаю джерела, серія %d…"
-	MsgPickedSource     = "Обрано: %s (%s), хост %s"
-	MsgNoPlayableHost   = "для серії є релізи, але жоден відеохост поки не підтримується"
-	MsgLaunchingPlayer  = "Запускаю плеєр…"
-	MsgPlayerFailed     = "не вдалося запустити плеєр: %v"
-	MsgPlayerFallback   = "Бажаний плеєр не знайдено — граю через %s"
-	MsgNoPlayer         = "не знайдено підтримуваного відеоплеєра"
-	MsgInstallHintMac   = "встанови: brew install --cask vlc або brew install mpv"
-	MsgInstallHintLinux = "встанови vlc або mpv з пакетного менеджера дистрибутива"
-	MsgProviderFailed   = "джерело недоступне: %v"
-	MsgTryingNext       = "Джерело недоступне, пробую інше…"
-	MsgResume           = "Продовжую з %02d:%02d"
-	MsgEpisodeDone      = "Серію %d завершено"
-	MsgProgressSaved    = "Прогрес збережено: %02d:%02d"
-	MsgStudioPinned     = "Студію закріплено за тайтлом: %s"
-	MsgNeedTTY          = "TUI потребує термінала; headless-команди: search/episodes/resolve/play/download/doctor/export/import"
-	MsgImported         = "Бібліотеку відновлено з бекапа (попередня — library.json.bak)"
-	MsgOffline          = "немає з'єднання — перевір інтернет"
-	MsgInternalError    = "внутрішня помилка: %v"
-	MsgOfflineCache     = "Немає мережі — показую збережені дані"
+  uaanime version [--json]             # або --version
+  --debug                              # технічні подробиці помилок
+  --json                               # помилки — одним JSON-рядком на stderr`
+	MsgBadEpisode     = "номер серії має бути додатним числом, отримано: %s"
+	MsgBadTitleID     = "невалідний ідентифікатор тайтлу: %s"
+	MsgNothingFound   = "нічого не знайдено"
+	MsgResolving      = "Шукаю джерела, серія %d…"
+	MsgPickedSource   = "Обрано: %s (%s), хост %s"
+	MsgNoPlayableHost = "для серії є релізи, але жоден відеохост поки не підтримується"
+	// MsgNoStream — серії чи потоку немає зовсім; непідтримуваний хост —
+	// окремий випадок із власним текстом (MsgNoPlayableHost).
+	MsgNoStream           = "для серії не знайдено відео"
+	MsgReleaseUnavailable = "запитаного релізу для серії немає або він зараз недоступний"
+	MsgQualityMissing     = "запитаної якості в релізі немає"
+	// MsgEpisodeReleaseUnplayable — реліз у текстовому виводі `episodes`, для
+	// якого немає жодного екстрактора: студія, тип.
+	MsgEpisodeReleaseUnplayable = "%s (%s, хост не підтримується)"
+	MsgVersion                  = "uaanime %s"
+	MsgLaunchingPlayer          = "Запускаю плеєр…"
+	MsgPlayerFailed             = "не вдалося запустити плеєр: %v"
+	MsgPlayerFallback           = "Бажаний плеєр не знайдено — граю через %s"
+	MsgNoPlayer                 = "не знайдено підтримуваного відеоплеєра"
+	MsgInstallHintMac           = "встанови: brew install --cask vlc або brew install mpv"
+	MsgInstallHintLinux         = "встанови vlc або mpv з пакетного менеджера дистрибутива"
+	MsgProviderFailed           = "джерело недоступне: %v"
+	MsgTryingNext               = "Джерело недоступне, пробую інше…"
+	MsgResume                   = "Продовжую з %02d:%02d"
+	MsgEpisodeDone              = "Серію %d завершено"
+	MsgProgressSaved            = "Прогрес збережено: %02d:%02d"
+	MsgStudioPinned             = "Студію закріплено за тайтлом: %s"
+	MsgNeedTTY                  = "TUI потребує термінала; headless-команди: search/episodes/resolve/play/download/doctor/export/import/version"
+	MsgImported                 = "Бібліотеку відновлено з бекапа (попередня — library.json.bak)"
+	MsgOffline                  = "немає з'єднання — перевір інтернет"
+	MsgInternalError            = "внутрішня помилка: %v"
+	MsgOfflineCache             = "Немає мережі — показую збережені дані"
 
 	// doctor
 	MsgDoctorPlayerOK      = "%s: знайдено"

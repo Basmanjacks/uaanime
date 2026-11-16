@@ -270,6 +270,10 @@ func TestDownloadJSON(t *testing.T) {
 	if got.Seconds < 0 {
 		t.Fatalf("seconds = %v", got.Seconds)
 	}
+	// Який реліз прийшов — те саме, що в sidecar, без читання sidecar.
+	if got.ID != fixtureTitleID || got.Episode != 1 || got.Studio != f.Studio || got.Kind != f.Kind || got.Studio == "" {
+		t.Fatalf("JSON = %+v, очікував id=%s episode=1 studio=%q kind=%q", got, fixtureTitleID, f.Studio, f.Kind)
+	}
 }
 
 // Збережена серія грає з диска: у команді плеєра — шлях до файла і жодного

@@ -11,7 +11,8 @@ builds:
     # -trimpath: шляхи збірки не залежать від машини (відтворюваність) і не
     # тягнуть у бінарник абсолютні шляхи GOPATH — мінус ~33 КБ.
     flags: [-trimpath]
-    ldflags: ["-s", "-w"]
+    # main.version — те, що друкують `uaanime version` і `--version`.
+    ldflags: ["-s", "-w", "-X main.version={{ .Tag }}"]
 
 archives:
   - formats: [tar.gz]

@@ -6,6 +6,7 @@ package provider
 import (
 	"context"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 )
@@ -108,6 +109,43 @@ type Provider interface {
 // отримують ref лише зі слага, а назва потрібна для папки на диску й для бібліотеки.
 type Namer interface {
 	TitleName(ctx context.Context, ref TitleRef) (string, error)
+}
+
+// TitleSourcer — провайдер, що віддає джерела ВСІХ серій тайтлу одним
+// запитом. Опційний: `episodes` позначає за ним релізи, які вміє хоч один
+// екстрактор, не роблячи окремого запиту на кожну серію. Контракт:
+// EpisodesFromSources(TitleSources(ref)) дорівнює Episodes(ref).
+type TitleSourcer interface {
+	TitleSources(ctx context.Context, ref TitleRef) ([]Source, error)
+}
+
+// EpisodesFromSources групує джерела в серії: по одному релізу на пару
+// (студія, тип), релізи за студією й типом, серії за номером.
+func EpisodesFromSources(sources []Source) []Episode {
+	byEp := map[int]map[Release]bool{}
+	for _, s := range sources {
+		if byEp[s.Episode] == nil {
+			byEp[s.Episode] = map[Release]bool{}
+		}
+		byEp[s.Episode][Release{Studio: s.Studio, Kind: s.Kind}] = true
+	}
+	eps := make([]Episode, 0, len(byEp))
+	for num, rels := range byEp {
+		ep := Episode{Number: num}
+		for r := range rels {
+			ep.Releases = append(ep.Releases, r)
+		}
+		sort.Slice(ep.Releases, func(i, j int) bool {
+			a, b := ep.Releases[i], ep.Releases[j]
+			if a.Studio != b.Studio {
+				return a.Studio < b.Studio
+			}
+			return a.Kind < b.Kind
+		})
+		eps = append(eps, ep)
+	}
+	sort.Slice(eps, func(i, j int) bool { return eps[i].Number < eps[j].Number })
+	return eps
 }
 
 // --- Санітизація недовірених рядків ---

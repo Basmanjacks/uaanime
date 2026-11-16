@@ -19,13 +19,18 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/store"
 )
 
-// downloadResult — єдиний об'єкт, який команда друкує під --json. Ті самі
-// чотири поля, що показує людині фінальний рядок, тільки без форматування.
+// downloadResult — єдиний об'єкт, який команда друкує під --json: що
+// збережено (те саме, що пишеться в sidecar) і скільки це зайняло.
 type downloadResult struct {
 	Path    string  `json:"path"`
 	Bytes   int64   `json:"bytes"`
 	Height  int     `json:"height"`
 	Seconds float64 `json:"seconds"`
+	// ID — title-id у формі, яку приймають інші команди (anitube:<слаг>).
+	ID      string        `json:"id"`
+	Episode int           `json:"episode"`
+	Studio  string        `json:"studio"`
+	Kind    provider.Kind `json:"kind"`
 }
 
 // planTimeout — скільки чекаємо на резолюцію з планом при перевірці --quality.
@@ -49,8 +54,7 @@ func (a *app) cmdDownload(id string, ep int, opt options) int {
 	}
 	dir, ok := downloadTargetDir(opt.dir, a.cfg.DownloadDir)
 	if !ok {
-		errln(i18n.MsgUsage)
-		return 2
+		return usageError(a.json)
 	}
 	// Назва тайтлу здобувається ДО підказок: з неї завантажувач збирає ім'я
 	// папки, ім'я файла, sidecar і marker. Окремий короткий тайм-аут — качати
@@ -136,7 +140,7 @@ func (a *app) checkQuality(ctx context.Context, f *httpx.Fetcher, resolve downlo
 	for _, h := range heights {
 		labels = append(labels, i18n.QualityLabel(h))
 	}
-	errf(i18n.MsgDownloadQualityMissing+"\n", height, strings.Join(labels, ", "))
+	a.fail(i18n.CodeQualityMissing, fmt.Sprintf(i18n.MsgDownloadQualityMissing, height, strings.Join(labels, ", ")))
 	return 1, false
 }
 
@@ -157,7 +161,7 @@ func (a *app) watchDownload(ctx context.Context, mgr *download.Manager, jobID in
 			// Завдання зникло зі знімка — такого не буває без Forget, якого
 			// в CLI немає, але мовчки крутитися вічно гірше за чесний вихід.
 			pr.clear()
-			errln(i18n.MsgDownloadCancelled)
+			a.fail(i18n.CodeCancelled, i18n.MsgDownloadCancelled)
 			return 1
 		case p.State == download.StateDone:
 			pr.clear()
@@ -167,13 +171,17 @@ func (a *app) watchDownload(ctx context.Context, mgr *download.Manager, jobID in
 					Bytes:   p.Bytes,
 					Height:  p.Height,
 					Seconds: roundSeconds(time.Since(started)),
+					ID:      titleID(p.Ref),
+					Episode: p.Episode,
+					Studio:  p.Release.Studio,
+					Kind:    p.Release.Kind,
 				})
 			}
 			outf(i18n.MsgDownloadDone+"\n", p.Path)
 			return 0
 		case p.State == download.StateCancelled:
 			pr.clear()
-			errln(i18n.MsgDownloadCancelled)
+			a.fail(i18n.CodeCancelled, i18n.MsgDownloadCancelled)
 			return 1
 		case p.State == download.StateFailed:
 			pr.clear()
@@ -190,7 +198,7 @@ func (a *app) watchDownload(ctx context.Context, mgr *download.Manager, jobID in
 			// після Ctrl+C на диску не лишається ані огризка, ані плейсхолдера.
 			pr.clear()
 			mgr.Close()
-			errln(i18n.MsgDownloadCancelled)
+			a.fail(i18n.CodeCancelled, i18n.MsgDownloadCancelled)
 			return 1
 		}
 	}

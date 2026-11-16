@@ -14,6 +14,8 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -56,6 +58,36 @@ func outln(a ...any)               { _, _ = fmt.Fprintln(stdout, a...) }
 func errf(format string, a ...any) { _, _ = fmt.Fprintf(stderr, format, a...) }
 func errln(a ...any)               { _, _ = fmt.Fprintln(stderr, a...) }
 
+// jsonError — форма помилки під --json: рівно один рядок на stderr.
+type jsonError struct {
+	Error jsonErrorBody `json:"error"`
+}
+
+type jsonErrorBody struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// fail друкує помилку команди: людині — текстом, під --json — одним
+// JSON-рядком {"error":{"code":…,"message":…}} з тим самим текстом. Обидва
+// варіанти йдуть лише на stderr; код виходу вирішує викликач.
+func fail(jsonOut bool, code, text string) {
+	if !jsonOut {
+		errln(text)
+		return
+	}
+	enc := json.NewEncoder(stderr)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(jsonError{Error: jsonErrorBody{Code: code, Message: text}}); err != nil {
+		errln(text)
+	}
+}
+
+// failErr — fail для помилки з класом: код і текст з однієї таблиці i18n.
+func failErr(jsonOut, debug bool, err error) {
+	fail(jsonOut, i18n.ErrorCode(err), i18n.ErrorTextWithDebug(err, debug))
+}
+
 type app struct {
 	provider   provider.Provider
 	extractors []extractor.Extractor
@@ -65,6 +97,8 @@ type app struct {
 	dataDir    string
 	writer     io.Closer
 	debug      bool
+	// json — команду запущено з --json: помилки друкуються JSON-рядком.
+	json bool
 	// rt — транспорт, на якому зібрано застосунок (nil = мережа). Тримаємо
 	// його, бо завантажувач будує власний http.Client із власною політикою
 	// редиректів і не може перевикористати httpx.NewClient — а фікстури й
@@ -180,6 +214,10 @@ type options struct {
 	quality int
 	// dir — папка призначення для download; порожнє = з налаштувань.
 	dir string
+	// fresh — episodes в обхід кешу метаданих.
+	fresh bool
+	// version — --version: надрукувати версію замість будь-якої команди.
+	version bool
 }
 
 // command — одна headless-команда. args завжди починається з імені команди,
@@ -213,17 +251,17 @@ var commands = map[string]command{
 		return a.cmdSearch(ctx, strings.Join(args[1:], " "), opt.json)
 	}},
 	"episodes": {readOnly: true, minArgs: 2, maxArgs: 2, run: func(a *app, ctx context.Context, args []string, opt options) int {
-		return a.cmdEpisodes(ctx, args[1], opt.json)
+		return a.cmdEpisodes(ctx, args[1], opt)
 	}},
 	"resolve": {readOnly: true, minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
-		ep, ok := parseEpisode(args[2])
+		ep, ok := parseEpisode(args[2], opt.json)
 		if !ok {
 			return 2
 		}
 		return a.cmdResolve(ctx, args[1], ep, opt.json)
 	}},
 	"play": {minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
-		ep, ok := parseEpisode(args[2])
+		ep, ok := parseEpisode(args[2], opt.json)
 		if !ok {
 			return 2
 		}
@@ -233,7 +271,7 @@ var commands = map[string]command{
 	// в каталог даних, тож lease письменника їй не потрібен і вона працює
 	// паралельно з відкритим TUI.
 	"download": {readOnly: true, minArgs: 3, maxArgs: 3, run: func(a *app, _ context.Context, args []string, opt options) int {
-		ep, ok := parseEpisode(args[2])
+		ep, ok := parseEpisode(args[2], opt.json)
 		if !ok {
 			return 2
 		}
@@ -246,14 +284,18 @@ func run(args []string) (code int) {
 	// жоден panic не долітає до користувача — ані з TUI, ані з headless-команди
 	defer func() {
 		if r := recover(); r != nil {
-			errln(i18n.MsgInternalFailure)
+			text := i18n.MsgInternalFailure
 			if opt.debug {
-				errln(provider.CleanText(fmt.Sprint(r)))
+				text += "\n" + provider.CleanText(fmt.Sprint(r))
 			}
+			fail(opt.json, i18n.CodeInternal, text)
 			code = 1
 		}
 	}()
 
+	// --json шукається заздалегідь: помилка вжитку в прапорці перед ним теж
+	// має прийти JSON-рядком.
+	opt.json = slices.Contains(args, "--json")
 	var positional []string
 	// Індексний цикл, а не range: --quality і --dir приймають значення як
 	// окремим аргументом, так і через `=`. Невідомі --x лишаються позиційними,
@@ -267,50 +309,92 @@ func run(args []string) (code int) {
 			opt.dryRun = true
 		case a == "--debug":
 			opt.debug = true
+		case a == "--fresh":
+			opt.fresh = true
+		case a == "--version":
+			opt.version = true
 		case isFlag(a, "--quality"):
 			v, ok := flagValue(args, &i, "--quality")
 			if !ok {
-				errln(i18n.MsgUsage)
-				return 2
+				return usageError(opt.json)
 			}
 			n, err := strconv.Atoi(v)
 			if err != nil || n <= 0 {
-				errln(i18n.MsgUsage)
-				return 2
+				return usageError(opt.json)
 			}
 			opt.quality = n
 		case isFlag(a, "--dir"):
 			v, ok := flagValue(args, &i, "--dir")
 			if !ok {
-				errln(i18n.MsgUsage)
-				return 2
+				return usageError(opt.json)
 			}
 			opt.dir = v
 		default:
 			positional = append(positional, a)
 		}
 	}
+	// --version важливіший за будь-яку команду і не потребує каталогу даних
+	if opt.version {
+		return cmdVersion(opt.json)
+	}
 	// без аргументів — TUI (потрібен термінал)
 	if len(positional) == 0 {
 		return runTUI(opt.debug)
 	}
+	if positional[0] == "version" {
+		if len(positional) != 1 {
+			return usageError(opt.json)
+		}
+		return cmdVersion(opt.json)
+	}
 
 	cmd, ok := commands[positional[0]]
 	if !ok || len(positional) < cmd.minArgs || (cmd.maxArgs > 0 && len(positional) > cmd.maxArgs) {
-		errln(i18n.MsgUsage)
-		return 2
+		return usageError(opt.json)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	a, err := newApp(cmd.readOnly || (positional[0] == "play" && opt.dryRun))
 	if err != nil {
-		errln(i18n.ErrorTextWithDebug(err, opt.debug))
+		failErr(opt.json, opt.debug, err)
 		return 1
 	}
 	defer a.Close()
 	a.debug = opt.debug
+	a.json = opt.json
 	return cmd.run(a, ctx, positional, opt)
+}
+
+// usageError — помилка вжитку: довідка (або її JSON-форма) і код 2.
+func usageError(jsonOut bool) int {
+	fail(jsonOut, i18n.CodeUsage, i18n.MsgUsage)
+	return 2
+}
+
+// version — версія збірки. Реліз підставляє її через
+// -ldflags "-X main.version=<тег>" (.goreleaser.yaml); без цього береться
+// версія модуля, яку Go вшиває з git (go build / go install), інакше "dev".
+var version = ""
+
+func buildVersion() string {
+	if version != "" {
+		return version
+	}
+	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+		return info.Main.Version
+	}
+	return "dev"
+}
+
+func cmdVersion(jsonOut bool) int {
+	if jsonOut {
+		return printJSON(struct {
+			Version string `json:"version"`
+		}{buildVersion()})
+	}
+	outf(i18n.MsgVersion+"\n", buildVersion())
+	return 0
 }
 
 // isFlag розпізнає обидві форми прапорця зі значенням: `--x V` і `--x=V`.
@@ -550,10 +634,10 @@ func (a *app) cmdImport(path string) int {
 	return 0
 }
 
-func parseEpisode(s string) (int, bool) {
+func parseEpisode(s string, jsonOut bool) (int, bool) {
 	ep, err := strconv.Atoi(s)
 	if err != nil || ep < 1 {
-		errf(i18n.MsgBadEpisode+"\n", s)
+		fail(jsonOut, i18n.CodeUsage, fmt.Sprintf(i18n.MsgBadEpisode, s))
 		return 0, false
 	}
 	return ep, true
@@ -565,7 +649,7 @@ func (a *app) refFromID(id string) (provider.TitleRef, bool) {
 	slug := strings.TrimPrefix(id, a.provider.ID()+":")
 	ref, err := anitube.RefFromSlug(slug)
 	if err != nil {
-		errf(i18n.MsgBadTitleID+"\n", id)
+		fail(a.json, i18n.CodeUsage, fmt.Sprintf(i18n.MsgBadTitleID, id))
 		return provider.TitleRef{}, false
 	}
 	return ref, true
@@ -632,25 +716,29 @@ func cardRating(card provider.TitleCard) string {
 	return "★" + strconv.FormatFloat(card.Rating, 'f', -1, 64)
 }
 
-func (a *app) cmdEpisodes(ctx context.Context, id string, jsonOut bool) int {
+func (a *app) cmdEpisodes(ctx context.Context, id string, opt options) int {
 	ref, ok := a.refFromID(id)
 	if !ok {
 		return 2
 	}
-	eps, offline, err := a.engine().EpisodesCached(ctx, ref)
+	eps, offline, err := a.engine().EpisodeListing(ctx, ref, opt.fresh)
 	if err != nil {
 		a.printCommandError(err)
 		return 1
 	}
-	if offline && !jsonOut {
+	if offline && !opt.json {
 		errln(i18n.MsgOfflineCache)
 	}
-	if jsonOut {
+	if opt.json {
 		return printJSON(eps)
 	}
 	for _, e := range eps {
 		parts := make([]string, 0, len(e.Releases))
 		for _, r := range e.Releases {
+			if r.Playable != nil && !*r.Playable {
+				parts = append(parts, fmt.Sprintf(i18n.MsgEpisodeReleaseUnplayable, r.Studio, r.Kind))
+				continue
+			}
 			parts = append(parts, fmt.Sprintf("%s (%s)", r.Studio, r.Kind))
 		}
 		outf("%d\t%s\n", e.Number, strings.Join(parts, ", "))
@@ -680,7 +768,10 @@ func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) i
 	return 0
 }
 
-func (a *app) printCommandError(err error) { errln(i18n.ErrorTextWithDebug(err, a.debug)) }
+func (a *app) printCommandError(err error) { failErr(a.json, a.debug, err) }
+
+// fail — помилка команди без класу-сентинела (вжиток, якість, скасування).
+func (a *app) fail(code, text string) { fail(a.json, code, text) }
 
 func (a *app) engine() *playback.Engine {
 	eng := a.engineWithoutPlayer()
@@ -842,6 +933,8 @@ func printJSON(v any) int {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
+		// Запис на stdout зламався посеред об'єкта (закритий пайп): JSON-помилка
+		// тут нічого не врятує, тож лишається текст.
 		errln(i18n.ErrorText(err))
 		return 1
 	}

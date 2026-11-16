@@ -243,7 +243,11 @@ func (e *Engine) ReleaseChoicesWith(ctx context.Context, ref provider.TitleRef, 
 	}
 	choices := library.ReleaseChoices(append(local, e.playable(sources)...))
 	if len(choices) == 0 {
-		return nil, fmt.Errorf("серія %d: немає відтворюваних студій: %w", ep, errs.ErrNoStream)
+		class := errs.ErrNoStream
+		if len(sources) > 0 {
+			class = errs.ErrHostUnsupported
+		}
+		return nil, fmt.Errorf("серія %d: немає відтворюваних студій: %w", ep, class)
 	}
 	return choices, nil
 }
@@ -360,7 +364,7 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 		}
 		ex, ok := extractor.Find(e.Extractors, chosen.Embed)
 		if !ok {
-			failures = append(failures, fmt.Errorf("embed %q: немає підтримуваного екстрактора: %w", chosen.Embed, errs.ErrNoStream))
+			failures = append(failures, fmt.Errorf("embed %q: немає підтримуваного екстрактора: %w", chosen.Embed, errs.ErrHostUnsupported))
 			remaining = without(remaining, *chosen)
 			continue
 		}
@@ -440,7 +444,7 @@ func (e *Engine) ResolveAll(ctx context.Context, ref provider.TitleRef, ep int) 
 	for _, src := range sources {
 		ex, ok := extractor.Find(e.Extractors, src.Embed)
 		if !ok {
-			failures = append(failures, fmt.Errorf("embed %q: немає підтримуваного екстрактора: %w", src.Embed, errs.ErrNoStream))
+			failures = append(failures, fmt.Errorf("embed %q: немає підтримуваного екстрактора: %w", src.Embed, errs.ErrHostUnsupported))
 			continue
 		}
 		streams, err := ex.Extract(ctx, src.Embed, src.Referer)
@@ -464,19 +468,27 @@ func (e *Engine) ResolveAll(ctx context.Context, ref provider.TitleRef, ep int) 
 }
 
 func aggregateFailures(ep int, failures []error) error {
-	offline, noStream := 0, 0
+	offline, noStream, unsupported := 0, 0, 0
 	for _, err := range failures {
 		switch {
 		case errs.Offline(err):
 			offline++
 		case errors.Is(err, errs.ErrNoStream):
 			noStream++
+			if errors.Is(err, errs.ErrHostUnsupported) {
+				unsupported++
+			}
 		}
 	}
 	class := errs.ErrProvider
-	if len(failures) > 0 && offline == len(failures) {
+	switch {
+	case len(failures) == 0:
+	case offline == len(failures):
 		class = errs.ErrOffline
-	} else if len(failures) > 0 && noStream == len(failures) {
+	case unsupported == len(failures):
+		// Усі релізи серії лежать на хостах, яких не вміє жоден екстрактор.
+		class = errs.ErrHostUnsupported
+	case noStream == len(failures):
 		class = errs.ErrNoStream
 	}
 	return fmt.Errorf("серія %d: жодне джерело не дало потоку: %w", ep, errs.WithClass(class, errors.Join(failures...)))

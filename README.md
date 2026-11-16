@@ -134,19 +134,44 @@ Headless-команди (для скриптів і перевірок):
 
 ```bash
 uaanime search "фрірен" --json
-uaanime episodes <title-id> --json
+uaanime episodes <title-id> [--fresh] --json
 uaanime resolve <title-id> <серія> --json
 uaanime play <title-id> <серія> [--dry-run]
 uaanime download <title-id> <серія> [--quality 1080] [--dir шлях] [--json]
 uaanime doctor
 uaanime export > backup.json
 uaanime import backup.json
+uaanime version [--json]     # або uaanime --version
 ```
+
+`episodes --json` дає кожному релізу серії поле `playable`: `true`, якщо хоч одне його
+джерело лежить на відеохості, який uaanime уміє відтворити, і `false`, якщо реліз є на
+сайті, але лише на непідтримуваному хості (`resolve` і `download` його не повернуть).
+Перевірка без мережі, за адресою плеєра. Поля немає лише тоді, коли це невідомо: немає
+мережі, а кеш записано старою версією. У текстовому виводі такі релізи позначені «хост не
+підтримується». Список серій кешується на годину; `--fresh` іде на сайт в обхід кешу.
+
+Під `--json` помилка будь-якої headless-команди — один рядок на stderr, stdout порожній,
+код виходу той самий (1 — збій, 2 — помилка вжитку):
+
+```json
+{"error":{"code":"host_unsupported","message":"для серії є релізи, але жоден відеохост поки не підтримується"}}
+```
+
+`message` — той самий текст, що без `--json`. Коди: `offline` (немає мережі), `provider`
+(сайт не відповів як слід), `no_stream` (серії чи потоку немає), `host_unsupported` (релізи
+є, але жоден відеохост не підтримується), `release_unavailable` (запитаного релізу немає),
+`quality_missing` (запитаної якості немає), `cancelled`, `usage` (неправильні аргументи),
+`internal`; для завантаження ще `already_saved`, `download_busy`, `disk_full`,
+`no_write_access`, `stream_encrypted`, `stream_unsupported`, `stream_expired`, а також
+`store_busy`, `no_player`, `player`, `saved_file_missing`.
 
 `download` зберігає одну серію у `download_dir` (або в `--dir`): без `--quality` береться
 найкраща доступна, у процесі друкується рядок прогресу. `Ctrl+C` перериває завантаження
 і прибирає незавершений файл — на диску не лишається нічого.
 Числова `--quality` означає точну якість: якщо вона недоступна, інша не підставляється.
+Під `--json` команда друкує один об'єкт: `path`, `bytes`, `height`, `seconds` і що саме
+збережено — `id`, `episode`, `studio`, `kind` (ті самі значення, що в службовому файлі серії).
 
 Дані живуть в одному каталозі (`~/Library/Application Support/uaanime` на macOS) —
 `export`/`import` переносять усе.
