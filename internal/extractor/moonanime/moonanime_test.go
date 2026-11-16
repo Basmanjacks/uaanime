@@ -156,7 +156,7 @@ func TestContract(t *testing.T) {
 	extractortest.Run(t,
 		func(c *http.Client) extractor.Extractor { return New(c) },
 		extractortest.Case{
-			Host:        host,
+			Host:        hosts[0],
 			Embed:       "https://moonanime.art/iframe/twgwasggpzgkktvozfktjplgtpax",
 			FixtureDir:  "testdata",
 			WantStreams: 1,
@@ -172,6 +172,58 @@ func TestContract(t *testing.T) {
 				}
 			},
 		})
+}
+
+// moonanime.net — новий домен того самого сервісу (записано 2026-11-16,
+// «Крісло-танк», серія 5, Glass Moon): плеєр video.js, але конфіг упакований
+// тим самим алгоритмом. Потік — на s.moonanime.net, Referer — домен embed-а.
+func TestContractNet(t *testing.T) {
+	const embed = "https://moonanime.net/iframe/ulsz91f5t64i2umt6yb2"
+	extractortest.Run(t,
+		func(c *http.Client) extractor.Extractor { return New(c) },
+		extractortest.Case{
+			Host:        hosts[1],
+			Embed:       embed,
+			FixtureDir:  "testdata/net",
+			WantStreams: 1,
+			WantHeader: map[string]string{
+				"Referer":         "https://moonanime.net/",
+				"User-Agent":      httpx.UserAgent,
+				"Accept":          "*/*",
+				"Accept-Language": acceptLanguage,
+			},
+			ExtraFixtureCheck: func(t *testing.T, streams []extractor.Stream) {
+				const prefix = "https://s.moonanime.net/content/stream/anime/19/ulsz91f5t64i2umt6yb2/hls/"
+				if !strings.HasPrefix(streams[0].URL, prefix) || !strings.Contains(streams[0].URL, "hls:manifest.m3u8?") || streams[0].Quality != 0 {
+					t.Fatalf("stream = %+v", streams[0])
+				}
+			},
+		})
+
+	// Обидва домени через спільний FixtureTransport — так їх бачить застосунок.
+	streams, err := New(&http.Client{Transport: FixtureTransport("testdata")}).Extract(t.Context(), embed, "https://anitube.in.ua/")
+	if err != nil || len(streams) != 1 || streams[0].Headers["Referer"] != "https://moonanime.net/" {
+		t.Fatalf("FixtureTransport для moonanime.net: %+v, %v", streams, err)
+	}
+}
+
+func TestHandlesBothDomainsOnly(t *testing.T) {
+	e := New(http.DefaultClient)
+	for embed, want := range map[string]bool{
+		"https://moonanime.art/iframe/x":   true,
+		"https://moonanime.net/iframe/x":   true,
+		"https://moonanime.vip/iframe/x":   false,
+		"https://x.moonanime.net/iframe/x": false,
+		"http://moonanime.net/iframe/x":    false,
+		"https://fenixplay.xyz/vod/x":      false,
+	} {
+		if got := e.Handles(embed); got != want {
+			t.Errorf("Handles(%q) = %v, want %v", embed, got, want)
+		}
+	}
+	if _, err := e.Extract(t.Context(), "https://moonanime.vip/iframe/x", ""); !errors.Is(err, errs.ErrProvider) {
+		t.Fatalf("Extract чужого домену: %v", err)
+	}
 }
 
 // Хост віддає потік лише запиту, схожому на браузерний: без Accept-Language

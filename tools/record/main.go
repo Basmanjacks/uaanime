@@ -24,7 +24,7 @@ func main() { os.Exit(run()) }
 // не виконується (контекст лишається живим до завершення процесу).
 func run() int {
 	onlyNew := flag.Bool("new", false, "записати лише нові фікстури AniTube")
-	only := flag.String("only", "", "записати лише один крок за іменем (anitube, ashdi, tortuga, moonanime)")
+	only := flag.String("only", "", "записати лише один крок за іменем (anitube, ashdi, tortuga, moonanime, moonanime-net)")
 	title := flag.String("title", "", "записати лише одну канонічну фікстуру тайтлу AniTube за іменем файла (напр. title-studio-error)")
 	flag.Parse()
 	if (*onlyNew && *only != "") || (*title != "" && (*onlyNew || *only != "")) {
@@ -69,6 +69,7 @@ func run() int {
 		{"ashdi", "internal/extractor/ashdi/testdata", ashdi.RecordFixtures},
 		{"tortuga", "internal/extractor/tortuga/testdata", tortuga.RecordFixtures},
 		{"moonanime", "internal/extractor/moonanime/testdata", moonanime.RecordFixtures},
+		{"moonanime-net", "internal/extractor/moonanime/testdata/net", moonanime.RecordNetFixtures},
 	}
 	if *only != "" {
 		// запис однієї фікстури не має переписувати решту з живих сайтів

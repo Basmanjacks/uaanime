@@ -1,4 +1,15 @@
-// Package moonanime — екстрактор відеохоста moonanime.art.
+// Package moonanime — екстрактор відеохоста MoonAnime: moonanime.art і його
+// новий домен moonanime.net.
+//
+// Домен moonanime.net, перевірено 2026-11-16 («Крісло-танк», 6097, серія 5, Glass
+// Moon): той самий сервіс — moonanime.art/iframe/<id> віддає для того самого id
+// ту саму сторінку з <meta name="ma-site" content="https://moonanime.net">. Плеєр
+// тепер video.js (статика ?v=0.12.0), але конфіг упакований тим самим
+// алгоритмом (atob-блоб → ключ _0xd → rawVideo/file), розбір нижче не змінився.
+// /iframe/<id> так само відповідає 400 без Accept і Accept-Language. rawVideo —
+// master-плейлист на s.moonanime.net (hls:manifest.m3u8?expires=…&sig=…),
+// сегменти на s2.mooncdn.wtf; шифрування (EXT-X-KEY) немає. Referer потоку —
+// домен embed-а.
 //
 // Структура embed-сторінки, перевірена 2026-09-02 (плеєр Plyr + hls.js, статика ?v=0.18.1):
 //
@@ -30,6 +41,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -40,7 +52,19 @@ import (
 	"github.com/Basmanjacks/uaanime/internal/httpx"
 )
 
-const host = "moonanime.art"
+// hosts — домени того самого сервісу; перший — канонічний (фікстура, запис).
+var hosts = []string{"moonanime.art", "moonanime.net"}
+
+// embedHost — домен embed-а, якщо це один із hosts. Потік віддається з Referer
+// того домену, з якого відкрито плеєр.
+func embedHost(embed string) (string, bool) {
+	for _, h := range hosts {
+		if extractor.HostIs(embed, h) {
+			return h, true
+		}
+	}
+	return "", false
+}
 
 // acceptLanguage — без ком: mpv отримує заголовки списком через кому
 // (internal/player/mpv.go), а хосту достатньо самої наявності заголовка.
@@ -69,7 +93,8 @@ func New(httpClient *http.Client) *Extractor {
 func (e *Extractor) ID() string { return "moonanime" }
 
 func (e *Extractor) Handles(embed string) bool {
-	return extractor.HostIs(embed, host)
+	_, ok := embedHost(embed)
+	return ok
 }
 
 var (
@@ -184,6 +209,10 @@ func decodeVideo(page []byte) (string, error) {
 }
 
 func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extractor.Stream, error) {
+	host, ok := embedHost(embed)
+	if !ok {
+		return nil, fmt.Errorf("moonanime: чужий хост embed: %w", errs.ErrProvider)
+	}
 	body, err := extractor.FetchEmbed(ctx, e.http, embed, referer, embedHeaders())
 	if err != nil {
 		return nil, fmt.Errorf("moonanime: %w", err)
@@ -216,16 +245,32 @@ func (e *Extractor) Extract(ctx context.Context, embed, referer string) ([]extra
 	return streams, nil
 }
 
+// netFixtureDir — підтека testdata з фікстурою домену moonanime.net.
+const netFixtureDir = "net"
+
 // FixtureTransport відповідає на будь-який /iframe/-запит до moonanime.art
-// канонічною фікстурою embed.html. Чужі домени пропускає.
+// канонічною фікстурою embed.html, а до moonanime.net — net/embed.html. Чужі
+// домени пропускає.
 func FixtureTransport(dir string) http.RoundTripper {
-	return extractor.FixtureTransport(host, dir)
+	return httpx.MultiTransport{
+		extractor.FixtureTransport(hosts[0], dir),
+		extractor.FixtureTransport(hosts[1], filepath.Join(dir, netFixtureDir)),
+	}
 }
 
 // recordEmbedURL — embed канонічної фікстури (Фрірен, 1 серія, FanVoxUA).
 const recordEmbedURL = "https://moonanime.art/iframe/twgwasggpzgkktvozfktjplgtpax"
 
+// recordNetEmbedURL — embed фікстури moonanime.net («Крісло-танк», 5 серія, Glass Moon).
+const recordNetEmbedURL = "https://moonanime.net/iframe/ulsz91f5t64i2umt6yb2"
+
 // RecordFixtures переписує embed.html з живого хоста (вручну, не в CI).
 func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) error {
 	return extractor.RecordEmbed(ctx, httpClient, recordEmbedURL, dir, embedHeaders())
+}
+
+// RecordNetFixtures переписує net/embed.html — фікстуру домену moonanime.net.
+// Окремий крок запису, щоб не переписувати канонічну фікстуру moonanime.art.
+func RecordNetFixtures(ctx context.Context, httpClient *http.Client, dir string) error {
+	return extractor.RecordEmbed(ctx, httpClient, recordNetEmbedURL, dir, embedHeaders())
 }
