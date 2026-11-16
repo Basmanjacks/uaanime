@@ -28,6 +28,7 @@ var canonicalTitles = []struct {
 	{"title-single-release", "5808-pokoyivka-scho-lishe-yist"},                   // одна студія, лише субтитри
 	{"title-dub-layout", "4304-sudzume-zachinyaye-dver"},                         // фільм, студія→тип→плеєр, ДУБЛЯЖ
 	{"title-flat-ova", "1917-na-by-proti-titanv-ova"},                            // OVA, лише плеєр без рівнів студії/типу
+	{"title-studio-error", "3733-korolvstvo-2-sezon"},                            // «Королівство (2 сезон)»: студія «error» (етап 4.1)
 }
 
 // syntheticTitles — фікстури, складені вручну, а не записані з сайту: стан,
@@ -136,28 +137,44 @@ func RecordFixtures(ctx context.Context, httpClient *http.Client, dir string) er
 	}
 
 	for _, ct := range canonicalTitles {
-		pageURL := titleURL(ct.Slug)
-		page, err := c.get(ctx, pageURL, pageURL)
-		if err != nil {
-			return fmt.Errorf("запис %s: %w", ct.File, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, ct.File+".html"), page, 0o644); err != nil {
-			return err
-		}
-		hashMatch := reLoginHash.FindSubmatch(page)
-		id, okID := newsID(ct.Slug, page)
-		if hashMatch == nil || !okID {
-			return fmt.Errorf("запис %s: не знайдено hash/news_id", ct.File)
-		}
-		pl, err := c.get(ctx, playlistsURL(id, string(hashMatch[1])), pageURL)
-		if err != nil {
-			return fmt.Errorf("запис %s-playlists: %w", ct.File, err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, ct.File+"-playlists.json"), pl, 0o644); err != nil {
+		if err := recordTitle(ctx, c, dir, ct.File, ct.Slug); err != nil {
 			return err
 		}
 	}
 	return recordNewFixtures(ctx, c, dir)
+}
+
+// RecordTitleFixture переписує з живого сайту одну канонічну фікстуру тайтлу
+// (<file>.html + <file>-playlists.json), не чіпаючи решти: нова регресійна
+// фікстура не має тягнути за собою перезапис старих, на яких стоять тести.
+func RecordTitleFixture(ctx context.Context, httpClient *http.Client, dir, file string) error {
+	for _, ct := range canonicalTitles {
+		if ct.File == file {
+			return recordTitle(ctx, New(httpClient), dir, ct.File, ct.Slug)
+		}
+	}
+	return fmt.Errorf("невідома канонічна фікстура %q", file)
+}
+
+func recordTitle(ctx context.Context, c *Client, dir, file, slug string) error {
+	pageURL := titleURL(slug)
+	page, err := c.get(ctx, pageURL, pageURL)
+	if err != nil {
+		return fmt.Errorf("запис %s: %w", file, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, file+".html"), page, 0o644); err != nil {
+		return err
+	}
+	hashMatch := reLoginHash.FindSubmatch(page)
+	id, okID := newsID(slug, page)
+	if hashMatch == nil || !okID {
+		return fmt.Errorf("запис %s: не знайдено hash/news_id", file)
+	}
+	pl, err := c.get(ctx, playlistsURL(id, string(hashMatch[1])), pageURL)
+	if err != nil {
+		return fmt.Errorf("запис %s-playlists: %w", file, err)
+	}
+	return os.WriteFile(filepath.Join(dir, file+"-playlists.json"), pl, 0o644)
 }
 
 // RecordNewFixtures записує лише фікстури пагінації пошуку та каталогів.

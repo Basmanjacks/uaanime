@@ -757,10 +757,10 @@ func (a *app) cmdEpisodes(ctx context.Context, id string, opt options) int {
 		parts := make([]string, 0, len(e.Releases))
 		for _, r := range e.Releases {
 			if r.Playable != nil && !*r.Playable {
-				parts = append(parts, fmt.Sprintf(i18n.MsgEpisodeReleaseUnplayable, r.Studio, r.Kind))
+				parts = append(parts, fmt.Sprintf(i18n.MsgEpisodeReleaseUnplayable, i18n.StudioName(r.Studio), r.Kind))
 				continue
 			}
-			parts = append(parts, fmt.Sprintf("%s (%s)", r.Studio, r.Kind))
+			parts = append(parts, fmt.Sprintf("%s (%s)", i18n.StudioName(r.Studio), r.Kind))
 		}
 		outf("%d\t%s\n", e.Number, strings.Join(parts, ", "))
 	}
@@ -869,7 +869,7 @@ func (a *app) cmdPlay(_ context.Context, id string, ep int, dryRun bool) int {
 		if res.StartSec > 0 {
 			outf(i18n.MsgResume+"\n", int(res.StartSec)/60, int(res.StartSec)%60)
 		}
-		outf(i18n.MsgPickedSource+"\n", res.Source.Studio, res.Source.Kind, res.HostID)
+		outf(i18n.MsgPickedSource+"\n", i18n.StudioName(res.Source.Studio), res.Source.Kind, res.HostID)
 
 		if dryRun {
 			cmd := player.ByID(a.cfg.Player).Command(res.Stream.URL, res.MediaTitle, res.Stream.Headers, res.StartSec)

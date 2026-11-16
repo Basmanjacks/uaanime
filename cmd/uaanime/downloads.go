@@ -108,7 +108,7 @@ func savedRelease(f downloadsFile) string {
 	if !f.Known {
 		return i18n.MsgDownloadsUnknownRelease
 	}
-	return fmt.Sprintf("%s (%s)", f.Studio, f.Kind)
+	return fmt.Sprintf("%s (%s)", i18n.StudioName(f.Studio), f.Kind)
 }
 
 // savedQuality — «1080p»; невідома якість — порожня колонка, щоб рядок

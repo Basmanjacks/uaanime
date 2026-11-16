@@ -96,7 +96,7 @@ func episodeNumberWidth(episodes []provider.Episode) int {
 // releasePair — «Озв · Рідний Голос»: токен типу першим, бо він переживає
 // будь-яке обрізання мети, а саме заради нього рядок і читають.
 func releasePair(s provider.Source) string {
-	return i18n.KindShort(s.Kind) + metaSep + s.Studio
+	return i18n.KindShort(s.Kind) + metaSep + i18n.StudioName(s.Studio)
 }
 
 // releaseSummary — обраний реліз і скільки ще є: «Озв · Рідний Голос · ще 1 озв · 1 саб».

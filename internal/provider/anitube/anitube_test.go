@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -319,6 +320,45 @@ func TestSingleReleaseIsSub(t *testing.T) {
 	}
 }
 
+// «Королівство (2 сезон)» (записано 2026-11-16): плейлист «СУБТИТРИ → ПЛЕЄР
+// ASHDI» без рівня студії, а поле «Переклад» сторінки — службове «error».
+// Студії немає ніде: усі 39 серій — субтитри з порожньою студією, а не
+// студія «error» і не підпис плеєра. Причина — дані сайту, не розбір.
+func TestStudioPlaceholderFromSite(t *testing.T) {
+	page, err := os.ReadFile("testdata/title-studio-error.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(page), `/xfsearch/translation/error/">error</a>`) {
+		t.Fatal("фікстура більше не несе «Переклад: error» — перезапиши тест під новий стан сайту")
+	}
+	episodes, err := fixtureClient().Episodes(t.Context(), CanonicalRef("title-studio-error"))
+	if err != nil {
+		t.Fatalf("Episodes: %v", err)
+	}
+	if len(episodes) != 39 {
+		t.Fatalf("серій %d, очікував 39", len(episodes))
+	}
+	want := []provider.Release{{Studio: "", Kind: provider.KindSub}}
+	for _, ep := range episodes {
+		if !reflect.DeepEqual(ep.Releases, want) {
+			t.Fatalf("серія %d: релізи %+v, очікував %+v", ep.Number, ep.Releases, want)
+		}
+	}
+	// Справжня мітка-студія в плейлисті лишається студією, а службове слово
+	// в мітці поступається резервній студії.
+	const playlist = `<li data-id="0_0">error</li><li data-id="0_0_0">ПЛЕЄР ASHDI</li>` +
+		`<li data-file="https://ashdi.vip/vod/1" data-id="0_0_0">1 серія</li>`
+	sources, err := parsePlaylists(playlist, "https://example.invalid", "Glass Moon")
+	if err != nil || len(sources) != 1 || sources[0].Studio != "Glass Moon" {
+		t.Fatalf("мітка error + резервна студія: %+v, %v", sources, err)
+	}
+	sources, err = parsePlaylists(playlist, "https://example.invalid", "")
+	if err != nil || len(sources) != 1 || sources[0].Studio != "" {
+		t.Fatalf("мітка error без резервної студії: %+v, %v", sources, err)
+	}
+}
+
 func TestFlatPlaylist(t *testing.T) {
 	c := fixtureClient()
 	ref := CanonicalRef("title-flat-ova")
@@ -396,13 +436,16 @@ func TestEpisodeNumber(t *testing.T) {
 }
 
 // Помилковий HTML не має викликати паніку; неповні гілки пропускаються,
-// а плоска гілка може скористатися резервною студією.
+// а плоска гілка може скористатися резервною студією. Плоска гілка без жодної
+// студії — реліз із порожньою студією, а не втрачена серія (етап 4.1).
 func TestMalformedInputNoPanic(t *testing.T) {
 	tests := []struct {
 		name           string
 		html           string
 		fallbackStudio string
 		wantStudio     string
+		// noStudio — очікується рівно одне джерело з порожньою студією.
+		noStudio bool
 	}{
 		{name: "порожній HTML"},
 		{name: "обрізаний HTML", html: "<li"},
@@ -413,8 +456,15 @@ func TestMalformedInputNoPanic(t *testing.T) {
 			html: `<li data-file="https://example.invalid/1" data-id="0">1 серія</li>`,
 		},
 		{
-			name: "плоский без студії",
-			html: `<li data-file="https://example.invalid/1" data-id="0_0">1 серія</li>`,
+			name:     "плоский без студії",
+			html:     `<li data-file="https://example.invalid/1" data-id="0_0">1 серія</li>`,
+			noStudio: true,
+		},
+		{
+			name:           "плоский із службовим словом замість студії",
+			html:           `<li data-file="https://example.invalid/1" data-id="0_0">1 серія</li>`,
+			fallbackStudio: "error",
+			noStudio:       true,
 		},
 		{
 			name:           "плоский із резервною студією",
@@ -426,6 +476,12 @@ func TestMalformedInputNoPanic(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			sources, err := parsePlaylists(tc.html, "https://example.invalid", tc.fallbackStudio)
+			if tc.noStudio {
+				if err != nil || len(sources) != 1 || sources[0].Studio != "" {
+					t.Fatalf("sources = %+v, err = %v, очікував одне джерело без студії", sources, err)
+				}
+				return
+			}
 			if tc.wantStudio == "" {
 				if err == nil {
 					t.Errorf("parsePlaylists(%q): очікував помилку", tc.html)
@@ -540,6 +596,7 @@ func TestTitleName(t *testing.T) {
 		{"title-single-release", "Покоївка, що лише їсть"},
 		{"title-dub-layout", "Судзуме зачиняє двері"},
 		{"title-flat-ova", "На бій проти титанів (ОВА-1)"},
+		{"title-studio-error", "Королівство (2 сезон)"},
 	}
 	if len(tests) != len(canonicalTitles) {
 		t.Fatalf("покрито %d фікстур із %d — нова фікстура без випадку в таблиці", len(tests), len(canonicalTitles))

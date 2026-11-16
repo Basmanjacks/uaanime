@@ -282,15 +282,14 @@ func CleanCards(cards []TitleCard) []TitleCard {
 	return out
 }
 
-// CleanEpisode: реліз без студії показувати нема сенсу (це рядок вибору озвучки),
-// а невідомий Kind стає multi — вгадувати sub заборонено правилом продукту.
+// CleanEpisode чистить студію й тип. Порожня студія лишається: сайт буває не
+// називає студії зовсім (див. етап 4.1, «Королівство (2 сезон)»), і такий
+// реліз однаково можна обрати й завантажити. Невідомий Kind стає multi —
+// вгадувати sub заборонено правилом продукту.
 func CleanEpisode(e Episode) Episode {
 	releases := make([]Release, 0, len(e.Releases))
 	for _, r := range e.Releases {
 		r.Studio = CleanText(r.Studio)
-		if r.Studio == "" {
-			continue
-		}
 		if !ValidKind(r.Kind) {
 			r.Kind = KindMulti
 		}

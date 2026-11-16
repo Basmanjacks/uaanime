@@ -20,7 +20,10 @@
 //     ДУБЛЯЖ/ОЗВУЧЕННЯ/СУБТИТРИ, а студія плоского плейлиста — з поля «Переклад»;
 //   - підписи плеєрів («ПЛЕЄР ASHDI», «ПЛЄЕР MOON») містять одруківки — хост
 //     визначається з домену data-file, не з підпису;
-//   - фільми підписані «Фільм» без номера серії — трактуємо як серію 1.
+//   - фільми підписані «Фільм» без номера серії — трактуємо як серію 1;
+//   - поле «Переклад» (перевірено 2026-11-16 на «Королівство (2 сезон)», 3733) буває
+//     заповнене службовим словом замість студії: <a href=".../xfsearch/translation/error/">error</a>.
+//     Таке значення не є студією — див. isPlaceholderStudio.
 package anitube
 
 import (
@@ -478,7 +481,7 @@ func parsePlaylists(playlistHTML, titleURL, fallbackStudio string) ([]provider.S
 
 	// Назва студії з будь-якої гілки йде просто в список вибору озвучки, тому
 	// чистяться обидва її джерела — мітки плейлиста і резервна студія зі сторінки.
-	fallbackStudio = provider.CleanText(fallbackStudio)
+	fallbackStudio = realStudio(provider.CleanText(fallbackStudio))
 	labels := map[string]string{}
 	doc.Find("li[data-id]").Each(func(_ int, s *goquery.Selection) {
 		if _, hasFile := s.Attr("data-file"); hasFile {
@@ -523,12 +526,22 @@ func parsePlaylists(playlistHTML, titleURL, fallbackStudio string) ([]provider.S
 		default:
 			studio, kind = studioAndKind(navLabels[0], navLabels[1])
 		}
-		if studio == "" {
-			studio = labels[branch]
+		// Мітка плейлиста, що не є студією, поступається резервній студії
+		// зі сторінки тайтлу.
+		if studio = realStudio(studio); studio == "" {
+			studio = fallbackStudio
 		}
+		// Останній шанс — мітка самої гілки з серіями (одноповерховий
+		// плейлист «студія → серії»). Підпис плеєра чи типу студією не є.
 		if studio == "" {
-			return
+			if label := labels[branch]; !isPlayerLabel(label) {
+				if _, isType := kindFromLabel(label); !isType {
+					studio = realStudio(label)
+				}
+			}
 		}
+		// Студії немає зовсім — реліз однаково існує: порожня студія, а не
+		// втрачена серія (ім'я файла тоді без частини «студія»).
 		sources = append(sources, provider.Source{
 			Studio:  studio,
 			Kind:    kind,
@@ -559,6 +572,30 @@ func studioAndKind(l1, l2 string) (string, provider.Kind) {
 	default:
 		return "", provider.KindMulti
 	}
+}
+
+// placeholderStudios — службові слова, які сайт ставить у поле «Переклад» чи
+// мітку плейлиста замість назви студії (порівняння без регістру). Перевірено
+// 2026-11-16: «error» у «Королівство (2 сезон)» (3733) — і в полі «Переклад»,
+// і як єдина резервна студія для всіх 39 серій.
+var placeholderStudios = map[string]bool{"error": true}
+
+// isPlaceholderStudio — це службове слово сайту, а не студія.
+func isPlaceholderStudio(s string) bool { return placeholderStudios[strings.ToLower(s)] }
+
+// realStudio — студія як є або "", якщо це службове слово сайту.
+func realStudio(s string) string {
+	if isPlaceholderStudio(s) {
+		return ""
+	}
+	return s
+}
+
+// isPlayerLabel — підпис рівня плеєра («ПЛЕЄР ASHDI», «ПЛЄЕР MOON» — з
+// одруківками сайту, перевірено 2026-09-01 і 2026-11-16).
+func isPlayerLabel(label string) bool {
+	up := strings.ToUpper(label)
+	return strings.Contains(up, "ПЛЕЄР") || strings.Contains(up, "ПЛЄЕР") || strings.Contains(up, "PLAYER")
 }
 
 func kindFromLabel(label string) (provider.Kind, bool) {

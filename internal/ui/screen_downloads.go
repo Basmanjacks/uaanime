@@ -474,8 +474,8 @@ func (m *Model) savedRows() []item {
 		for _, ep := range eps {
 			for _, f := range t.Files[ep] {
 				parts := []string{}
-				if f.Studio != "" && provider.ValidKind(f.Kind) {
-					parts = append(parts, f.Studio, i18n.KindShort(f.Kind))
+				if f.Known && provider.ValidKind(f.Kind) {
+					parts = append(parts, i18n.StudioName(f.Studio), i18n.KindShort(f.Kind))
 				} else {
 					parts = append(parts, i18n.TuiDlUnknownRelease)
 				}

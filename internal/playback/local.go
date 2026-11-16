@@ -129,7 +129,9 @@ func resolvedFile(ref provider.TitleRef, ep int, h Hints, savedName string, f do
 func localSources(files []download.SavedFile, ep int) []provider.Source {
 	out := make([]provider.Source, 0, len(files))
 	for _, f := range files {
-		if f.Studio == "" || !provider.ValidKind(f.Kind) {
+		// Порожня студія з sidecar-а — реліз без студії на сайті, і він
+		// відомий; невідомий лише файл без sidecar-а.
+		if !f.Known || !provider.ValidKind(f.Kind) {
 			continue
 		}
 		out = append(out, provider.Source{Episode: ep, Studio: f.Studio, Kind: f.Kind})
@@ -141,7 +143,7 @@ func fileForRelease(files []download.SavedFile, release provider.Release) (downl
 	var best download.SavedFile
 	found := false
 	for _, f := range files {
-		if f.Studio != release.Studio || f.Kind != release.Kind {
+		if !f.Known || f.Studio != release.Studio || f.Kind != release.Kind {
 			continue
 		}
 		if !found || f.Height > best.Height {

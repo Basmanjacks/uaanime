@@ -249,6 +249,18 @@ const (
 	RemoteOffline    = "Немає зв'язку з uaanime"
 )
 
+// StudioNone — підпис релізу, для якого сайт не назвав студії. Це не назва
+// студії (їх не перекладаємо), а позначка її відсутності.
+const StudioNone = "студію не вказано"
+
+// StudioName — назва студії як на сайті або StudioNone для порожньої.
+func StudioName(s string) string {
+	if s == "" {
+		return StudioNone
+	}
+	return s
+}
+
 // KindShort — токен типу для колонки в списку серій і пікері: Дуб/Озв/Саб/Мікс.
 func KindShort(k provider.Kind) string {
 	switch k {

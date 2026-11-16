@@ -133,7 +133,8 @@ func TestCleanEpisodes(t *testing.T) {
 	if len(got) != 2 || got[0].Number != 0 || got[1].Number != 1 {
 		t.Fatalf("CleanEpisodes = %+v, очікував серії 0 і 1", got)
 	}
-	want := []Release{{Studio: "Unimay", Kind: KindMulti}, {Studio: "Glass Moon", Kind: KindSub}}
+	// Студія з самих керуючих символів стає порожньою, але реліз лишається.
+	want := []Release{{Studio: "Unimay", Kind: KindMulti}, {Studio: "", Kind: KindDub}, {Studio: "Glass Moon", Kind: KindSub}}
 	if !reflect.DeepEqual(got[1].Releases, want) {
 		t.Errorf("Releases = %+v, очікував %+v", got[0].Releases, want)
 	}

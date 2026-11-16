@@ -25,9 +25,10 @@ func main() { os.Exit(run()) }
 func run() int {
 	onlyNew := flag.Bool("new", false, "записати лише нові фікстури AniTube")
 	only := flag.String("only", "", "записати лише один крок за іменем (anitube, ashdi, tortuga, moonanime)")
+	title := flag.String("title", "", "записати лише одну канонічну фікстуру тайтлу AniTube за іменем файла (напр. title-studio-error)")
 	flag.Parse()
-	if *onlyNew && *only != "" {
-		fmt.Fprintln(os.Stderr, "-new і -only взаємовиключні")
+	if (*onlyNew && *only != "") || (*title != "" && (*onlyNew || *only != "")) {
+		fmt.Fprintln(os.Stderr, "-new, -only і -title взаємовиключні")
 		return 2
 	}
 
@@ -36,6 +37,15 @@ func run() int {
 	// Той самий клієнт, що й у бою: запис фікстури не має ходити за редиректом
 	// на чужий хост і має нести наскрізний User-Agent застосунку.
 	client := httpx.NewClient(nil)
+	if *title != "" {
+		dir := "internal/provider/anitube/testdata"
+		if err := anitube.RecordTitleFixture(ctx, client, dir, *title); err != nil {
+			fmt.Fprintf(os.Stderr, "anitube: %v\n", err)
+			return 1
+		}
+		fmt.Printf("anitube: фікстуру %s оновлено в %s\n", *title, dir)
+		return 0
+	}
 	if *onlyNew {
 		dir := "internal/provider/anitube/testdata"
 		if err := os.MkdirAll(dir, 0o755); err != nil {

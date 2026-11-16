@@ -121,7 +121,7 @@ func (m *Model) showReleaseChoice(playable, failed []provider.Source, willPlay *
 			pinKind = ""
 		}
 		it := item{
-			title:   r.src.Studio,
+			title:   i18n.StudioName(r.src.Studio),
 			meta:    i18n.KindShort(r.src.Kind),
 			payload: payloadStudio{src: r.src, pinKind: pinKind, unplayable: !r.playable && r.inMeta},
 		}

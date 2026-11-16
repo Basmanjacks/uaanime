@@ -275,8 +275,10 @@ func TestSourcesFromReleasesAndCoverage(t *testing.T) {
 		{Number: 1, Releases: []provider.Release{{Studio: "A", Kind: provider.KindVoiceover}}}, // дубль номера
 		{Number: 2, Releases: []provider.Release{{Studio: "A", Kind: provider.KindSub}, {Studio: "", Kind: provider.KindDub}}},
 	}
+	// Реліз без студії (сайт її не назвав) — теж реліз: його можна обрати.
 	got := SourcesFromReleases(eps[2])
-	if len(got) != 1 || got[0].Episode != 2 || got[0].Studio != "A" || got[0].Kind != provider.KindSub {
+	if len(got) != 2 || got[0].Episode != 2 || got[0].Studio != "A" || got[0].Kind != provider.KindSub ||
+		got[1].Studio != "" || got[1].Kind != provider.KindDub {
 		t.Fatalf("SourcesFromReleases = %+v", got)
 	}
 	coverage, total := ReleaseCoverage(eps)
@@ -284,7 +286,8 @@ func TestSourcesFromReleasesAndCoverage(t *testing.T) {
 		t.Fatalf("total = %d, want 2 (унікальні номери)", total)
 	}
 	if coverage[provider.Release{Studio: "A", Kind: provider.KindVoiceover}] != 1 ||
-		coverage[provider.Release{Studio: "A", Kind: provider.KindSub}] != 2 {
+		coverage[provider.Release{Studio: "A", Kind: provider.KindSub}] != 2 ||
+		coverage[provider.Release{Studio: "", Kind: provider.KindDub}] != 1 {
 		t.Fatalf("coverage = %+v", coverage)
 	}
 }
