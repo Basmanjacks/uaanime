@@ -490,3 +490,35 @@ func TestResolveHostOfflineCanUseAnotherOnlineDubWithoutLocalFallback(t *testing
 		t.Fatalf("per-host offline must retain online dub fallback: %+v %v", res, err)
 	}
 }
+
+// Етап 4.2: sidecar записав студію кириличною «А» («FanVoxUА»), а пін і
+// сайт — латиницею. Збережений файл однаково знаходиться — і за піном, і за
+// явним релізом сайту, — а показується так, як записаний.
+func TestLocalFileMatchesStudioHomoglyph(t *testing.T) {
+	const latin, cyrillic = "FanVoxUA", "FanVoxUА"
+	dir := t.TempDir()
+	path := saveFile(t, dir, download.Parts{
+		Title: localTitleName, Episode: 4, Studio: cyrillic,
+		Kind: provider.KindVoiceover, Height: 1080, Ext: ".ts",
+	}, true)
+
+	engine := &Engine{Provider: hostileProvider(t), Lib: &library.Library{}}
+	pinned := Hints{DownloadDir: dir, StudioPin: latin, KindPin: provider.KindVoiceover}
+	res, err := engine.ResolveWith(t.Context(), localRef, 4, pinned, nil)
+	if err != nil {
+		t.Fatalf("ResolveWith з латинським піном: %v", err)
+	}
+	if !res.Local || res.Stream.URL != path || res.Source.Studio != cyrillic || res.Deviation != library.DeviationNone {
+		t.Fatalf("Resolved = %+v (Deviation %v), очікував локальний %q", res.Source, res.Deviation, path)
+	}
+
+	// Явний реліз у написанні сайту (так його передає пікер і завантажувач).
+	explicit := Hints{DownloadDir: dir, Release: provider.Release{Studio: latin, Kind: provider.KindVoiceover}}
+	res, err = engine.ResolveWith(t.Context(), localRef, 4, explicit, nil)
+	if err != nil {
+		t.Fatalf("ResolveWith з явним релізом: %v", err)
+	}
+	if !res.Local || res.Stream.URL != path {
+		t.Fatalf("явний реліз %q не знайшов файл %q: %+v", latin, cyrillic, res)
+	}
+}

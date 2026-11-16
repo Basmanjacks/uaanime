@@ -104,7 +104,7 @@ func releasePair(s provider.Source) string {
 func releaseSummary(chosen provider.Source, ep provider.Episode) string {
 	voiced, subs := 0, 0
 	for _, r := range provider.CleanEpisode(ep).Releases {
-		if r.Studio == chosen.Studio && r.Kind == chosen.Kind {
+		if provider.SameRelease(r, provider.Release{Studio: chosen.Studio, Kind: chosen.Kind}) {
 			continue
 		}
 		if r.Kind == provider.KindSub {

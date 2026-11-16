@@ -37,11 +37,13 @@ const (
 
 // DeviationOf порівнює вибір із піном. Без піна відхилення немає за
 // визначенням; «wildcard і sub» — відхилення, бо wildcard обіцяє озвучення.
+// Студії порівнюються за provider.StudioKey: пін «FanVoxUA» і сайт «FanVoxUА»
+// (кирилична «А») — та сама студія.
 func DeviationOf(pin Pin, chosen provider.Source) Deviation {
 	if pin.Studio == "" {
 		return DeviationNone
 	}
-	if chosen.Studio != pin.Studio {
+	if !provider.SameStudio(chosen.Studio, pin.Studio) {
 		return DeviationStudio
 	}
 	if pin.Kind != "" {
@@ -74,6 +76,9 @@ func WantsSub(pin Pin, p Prefs) bool {
 //  5. будь-яке інше українське озвучення (dub/voiceover), потім multi —
 //     невідомий тип імовірніше озвучення, ніж саби
 //  6. українські субтитри
+//
+// Студія піна й улюблена студія звіряються з сайтом за provider.StudioKey
+// (регістр, кириличні двійники латинських літер).
 //
 // Жорстке правило: пріоритет студії ніколи не може ТИХО знизити вибір до
 // субтитрів, поки доступний будь-який не-sub реліз. Явний пін на субтитри —
@@ -202,7 +207,7 @@ func bestOfStudio(sources []provider.Source, studio string, kindPin, preferKind 
 	}
 	var all []provider.Source
 	for _, s := range sources {
-		if s.Studio != studio {
+		if !provider.SameStudio(s.Studio, studio) {
 			continue
 		}
 		if want != "" && s.Kind == want {
@@ -262,10 +267,12 @@ func hasNonSub(sources []provider.Source) bool {
 	return false
 }
 
+// countStudios — скільки різних студій (за provider.StudioKey: два написання
+// однієї студії — не привід питати людину).
 func countStudios(sources []provider.Source) int {
 	seen := map[string]bool{}
 	for _, s := range sources {
-		seen[s.Studio] = true
+		seen[provider.StudioKey(s.Studio)] = true
 	}
 	return len(seen)
 }

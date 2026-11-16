@@ -88,3 +88,50 @@ func TestEmptyStudioReleaseEndToEnd(t *testing.T) {
 		t.Fatalf("downloads: файл %+v", file)
 	}
 }
+
+// Етап 4.2 наскрізно: `--studio` кирилицею знаходить студію, яку сайт пише
+// латиницею (FANVOXUA у фікстурі Фрірен), і збережений файл, чий sidecar
+// записав кириличну «А», — той самий реліз: повтор не качає його вдруге.
+func TestStudioHomoglyphsEndToEnd(t *testing.T) {
+	_, dlDir := anyHostDownloadEnv(t)
+	const site, cyrillic = "FANVOXUA", "FANVOXU\u0410"
+
+	code, out, errOut := runCLI(t, "resolve", fixtureTitleID, "1", "--studio", "FanVoxU\u0410", "--json")
+	mustExit(t, 0, code, out, errOut)
+	var cands []playback.Candidate
+	mustJSON(t, out, &cands)
+	if len(cands) == 0 {
+		t.Fatal("resolve --studio кирилицею: порожньо")
+	}
+	for _, c := range cands {
+		if c.Studio != site {
+			t.Fatalf("resolve --studio кирилицею: %+v (показ має лишитися як на сайті)", c)
+		}
+	}
+
+	ref := fixtureRef(t)
+	folder := filepath.Join(dlDir, "Фрірен")
+	if err := os.MkdirAll(folder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := download.WriteMarker(folder, download.Marker{Provider: ref.Provider, Slug: ref.Slug}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(folder, "Фрірен - 01 - "+cyrillic+" [Озв, 1080p].ts")
+	if err := os.WriteFile(path, []byte("медіа"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := download.WriteSidecar(path, download.Sidecar{Provider: ref.Provider, Slug: ref.Slug, Episode: 1,
+		Studio: cyrillic, Kind: provider.KindVoiceover, Height: 1080}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errOut = runCLI(t, "download", fixtureTitleID, "1", "--studio", "FanVoxUA", "--kind", "voiceover",
+		"--quality", "1080", "--dir", dlDir, "--json")
+	mustExit(t, 1, code, out, errOut)
+	if e := jsonErrorOf(t, out, errOut); e.Code != "already_saved" {
+		t.Fatalf("повтор з іншим написанням студії: %+v", e)
+	}
+	if files := download.Saved(dlDir, ref)[1]; len(files) != 1 {
+		t.Fatalf("на диску %+v, очікував лише наявний файл", files)
+	}
+}

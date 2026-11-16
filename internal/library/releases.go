@@ -139,7 +139,9 @@ func normalizeBaseline(b *ReleaseBaseline, clean func(string) string) *ReleaseBa
 			return nil
 		}
 		g.Studio = clean(g.Studio)
-		if g.Studio == "" || len(ranges) == 0 {
+		// Порожня студія — реліз, для якого сайт не назвав студії; він теж
+		// має базову лінію, інакше «нове» про нього не гасло б ніколи.
+		if len(ranges) == 0 {
 			continue
 		}
 		if !provider.ValidKind(g.Kind) {
@@ -244,7 +246,10 @@ func (l *Library) PreferredFresh(titleID string, episodes []provider.Episode, pr
 		if !ok {
 			return news
 		}
-		baseline[provider.Release{Studio: g.Studio, Kind: g.Kind}] = ranges
+		// Ключ — provider.StudioKey: зміна написання студії на сайті між
+		// підтвердженням і зараз не робить старі серії «новими».
+		key := provider.Release{Studio: provider.StudioKey(g.Studio), Kind: g.Kind}
+		baseline[key] = mergeIntervals(append(baseline[key], ranges...))
 	}
 	completed := map[int]bool{}
 	for _, p := range l.Progress {
@@ -266,10 +271,10 @@ func (l *Library) PreferredFresh(titleID string, episodes []provider.Episode, pr
 			continue
 		}
 		forcedSub := chosen.Kind == provider.KindSub && !wantsSub && !hasNonSub(releases)
-		if !forcedSub && chosen.Studio != news.Studio {
+		if !forcedSub && !provider.SameStudio(chosen.Studio, news.Studio) {
 			continue
 		}
-		ranges := baseline[provider.Release{Studio: chosen.Studio, Kind: chosen.Kind}]
+		ranges := baseline[provider.Release{Studio: provider.StudioKey(chosen.Studio), Kind: chosen.Kind}]
 		i := sort.Search(len(ranges), func(i int) bool { return ranges[i].last >= number })
 		if i < len(ranges) && ranges[i].first <= number {
 			continue

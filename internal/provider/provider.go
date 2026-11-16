@@ -148,15 +148,47 @@ func EpisodesFromSources(sources []Source) []Episode {
 	return eps
 }
 
-// StudioKey — ключ порівняння назви студії, яку ввела людина (`--studio`), з
-// назвою на сайті: без керуючих символів і зайвих пробілів (CleanText), без
-// урахування регістру. Єдина точка такого порівняння: зведення гомогліфів
-// (кирилична «А» проти латинської) ляже саме сюди. Показується назва завжди
-// так, як на сайті.
-func StudioKey(s string) string { return strings.ToLower(CleanText(s)) }
+// StudioKey — ключ, за яким дві назви студії вважаються тією самою студією:
+// пін і назва на сайті, улюблена студія, `--studio`, sidecar збереженого
+// файла. Без керуючих символів і зайвих пробілів (CleanText), без урахування
+// регістру, а кириличні літери-двійники зведено до латинських: сайт пише ту
+// саму студію то «FanVoxUA», то «FanVoxUА» (остання — кирилична «А»,
+// перевірено 2026-11-16). Ключ лише для порівняння — показується й
+// зберігається назва завжди так, як на сайті.
+//
+// Зведення йде ПІСЛЯ ToLower і бере малі кириличні літери, чиї великі форми —
+// двійники латинських (А В Е К М Н О Р С Т Х У І). Так ключ не залежить від
+// регістру: «В» і «в» дають ту саму «b», як «B» і «b». Ціна — «в» дорівнює
+// латинській «b» (і так само к/k, м/m, н/h, т/t), але дві різні студії, що
+// відрізняються лише цим, — не реальний випадок, а розбіжність пінів через
+// одну літеру — реальний.
+func StudioKey(s string) string {
+	s = strings.ToLower(CleanText(s))
+	if !strings.ContainsFunc(s, isCyrillicTwin) {
+		return s
+	}
+	return strings.Map(func(r rune) rune {
+		if l, ok := cyrillicTwins[r]; ok {
+			return l
+		}
+		return r
+	}, s)
+}
+
+// cyrillicTwins — мала кирилична літера → латинська, якою виглядає її велика
+// (а для а е о р с х у і — і сама мала) форма.
+var cyrillicTwins = map[rune]rune{
+	'а': 'a', 'в': 'b', 'е': 'e', 'к': 'k', 'м': 'm', 'н': 'h', 'о': 'o',
+	'р': 'p', 'с': 'c', 'т': 't', 'х': 'x', 'у': 'y', 'і': 'i',
+}
+
+func isCyrillicTwin(r rune) bool { _, ok := cyrillicTwins[r]; return ok }
 
 // SameStudio — чи це та сама студія за StudioKey.
 func SameStudio(a, b string) bool { return StudioKey(a) == StudioKey(b) }
+
+// SameRelease — той самий реліз: та сама студія за StudioKey і той самий тип.
+func SameRelease(a, b Release) bool { return a.Kind == b.Kind && SameStudio(a.Studio, b.Studio) }
 
 // --- Санітизація недовірених рядків ---
 //

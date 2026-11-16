@@ -140,6 +140,21 @@ func TestCleanEpisodes(t *testing.T) {
 	}
 }
 
+// Ключ — лише для порівняння: CleanText (і показ) лишають написання сайту.
+func TestStudioKeyDoesNotChangeDisplay(t *testing.T) {
+	const site = "FanVoxU\u0410"
+	if CleanText(site) != site {
+		t.Fatalf("CleanText змінив назву студії: %q", CleanText(site))
+	}
+	if StudioKey(site) != "fanvoxua" {
+		t.Fatalf("StudioKey(%q) = %q", site, StudioKey(site))
+	}
+	if !SameRelease(Release{Studio: "FanVoxUA", Kind: KindDub}, Release{Studio: site, Kind: KindDub}) ||
+		SameRelease(Release{Studio: "FanVoxUA", Kind: KindDub}, Release{Studio: site, Kind: KindSub}) {
+		t.Fatal("SameRelease: студія за ключем, тип — точно")
+	}
+}
+
 func TestCleanTextDropsBidiControls(t *testing.T) {
 	// RLO та ізолятор переставили б увесь рядок списку; ZWJ і м'який перенос — ні.
 	got := CleanText("Фрі\u202eрен\u2066 \u200dТест\u00ad")
@@ -157,6 +172,18 @@ func TestStudioKey(t *testing.T) {
 		{" Рідний  Голос ", "рідний голос", true},
 		{"Glass\x1b[2JMoon", "glassmoon", true},
 		{"FanVoxUA", "FanVox", false},
+		// Кириличні двійники латинських літер (етап 4.2): «А» в кінці.
+		{"FanVoxUA", "FanVoxU\u0410", true},
+		{"fanvoxua", "FANVOXU\u0410", true},
+		{"\u0412\u0415\u0420\u0422\u041e", "BEPTO", true}, // ВЕРТО ↔ BEPTO
+		// Ключ не залежить від регістру й для кирилиці: «Т», «К», «Н» мають
+		// двійника лише у великій формі, але малі зводяться так само.
+		{"ТЕРМІНАЛ", "термінал", true},
+		{"КАМІНЬ", "камінь", true},
+		{"Рідний Голос", "РІДНИЙ ГОЛОС", true},
+		// Без двійника літери лишаються собою.
+		{"Ґлянець", "Glanec", false},
+		{"Рідний Голос", "Ридний Голос", false},
 	} {
 		if got := SameStudio(tt.a, tt.b); got != tt.same {
 			t.Errorf("SameStudio(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.same)

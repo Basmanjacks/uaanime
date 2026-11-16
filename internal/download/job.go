@@ -195,7 +195,7 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 	if err != nil {
 		return err
 	}
-	if j.Release != (provider.Release{}) && j.Release != (provider.Release{Studio: tgt.Studio, Kind: tgt.Kind}) {
+	if j.Release != (provider.Release{}) && !provider.SameRelease(j.Release, provider.Release{Studio: tgt.Studio, Kind: tgt.Kind}) {
 		return fmt.Errorf("обраний реліз недоступний: %w", errs.ErrNoStream)
 	}
 	plan, err := BuildPlan(ctx, f, tgt.Streams)
@@ -252,7 +252,9 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 
 	// Метадані визначають варіант навіть після перейменування тайтлу/файла.
 	for _, existing := range Saved(j.Dir, j.Ref)[j.Episode] {
-		if existing.Studio == sc.Studio && existing.Kind == sc.Kind && existing.Height == sc.Height {
+		// Студія — за provider.StudioKey: файл, записаний з іншим написанням
+		// тієї самої студії, — той самий варіант, а не привід качати ще раз.
+		if existing.Known && provider.SameStudio(existing.Studio, sc.Studio) && existing.Kind == sc.Kind && existing.Height == sc.Height {
 			p.Path = existing.Path
 			return fmt.Errorf("%s: %w", filepath.Base(existing.Path), errs.ErrAlreadySaved)
 		}
@@ -365,7 +367,7 @@ func reserve(final string, sc Sidecar) (string, error) {
 }
 
 func sameVariant(a, b Sidecar) bool {
-	return a.Provider == b.Provider && a.Slug == b.Slug && a.Episode == b.Episode && a.Studio == b.Studio && a.Kind == b.Kind && a.Height == b.Height
+	return a.Provider == b.Provider && a.Slug == b.Slug && a.Episode == b.Episode && provider.SameStudio(a.Studio, b.Studio) && a.Kind == b.Kind && a.Height == b.Height
 }
 
 func collisionPath(path string, sc Sidecar) string {

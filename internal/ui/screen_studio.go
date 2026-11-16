@@ -164,18 +164,26 @@ func (m *Model) pinnedPair(pin library.Pin, pairs []provider.Release) provider.R
 		return provider.Release{}
 	}
 	if pin.Kind != "" {
-		return provider.Release{Studio: pin.Studio, Kind: pin.Kind}
+		// Рядок пікера — у написанні сайту; пін міг бути записаний іншим
+		// (provider.StudioKey), тож позначаємо рядок сайту, а не сам пін.
+		want := provider.Release{Studio: pin.Studio, Kind: pin.Kind}
+		for _, key := range pairs {
+			if provider.SameRelease(key, want) {
+				return key
+			}
+		}
+		return want
 	}
 	all := make([]provider.Source, 0, len(pairs))
 	for _, key := range pairs {
 		all = append(all, provider.Source{Studio: key.Studio, Kind: key.Kind})
 	}
-	if chosen, _ := library.Pick(all, pin, m.eng.Prefs); chosen != nil && chosen.Studio == pin.Studio {
+	if chosen, _ := library.Pick(all, pin, m.eng.Prefs); chosen != nil && provider.SameStudio(chosen.Studio, pin.Studio) {
 		return provider.Release{Studio: chosen.Studio, Kind: chosen.Kind}
 	}
 	best := provider.Release{}
 	for _, key := range pairs {
-		if key.Studio != pin.Studio || key.Kind == provider.KindSub {
+		if !provider.SameStudio(key.Studio, pin.Studio) || key.Kind == provider.KindSub {
 			continue
 		}
 		if best.Studio == "" || kindRank(key.Kind) < kindRank(best.Kind) {

@@ -291,3 +291,40 @@ func TestSourcesFromReleasesAndCoverage(t *testing.T) {
 		t.Fatalf("coverage = %+v", coverage)
 	}
 }
+
+// Етап 4.2: сайт пише «FanVoxUА» з кириличною «А», а пін і улюблена студія
+// записані латиницею (або навпаки) — це та сама студія. Показ і вибір
+// лишаються в написанні сайту; два написання в одній серії не зливаються.
+func TestPickStudioHomoglyphs(t *testing.T) {
+	const latin, cyrillic = "FanVoxUA", "FanVoxUА"
+	sources := []provider.Source{src("Рідний Голос", provider.KindVoiceover), src(cyrillic, provider.KindVoiceover)}
+
+	for _, pin := range []Pin{{Studio: latin}, {Studio: latin, Kind: provider.KindVoiceover}} {
+		chosen, candidates := Pick(sources, pin, Prefs{})
+		if chosen == nil || chosen.Studio != cyrillic || candidates != nil {
+			t.Fatalf("пін %+v: Pick = %+v, %+v; want %q", pin, chosen, candidates, cyrillic)
+		}
+		if d := DeviationOf(pin, *chosen); d != DeviationNone {
+			t.Fatalf("пін %+v: Deviation = %v, want None", pin, d)
+		}
+	}
+	chosen, _ := Pick(sources, Pin{}, Prefs{FavoriteStudio: latin})
+	if chosen == nil || chosen.Studio != cyrillic {
+		t.Fatalf("улюблена студія: Pick = %+v", chosen)
+	}
+	// Навпаки: пін кирилицею, сайт латиницею.
+	chosen, _ = Pick([]provider.Source{src("Рідний Голос", provider.KindVoiceover), src(latin, provider.KindVoiceover)}, Pin{Studio: cyrillic}, Prefs{})
+	if chosen == nil || chosen.Studio != latin {
+		t.Fatalf("пін кирилицею: Pick = %+v", chosen)
+	}
+
+	// Два написання в одній серії лишаються двома рядками вибору, а питання
+	// «яку студію?» не виникає — студія одна.
+	both := []provider.Source{src(latin, provider.KindVoiceover), src(cyrillic, provider.KindVoiceover)}
+	if got := ReleaseChoices(both); len(got) != 2 {
+		t.Fatalf("ReleaseChoices злив написання: %+v", got)
+	}
+	if _, candidates := Pick(both, Pin{}, Prefs{}); candidates != nil {
+		t.Fatalf("Pick питає між двома написаннями однієї студії: %+v", candidates)
+	}
+}

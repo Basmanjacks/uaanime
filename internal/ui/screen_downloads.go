@@ -106,7 +106,7 @@ func (m *Model) applyDownloadBadge(it *item, ep int, saved map[int][]download.Sa
 		it.badge, it.badgeWarn = i18n.TuiDlOtherSaved, false
 		var matching []download.SavedFile
 		for _, f := range files {
-			if selected != nil && f.Studio == selected.Studio && f.Kind == selected.Kind {
+			if selected != nil && f.Known && provider.SameRelease(provider.Release{Studio: f.Studio, Kind: f.Kind}, provider.Release{Studio: selected.Studio, Kind: selected.Kind}) {
 				matching = append(matching, f)
 			}
 		}
@@ -213,7 +213,7 @@ func (m *Model) showDownloadQuality(res *playback.Resolved, plan *download.Plan)
 	for _, q := range plan.Qualities {
 		p := payloadQuality{height: q.Height, bytes: q.Bytes, exact: q.Exact}
 		for _, f := range saved {
-			if f.Studio == m.dlRelease.Studio && f.Kind == m.dlRelease.Kind && f.Height == q.Height {
+			if f.Known && provider.SameRelease(provider.Release{Studio: f.Studio, Kind: f.Kind}, m.dlRelease) && f.Height == q.Height {
 				p.saved = true
 			}
 		}

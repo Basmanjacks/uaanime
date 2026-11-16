@@ -15,10 +15,13 @@ func releaseOf(s provider.Source) provider.Release {
 	return provider.Release{Studio: s.Studio, Kind: s.Kind}
 }
 
+// matchingRelease — джерела цього релізу. Студія — за provider.StudioKey:
+// реліз міг прийти з sidecar-а збереженого файла чи з піна, записаних іншим
+// написанням, ніж зараз на сайті.
 func matchingRelease(sources []provider.Source, release provider.Release) []provider.Source {
 	var out []provider.Source
 	for _, s := range sources {
-		if releaseOf(s) == release {
+		if provider.SameRelease(releaseOf(s), release) {
 			out = append(out, s)
 		}
 	}
@@ -77,7 +80,7 @@ func (e *Engine) preferredLocal(ref provider.TitleRef, ep int, h Hints, title do
 	}
 	switch {
 	case pin.Studio != "":
-		if chosen.Studio != pin.Studio || (pin.Kind != "" && chosen.Kind != pin.Kind) {
+		if !provider.SameStudio(chosen.Studio, pin.Studio) || (pin.Kind != "" && chosen.Kind != pin.Kind) {
 			return nil
 		}
 		// Wildcard без метаданих потрібного типу не доводить, що його немає онлайн.
@@ -85,7 +88,7 @@ func (e *Engine) preferredLocal(ref provider.TitleRef, ep int, h Hints, title do
 			return nil
 		}
 	case h.Prefs.FavoriteStudio != "":
-		if chosen.Studio != h.Prefs.FavoriteStudio || (chosen.Kind != wantKind && !hasFreshEvidence) {
+		if !provider.SameStudio(chosen.Studio, h.Prefs.FavoriteStudio) || (chosen.Kind != wantKind && !hasFreshEvidence) {
 			return nil
 		}
 	default:
@@ -139,11 +142,14 @@ func localSources(files []download.SavedFile, ep int) []provider.Source {
 	return out
 }
 
+// fileForRelease — найвища якість збереженого файла цього релізу. Sidecar
+// міг записати студію іншим написанням, ніж зараз на сайті («FanVoxUА» з
+// кириличною «А» проти «FanVoxUA») — звірка за provider.StudioKey.
 func fileForRelease(files []download.SavedFile, release provider.Release) (download.SavedFile, bool) {
 	var best download.SavedFile
 	found := false
 	for _, f := range files {
-		if !f.Known || f.Studio != release.Studio || f.Kind != release.Kind {
+		if !f.Known || !provider.SameRelease(provider.Release{Studio: f.Studio, Kind: f.Kind}, release) {
 			continue
 		}
 		if !found || f.Height > best.Height {
