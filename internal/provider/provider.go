@@ -148,6 +148,16 @@ func EpisodesFromSources(sources []Source) []Episode {
 	return eps
 }
 
+// StudioKey — ключ порівняння назви студії, яку ввела людина (`--studio`), з
+// назвою на сайті: без керуючих символів і зайвих пробілів (CleanText), без
+// урахування регістру. Єдина точка такого порівняння: зведення гомогліфів
+// (кирилична «А» проти латинської) ляже саме сюди. Показується назва завжди
+// так, як на сайті.
+func StudioKey(s string) string { return strings.ToLower(CleanText(s)) }
+
+// SameStudio — чи це та сама студія за StudioKey.
+func SameStudio(a, b string) bool { return StudioKey(a) == StudioKey(b) }
+
 // --- Санітизація недовірених рядків ---
 //
 // Усе, що приходить зі сторінки сайту або з диска (кеш, library.json), потрапляє

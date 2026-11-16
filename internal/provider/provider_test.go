@@ -146,3 +146,19 @@ func TestCleanTextDropsBidiControls(t *testing.T) {
 		t.Fatalf("CleanText = %q, очікував %q", got, want)
 	}
 }
+
+func TestStudioKey(t *testing.T) {
+	for _, tt := range []struct {
+		a, b string
+		same bool
+	}{
+		{"FanVoxUA", "FANVOXUA", true},
+		{" Рідний  Голос ", "рідний голос", true},
+		{"Glass\x1b[2JMoon", "glassmoon", true},
+		{"FanVoxUA", "FanVox", false},
+	} {
+		if got := SameStudio(tt.a, tt.b); got != tt.same {
+			t.Errorf("SameStudio(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.same)
+		}
+	}
+}

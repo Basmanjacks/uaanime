@@ -257,6 +257,9 @@ func (e *Engine) ReleaseChoicesWith(ctx context.Context, ref provider.TitleRef, 
 type Hints struct {
 	// Release — точний вибір для цього запиту; нуль означає автоматичний Pick.
 	Release provider.Release
+	// Filter — явний вибір із командного рядка (--studio/--kind): звужує
+	// кандидатів до Pick; недоступний запитаний реліз — помилка без заміни.
+	Filter ReleaseFilter
 	// LocalPath — конкретний файл зі списку завантаженого. Не підміняється
 	// іншим файлом або онлайн-потоком, якщо його вже видалили.
 	LocalPath string
@@ -323,8 +326,12 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 		}
 		return nil, fmt.Errorf("локальний файл серії %d: %w", ep, errs.ErrSavedFileMissing)
 	}
-	if res := e.preferredLocal(ref, ep, h, title); res != nil {
-		return res, nil
+	// Явний фільтр не віддається короткому локальному шляху: той обирає за
+	// перевагами, а не за фільтром.
+	if h.Filter.IsZero() {
+		if res := e.preferredLocal(ref, ep, h, title); res != nil {
+			return res, nil
+		}
 	}
 	sources, err := e.sources(ctx, ref, ep)
 	if err != nil {
@@ -342,6 +349,17 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 	pin := library.Pin{Studio: h.StudioPin, Kind: h.KindPin}
 	if h.Release != (provider.Release{}) {
 		pin = library.Pin{Studio: h.Release.Studio, Kind: h.Release.Kind}
+	}
+	if !h.Filter.IsZero() {
+		filtered := h.Filter.apply(sources, e.playableWithLocal(sources, files), h.Prefs)
+		if len(filtered) == 0 {
+			return nil, fmt.Errorf("серія %d: запитаного релізу немає: %w", ep, errs.ErrReleaseUnavailable)
+		}
+		if len(e.playableWithLocal(filtered, files)) == 0 {
+			return nil, fmt.Errorf("серія %d: запитаний реліз лише на непідтримуваних хостах: %w", ep, errs.ErrHostUnsupported)
+		}
+		pin = h.Filter.pin(filtered, pin)
+		sources = filtered
 	}
 	remaining := sources
 	var failures []error
@@ -418,7 +436,16 @@ func (e *Engine) ResolveWith(ctx context.Context, ref provider.TitleRef, ep int,
 	if offlineErr != nil {
 		return nil, fmt.Errorf("серія %d: мережа недоступна: %w", ep, errs.WithClass(errs.ErrOffline, errors.Join(failures...)))
 	}
-	return nil, aggregateFailures(ep, failures)
+	return nil, filteredFailure(ep, h.Filter, aggregateFailures(ep, failures), failures)
+}
+
+// filteredFailure: для явно запитаного релізу будь-яка причина, крім мережі
+// й непідтримуваного хоста, означає «цього релізу зараз немає».
+func filteredFailure(ep int, f ReleaseFilter, err error, failures []error) error {
+	if f.IsZero() || errors.Is(err, errs.ErrOffline) || errors.Is(err, errs.ErrHostUnsupported) {
+		return err
+	}
+	return fmt.Errorf("серія %d: запитаний реліз недоступний: %w", ep, errs.WithClass(errs.ErrReleaseUnavailable, errors.Join(failures...)))
 }
 
 // Candidate — один придатний до відтворення потік (headless `resolve`).
@@ -432,12 +459,29 @@ type Candidate struct {
 // ResolveAll дістає потоки з УСІХ джерел серії, не застосовуючи переваг:
 // це діагностична команда, а не вибір релізу. async-safe.
 func (e *Engine) ResolveAll(ctx context.Context, ref provider.TitleRef, ep int) ([]Candidate, error) {
+	return e.ResolveAllFiltered(ctx, ref, ep, ReleaseFilter{}, library.Prefs{})
+}
+
+// ResolveAllFiltered — ResolveAll лише для джерел, що проходять явний фільтр
+// (той самий, що в download): перевірка доступності релізу без завантаження.
+// prefs потрібні лише правилу «--studio без --kind не дає субтитрів, поки є
+// озвучення». async-safe.
+func (e *Engine) ResolveAllFiltered(ctx context.Context, ref provider.TitleRef, ep int, f ReleaseFilter, prefs library.Prefs) ([]Candidate, error) {
 	sources, err := e.sources(ctx, ref, ep)
 	if err != nil {
 		return nil, err
 	}
 	if len(sources) == 0 {
 		return nil, fmt.Errorf("серія %d: провайдер не повернув джерел: %w", ep, errs.ErrNoStream)
+	}
+	if !f.IsZero() {
+		sources = f.apply(sources, e.playable(sources), prefs)
+		if len(sources) == 0 {
+			return nil, fmt.Errorf("серія %d: запитаного релізу немає: %w", ep, errs.ErrReleaseUnavailable)
+		}
+		if len(e.playable(sources)) == 0 {
+			return nil, fmt.Errorf("серія %d: запитаний реліз лише на непідтримуваних хостах: %w", ep, errs.ErrHostUnsupported)
+		}
 	}
 	var out []Candidate
 	var failures []error
@@ -462,7 +506,7 @@ func (e *Engine) ResolveAll(ctx context.Context, ref provider.TitleRef, ep int) 
 		}
 	}
 	if len(out) == 0 {
-		return nil, aggregateFailures(ep, failures)
+		return nil, filteredFailure(ep, f, aggregateFailures(ep, failures), failures)
 	}
 	return out, nil
 }

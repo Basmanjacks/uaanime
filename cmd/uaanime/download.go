@@ -68,6 +68,9 @@ func (a *app) cmdDownload(id string, ep int, opt options) int {
 	// NoLocal: завантажувач іде по потоки навіть тоді, коли серія вже лежить
 	// на диску — інакше після збереженого 720p не можна було б узяти 1080p.
 	hints.NoLocal = true
+	// --studio/--kind звужують вибір; без них — чинний Pick. Фільтр лишається
+	// й для резолюції в черзі: мертвий запитаний реліз — release_unavailable.
+	hints.Filter = opt.release
 	// Автоматичний вибір завершується до черги. Далі свіжі потоки шукаються
 	// лише для цієї пари, незалежно від змін переваг і працездатності хостів.
 	selectCtx, cancelSelect := context.WithTimeout(sigCtx, planTimeout)

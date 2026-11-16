@@ -135,9 +135,9 @@ Headless-команди (для скриптів і перевірок):
 ```bash
 uaanime search "фрірен" --json
 uaanime episodes <title-id> [--fresh] --json
-uaanime resolve <title-id> <серія> --json
+uaanime resolve <title-id> <серія> [--studio назва] [--kind тип] --json
 uaanime play <title-id> <серія> [--dry-run]
-uaanime download <title-id> <серія> [--quality 1080] [--dir шлях] [--json]
+uaanime download <title-id> <серія> [--studio назва] [--kind тип] [--quality 1080] [--dir шлях] [--json]
 uaanime doctor
 uaanime export > backup.json
 uaanime import backup.json
@@ -172,6 +172,21 @@ uaanime version [--json]     # або uaanime --version
 Числова `--quality` означає точну якість: якщо вона недоступна, інша не підставляється.
 Під `--json` команда друкує один об'єкт: `path`, `bytes`, `height`, `seconds` і що саме
 збережено — `id`, `episode`, `studio`, `kind` (ті самі значення, що в службовому файлі серії).
+
+Без прапорців реліз обирається так само, як для перегляду (пін тайтлу, улюблена студія,
+бажаний тип). `--studio` і `--kind` задають його явно — і для `download`, і для `resolve`
+(щоб перевірити доступність без завантаження):
+
+- `--kind dub|voiceover|sub` — лише цей тип; `--kind voiced` — будь-яке озвучення (дубляж
+  чи закадрове), найкраще за звичним порядком; субтитри й `multi` не підставляються;
+- `--studio <назва>` — лише ця студія (без урахування регістру); тип — за звичними
+  правилами: субтитри цієї студії беруться, лише коли в серії немає озвучення, яке можна
+  відтворити, або в налаштуваннях обрано субтитри; разом із `--kind` — точна пара;
+- якщо запитаного релізу немає, його відеохост не підтримується або всі потоки мертві,
+  нічого не завантажується (ані файла, ані теки), код виходу 1, а під `--json` — помилка
+  `release_unavailable` або `host_unsupported`. Інший реліз мовчки не підставляється.
+
+Прапорці діють лише на цей запуск: пін, бібліотека й `config.json` не змінюються.
 
 Дані живуть в одному каталозі (`~/Library/Application Support/uaanime` на macOS) —
 `export`/`import` переносять усе.

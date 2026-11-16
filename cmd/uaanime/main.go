@@ -218,6 +218,8 @@ type options struct {
 	fresh bool
 	// version — --version: надрукувати версію замість будь-якої команди.
 	version bool
+	// release — явний вибір релізу для download і resolve (--studio, --kind).
+	release playback.ReleaseFilter
 }
 
 // command — одна headless-команда. args завжди починається з імені команди,
@@ -258,7 +260,7 @@ var commands = map[string]command{
 		if !ok {
 			return 2
 		}
-		return a.cmdResolve(ctx, args[1], ep, opt.json)
+		return a.cmdResolve(ctx, args[1], ep, opt)
 	}},
 	"play": {minArgs: 3, maxArgs: 3, run: func(a *app, ctx context.Context, args []string, opt options) int {
 		ep, ok := parseEpisode(args[2], opt.json)
@@ -329,6 +331,22 @@ func run(args []string) (code int) {
 				return usageError(opt.json)
 			}
 			opt.dir = v
+		case isFlag(a, "--studio"):
+			v, ok := flagValue(args, &i, "--studio")
+			if !ok || provider.CleanText(v) == "" {
+				return usageError(opt.json)
+			}
+			opt.release.Studio = v
+		case isFlag(a, "--kind"):
+			v, ok := flagValue(args, &i, "--kind")
+			if !ok {
+				return usageError(opt.json)
+			}
+			kind, ok := playback.ParseKindFilter(v)
+			if !ok {
+				return usageError(opt.json)
+			}
+			opt.release.Kind = kind
 		default:
 			positional = append(positional, a)
 		}
@@ -746,12 +764,13 @@ func (a *app) cmdEpisodes(ctx context.Context, id string, opt options) int {
 	return 0
 }
 
-func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) int {
+func (a *app) cmdResolve(ctx context.Context, id string, ep int, opt options) int {
 	ref, ok := a.refFromID(id)
 	if !ok {
 		return 2
 	}
-	cands, err := a.engineWithoutPlayer().ResolveAll(ctx, ref, ep)
+	eng := a.engineWithoutPlayer()
+	cands, err := eng.ResolveAllFiltered(ctx, ref, ep, opt.release, eng.Prefs)
 	if err != nil || len(cands) == 0 {
 		if err == nil {
 			err = fmt.Errorf("серія %d: порожній список потоків: %w", ep, errs.ErrNoStream)
@@ -759,7 +778,7 @@ func (a *app) cmdResolve(ctx context.Context, id string, ep int, jsonOut bool) i
 		a.printCommandError(err)
 		return 1
 	}
-	if jsonOut {
+	if opt.json {
 		return printJSON(cands)
 	}
 	for _, c := range cands {
