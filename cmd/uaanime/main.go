@@ -220,6 +220,8 @@ type options struct {
 	version bool
 	// release — явний вибір релізу для download і resolve (--studio, --kind).
 	release playback.ReleaseFilter
+	// layout — розкладка папок для download (--layout); порожня — типова.
+	layout download.Layout
 }
 
 // command — одна headless-команда. args завжди починається з імені команди,
@@ -350,6 +352,16 @@ func run(args []string) (code int) {
 				return usageError(opt.json)
 			}
 			opt.release.Kind = kind
+		case isFlag(a, "--layout"):
+			v, ok := flagValue(args, &i, "--layout")
+			if !ok {
+				return usageError(opt.json)
+			}
+			layout, ok := download.ParseLayout(v)
+			if !ok {
+				return usageError(opt.json)
+			}
+			opt.layout = layout
 		default:
 			positional = append(positional, a)
 		}

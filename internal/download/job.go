@@ -90,6 +90,8 @@ type Job struct {
 	Release provider.Release
 	Height  int
 	Dir     string
+	// Layout — розкладка папок; порожня — типова (так ставить TUI).
+	Layout  Layout
 	Resolve ResolveFunc
 }
 
@@ -227,18 +229,25 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 	if name == "" {
 		name = j.Ref.Name
 	}
-	folder, err := FolderFor(j.Dir, j.Ref, name)
-	if err != nil {
-		return err
-	}
-	final := Path(j.Dir, folder, Parts{
+	parts := Parts{
 		Title:   name,
 		Episode: j.Episode,
 		Kind:    tgt.Kind,
 		Studio:  tgt.Studio,
 		Height:  q.Height,
 		Ext:     plan.Ext,
-	})
+	}
+	var folder string
+	if j.Layout.norm() == LayoutPlex {
+		parts.Title, parts.Season = SplitSeason(name)
+		folder, err = PlexFolderFor(j.Dir, j.Ref, parts.Title, parts.Season)
+	} else {
+		folder, err = FolderFor(j.Dir, j.Ref, name)
+	}
+	if err != nil {
+		return err
+	}
+	final := Path(j.Dir, folder, parts)
 	p.Path = final
 	sc := Sidecar{
 		Provider: j.Ref.Provider,
@@ -251,7 +260,12 @@ func download(ctx context.Context, f *httpx.Fetcher, j Job, p *Progress, report 
 	}
 
 	// Метадані визначають варіант навіть після перейменування тайтлу/файла.
+	// Лише своя розкладка: збережене раніше в іншій не переноситься, і новий
+	// файл просто лягає на нове місце.
 	for _, existing := range Saved(j.Dir, j.Ref)[j.Episode] {
+		if existing.Layout != j.Layout.norm() {
+			continue
+		}
 		// Студія — за provider.StudioKey: файл, записаний з іншим написанням
 		// тієї самої студії, — той самий варіант, а не привід качати ще раз.
 		if existing.Known && provider.SameStudio(existing.Studio, sc.Studio) && existing.Kind == sc.Kind && existing.Height == sc.Height {

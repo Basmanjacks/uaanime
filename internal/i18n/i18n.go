@@ -11,13 +11,14 @@ const (
   uaanime episodes <title-id> [--fresh] [--json]
   uaanime resolve <title-id> <серія> [--studio назва] [--kind тип] [--json]
   uaanime play <title-id> <серія> [--dry-run]
-  uaanime download <title-id> <серія> [--studio назва] [--kind тип] [--quality 1080] [--dir шлях] [--json]
+  uaanime download <title-id> <серія> [--studio назва] [--kind тип] [--quality 1080] [--dir шлях] [--layout plex] [--json]
   uaanime downloads [--dir шлях] [--json]  # що вже збережено на диску
   uaanime doctor [--json]
   uaanime export > backup.json
   uaanime import backup.json
   uaanime version [--json]             # або --version
   --kind dub|voiceover|sub|voiced      # voiced — будь-яке озвучення, без субтитрів
+  --layout default|plex                # plex — <Назва>/Season NN/<Назва> - S01E05 - …
   --debug                              # технічні подробиці помилок
   --json                               # помилки — одним JSON-рядком на stderr`
 	MsgBadEpisode     = "номер серії має бути додатним числом, отримано: %s"

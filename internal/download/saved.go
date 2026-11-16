@@ -67,6 +67,10 @@ type SavedFile struct {
 	// Known — метадані з достовірного sidecar-а. false — файл знайдено лише
 	// за marker-ом папки: серія й якість узяті з імені, студія й тип невідомі.
 	Known bool
+	// Layout — розкладка за глибиною: тека тайтлу під коренем — типова,
+	// «<серіал>/Season NN» — plex. Перевірка «вже збережено» дивиться лише
+	// на свою розкладку.
+	Layout Layout
 }
 
 // SavedTitle — усе збережене для одного тайтлу. Folders може бути кілька:
@@ -142,9 +146,10 @@ func readSidecar(mediaPath string) (Sidecar, bool) {
 	return s, true
 }
 
-// Index читає весь стан завантажень з диска: один ReadDir кореня і по одному
-// на папку тайтлу. Глибше не спускаємося — підпапки всередині папки тайтлу
-// створює не застосунок, і лізти в чужу структуру не наша справа.
+// Index читає весь стан завантажень з диска: один ReadDir кореня, по одному
+// на папку тайтлу і по одному на кожну її підпапку «Season NN» (Plex-розкладка:
+// «<серіал>/Season NN»). Глибше й в інші підпапки не спускаємося — їх створює
+// не застосунок, і лізти в чужу структуру не наша справа.
 //
 // Відсутня папка — не помилка: людина ще нічого не завантажувала.
 func Index(dir string) map[string]SavedTitle {
@@ -164,7 +169,9 @@ func Index(dir string) map[string]SavedTitle {
 		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
-		scanFolder(filepath.Join(dir, e.Name()), acc)
+		for _, season := range scanFolder(filepath.Join(dir, e.Name()), LayoutDefault, acc) {
+			scanFolder(season, LayoutPlex, acc)
+		}
 	}
 	for key, a := range acc {
 		out[key] = SavedTitle{
@@ -215,17 +222,25 @@ func (a *titleAcc) sortedFiles() map[int][]SavedFile {
 	return a.files
 }
 
-func scanFolder(folder string, acc map[string]*titleAcc) {
+// scanFolder додає в acc файли однієї теки. Для теки верхнього рівня
+// (layout == LayoutDefault) повертає її підпапки «Season NN» — їх Index читає
+// як теки plex-розкладки; інші каталоги нас не цікавлять.
+func scanFolder(folder string, layout Layout, acc map[string]*titleAcc) (seasons []string) {
 	marker, hasMarker := ReadMarker(folder)
 	ents, err := os.ReadDir(folder)
 	if err != nil {
-		return
+		return nil
 	}
 	for _, e := range ents {
 		name := e.Name()
-		// Приховане — це наші sidecar-и й marker; .part — недокачане;
-		// каталоги всередині папки тайтлу нас не цікавлять.
-		if e.IsDir() || strings.HasPrefix(name, ".") || strings.HasSuffix(name, partSuffix) {
+		if e.IsDir() {
+			if layout == LayoutDefault && isSeasonFolder(name) {
+				seasons = append(seasons, filepath.Join(folder, name))
+			}
+			continue
+		}
+		// Приховане — це наші sidecar-и й marker; .part — недокачане.
+		if strings.HasPrefix(name, ".") || strings.HasSuffix(name, partSuffix) {
 			continue
 		}
 		info, err := e.Info()
@@ -237,7 +252,7 @@ func scanFolder(folder string, acc map[string]*titleAcc) {
 		var (
 			ref provider.TitleRef
 			ep  int
-			f   = SavedFile{Path: path, Bytes: info.Size(), ModTime: info.ModTime()}
+			f   = SavedFile{Path: path, Bytes: info.Size(), ModTime: info.ModTime(), Layout: layout}
 		)
 		switch sc, ok := readSidecar(path); {
 		case ok:
@@ -270,6 +285,7 @@ func scanFolder(folder string, acc map[string]*titleAcc) {
 		markedHere := hasMarker && marker.Provider == ref.Provider && marker.Slug == ref.Slug
 		a.add(folder, markedHere, ep, f)
 	}
+	return seasons
 }
 
 // Saved — локальні варіанти серій одного тайтлу: серія → усі якості й релізи.
@@ -386,7 +402,12 @@ func folderByMarker(dir string, ref provider.TitleRef) (string, bool) {
 // claimFolder: ok == false означає «зайнято іншим тайтлом, спробуй наступне
 // ім'я»; помилка — що писати нікуди й наступне ім'я не допоможе.
 func claimFolder(dir, base string, ref provider.TitleRef) (string, bool, error) {
-	folder := filepath.Join(dir, base)
+	return claim(filepath.Join(dir, base), ref, ownedByOther)
+}
+
+// claim — спільне ядро claimFolder і PlexFolderFor; foreign вирішує, чи можна
+// усиновити наявну теку без marker-а.
+func claim(folder string, ref provider.TitleRef, foreign func(string, provider.TitleRef) bool) (string, bool, error) {
 	info, err := os.Stat(folder)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
@@ -405,7 +426,7 @@ func claimFolder(dir, base string, ref provider.TitleRef) (string, bool, error) 
 		// Папка без marker-а: усиновлюємо, якщо в ній немає файлів чужого
 		// тайтлу. Так підхоплюються теки, створені старішою версією або
 		// руками, і не забирається чужа.
-		if ownedByOther(folder, ref) {
+		if foreign(folder, ref) {
 			return "", false, nil
 		}
 	}
@@ -415,7 +436,9 @@ func claimFolder(dir, base string, ref provider.TitleRef) (string, bool, error) 
 	return folder, true, nil
 }
 
-// ownedByOther — чи є в папці sidecar іншого тайтлу.
+// ownedByOther — чи є в папці sidecar іншого тайтлу або тека сезону
+// Plex-розкладки з marker-ом іншого тайтлу (тоді це тека серіалу, і серії
+// типової розкладки в ній змішалися б із чужим сезоном).
 func ownedByOther(folder string, ref provider.TitleRef) bool {
 	ents, err := os.ReadDir(folder)
 	if err != nil {
@@ -423,7 +446,15 @@ func ownedByOther(folder string, ref provider.TitleRef) bool {
 	}
 	for _, e := range ents {
 		name := e.Name()
-		if e.IsDir() || !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") || name == markerName {
+		if e.IsDir() {
+			if isSeasonFolder(name) {
+				if m, ok := ReadMarker(filepath.Join(folder, name)); ok && (m.Provider != ref.Provider || m.Slug != ref.Slug) {
+					return true
+				}
+			}
+			continue
+		}
+		if !strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") || name == markerName {
 			continue
 		}
 		var s Sidecar

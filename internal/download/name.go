@@ -39,6 +39,8 @@ type Parts struct {
 	Studio  string
 	Height  int
 	Ext     string
+	// Season > 0 — plex-розкладка: номер серії пишеться як «S02E05».
+	Season int
 }
 
 // FolderName — ім'я папки тайтлу всередині папки завантажень. Людське:
@@ -51,7 +53,8 @@ func FolderName(title string) string {
 	return untitledName
 }
 
-// Filename — «<Назва> - 05 - <Студія> [<Тип>, 1080p].ts». Порядок частин
+// Filename — «<Назва> - 05 - <Студія> [<Тип>, 1080p].ts», а з Season —
+// «<Серіал> - S02E05 - <Студія> [<Тип>, 1080p].ts». Порядок частин
 // обрано так, щоб сортування за іменем у файловому менеджері давало серії по
 // порядку, а варіанти однієї серії стояли поруч.
 //
@@ -65,6 +68,9 @@ func Filename(p Parts) string {
 	studio := sanitise(p.Studio, maxFileBytes)
 	ext := normExt(p.Ext)
 	ep := episodeToken(p.Episode)
+	if p.Season > 0 {
+		ep = fmt.Sprintf("S%02dE%s", p.Season, ep)
+	}
 	tag := bracketTag(p.Kind, p.Height)
 
 	// Бюджет назви = ліміт мінус усе, що не ріжеться.
@@ -105,10 +111,12 @@ func Path(dir, folder string, p Parts) string {
 //
 // `.+` жадібний, тому у назві на кшталт «Steins - 12 - Gate - 05 - Студія
 // [Озв].ts» виграє ОСТАННЯ група « - NN - », тобто 05. Це і є бажане: суфікс
-// ми дописуємо в кінець, а все, що лівіше, — назва тайтлу.
+// ми дописуємо в кінець, а все, що лівіше, — назва тайтлу. Plex-форма
+// «S02E05» розбирається тими самими регулярками: сезон для індексу не
+// потрібен, його каже тека «Season NN» з marker-ом.
 var (
-	reSavedQuality = regexp.MustCompile(`^.+ - (\d{1,4})(?: - .*)? \[(?:[^\]]*?, )?(\d{2,4})p\]\.(ts|webm|mp4)$`)
-	reSavedPlain   = regexp.MustCompile(`^.+ - (\d{1,4})(?: - .*)?(?: \[[^\]]*\])?\.(ts|webm|mp4)$`)
+	reSavedQuality = regexp.MustCompile(`^.+ - (?:S\d{2}E)?(\d{1,4})(?: - .*)? \[(?:[^\]]*?, )?(\d{2,4})p\]\.(ts|webm|mp4)$`)
+	reSavedPlain   = regexp.MustCompile(`^.+ - (?:S\d{2}E)?(\d{1,4})(?: - .*)?(?: \[[^\]]*\])?\.(ts|webm|mp4)$`)
 )
 
 // parseSavedName дістає з імені номер серії й висоту (0 — невідома).

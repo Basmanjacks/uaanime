@@ -63,10 +63,11 @@ type jobKey struct {
 	episode        int
 	release        provider.Release
 	height         int
+	layout         Layout
 }
 
 func keyFor(j Job) jobKey {
-	return jobKey{j.Ref.Provider, j.Ref.Slug, j.Episode, j.Release, j.Height}
+	return jobKey{j.Ref.Provider, j.Ref.Slug, j.Episode, j.Release, j.Height, j.Layout.norm()}
 }
 
 // Enqueue ставить варіант серії в чергу. Повторний виклик для того самого

@@ -109,6 +109,7 @@ func (a *app) cmdDownload(id string, ep int, opt options) int {
 		Release: hints.Release,
 		Height:  opt.quality,
 		Dir:     dir,
+		Layout:  opt.layout,
 		Resolve: resolve,
 	})
 	if err != nil {
