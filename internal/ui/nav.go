@@ -71,9 +71,7 @@ func (m *Model) beginNav() int {
 	// Оновлення, що летить, більше не стосується екрана, з якого пішли; сама
 	// операція доживає (кеш на диску їй потрібен), тому refreshBusy не чіпаємо.
 	m.refreshGen++
-	m.statusGen++
-	m.statusKind = statusInfo
-	m.status = ""
+	m.clearStatus()
 	return m.nextReq()
 }
 
@@ -221,6 +219,9 @@ func (m *Model) listHeight() int {
 		n -= len(m.budgetNoteLines())
 	}
 	if m.inputVisible() {
+		n--
+	}
+	if m.subtitle() != "" {
 		n--
 	}
 	return max(1, n)

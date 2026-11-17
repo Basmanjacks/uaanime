@@ -61,13 +61,9 @@ func (m *Model) rebuildHome() {
 
 	_ = m.setItems(items, firstRow(items))
 	if own == 0 {
-		m.status = i18n.TuiEmptyLibrary
-		m.statusKind = statusInfo
-		m.statusGen++
+		m.setStatus(statusInfo, i18n.TuiEmptyLibrary)
 	} else {
-		m.status = ""
-		m.statusKind = statusInfo
-		m.statusGen++
+		m.clearStatus()
 	}
 }
 

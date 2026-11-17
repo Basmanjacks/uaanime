@@ -130,7 +130,7 @@ func TestHomeSettingsRowLastInMoreAndCommaOpens(t *testing.T) {
 	if !strings.Contains(ansi.Strip(m.View().Content), strings.ToUpper(i18n.TuiBlockPlayback)) {
 		t.Fatal("немає секції «Перегляд»")
 	}
-	if !strings.Contains(i18n.TuiHintHome, ", ") {
+	if !hasAction(newTestModel(t), ",") {
 		t.Fatal("підказка домівки не згадує клавішу ,")
 	}
 }
@@ -505,5 +505,24 @@ func TestSettingsPrefsChangeDuringResolve(t *testing.T) {
 	close(release)
 	if msg, ok := (<-done).(resolvedMsg); !ok || msg.err != nil {
 		t.Fatalf("резолв: %+v", msg)
+	}
+}
+
+// Статус зміни налаштування — нове покоління: таймер попереднього «успіху»
+// (наприклад, збереженої папки) не має стерти свіжий статус за 3 секунди.
+func TestSettingCycleStatusSurvivesOldSuccessExpiry(t *testing.T) {
+	m := newSettingsModel(t, Options{})
+	m = openSettings(t, m)
+	selectSetting(t, &m, settingAutoplay)
+	m.setStatus(statusSuccess, "saved")
+	gen := m.statusGen
+	m, _ = pressTestKey(t, m, tea.KeyRight, "")
+	want := m.status
+	if want == "" || want == "saved" {
+		t.Fatal("зміна налаштування не дала статусу")
+	}
+	m, _ = updateTestModel(t, m, statusExpiredMsg{gen})
+	if m.status != want {
+		t.Fatalf("старий таймер стер статус налаштування: %q", m.status)
 	}
 }

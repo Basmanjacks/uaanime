@@ -78,6 +78,8 @@ func (m Model) View() tea.View {
 		} else {
 			body = m.brandFallbackTitle() + "\n"
 		}
+	} else if sub := m.subtitle(); sub != "" {
+		body = styleTitleTight.Render(title) + "\n" + styleSubtitle.Render(sub) + "\n"
 	} else {
 		body = styleTitle.Render(title) + "\n"
 	}
@@ -164,50 +166,65 @@ func (m Model) View() tea.View {
 	return v
 }
 
-// episodesHeader — назва тайтла плюс хвіст із метаданих: скільки лишилось,
-// приблизно скільки це часу і який реліз закріплено. Хвіст коштує колонок,
+// episodesHeader — назва тайтла плюс хвіст: скільки лишилось і приблизно
+// скільки це часу. Реліз живе окремим рядком (subtitle). Хвіст коштує колонок,
 // тому у вузькому вікні частини відкидаються за цінністю: спершу оцінка часу
-// (похідна від кількості), потім кількість, і лише тоді пін — поки назві не
-// лишиться менше за minTitleName.
+// (похідна від кількості), потім кількість — поки назві не лишиться менше за
+// minTitleName.
 func (m Model) episodesHeader() string {
-	remaining := m.remainingParts()
-	eta := ""
-	if len(remaining) > 1 {
-		eta = "~" + remaining[1] // середнє, а не точна тривалість
-		remaining = remaining[:1]
+	parts := m.remainingParts()
+	if len(parts) > 1 {
+		parts = []string{parts[0], "~" + parts[1]} // середнє, а не точна тривалість
 	}
-	pin := fmt.Sprintf(i18n.TuiStudioPinned, m.pinLabel())
-	assemble := func() []string {
-		parts := append([]string{}, remaining...)
-		if eta != "" {
-			parts = append(parts, eta)
-		}
-		return append(parts, pin)
-	}
-
 	limit := m.w - 2
-	parts := assemble()
 	tail := metaTail(parts)
 	for len(parts) > 0 && limit-lipgloss.Width(tail) < minTitleName {
-		switch {
-		case eta != "":
-			eta = ""
-		case len(remaining) > 0:
-			remaining = nil
-		default:
-			pin = ""
-		}
-		parts = assemble()
-		if pin == "" {
-			parts = nil
-		}
+		parts = parts[:len(parts)-1]
 		tail = metaTail(parts)
 	}
-	nameWidth := limit - lipgloss.Width(tail)
-	if nameWidth < 8 {
-		nameWidth = 8
-	}
+	nameWidth := max(limit-lipgloss.Width(tail), 8)
 	return truncate(truncate(m.currentTitleName(), nameWidth)+tail, limit)
+}
+
+// subtitle — рядок під назвою; зараз лише на екрані серій: реліз тайтла і
+// скільки є інших. "" — рядка немає, заголовок звичайний.
+func (m Model) subtitle() string {
+	if m.screen != screenEpisodes || m.overlay != overlayNone {
+		return ""
+	}
+	// Рядок є завжди, навіть поки серії вантажаться: інакше список стрибав би
+	// на рядок, щойно вони прийдуть.
+	r := m.epRelease
+	var parts []string
+	switch {
+	case m.studioPin().Studio != "":
+		parts = append(parts, fmt.Sprintf(i18n.TuiStudioPinned, m.pinLabel()))
+	case r.ambiguous:
+		parts = append(parts, i18n.TuiReleaseUnchosen)
+	case r.main != nil:
+		parts = append(parts, fmt.Sprintf(i18n.TuiStudioPinned, i18n.TuiStudioAuto),
+			fmt.Sprintf(i18n.TuiRelPair, i18n.StudioName(r.main.Studio), i18n.KindShort(r.main.Kind)))
+	default:
+		parts = append(parts, fmt.Sprintf(i18n.TuiStudioPinned, i18n.TuiStudioAuto))
+	}
+	if r.voiced > 0 {
+		if r.main != nil {
+			parts = append(parts, fmt.Sprintf(i18n.TuiMoreVoiced, r.voiced))
+		} else {
+			parts = append(parts, fmt.Sprintf(i18n.TuiCountVoiced, r.voiced))
+		}
+	}
+	if r.subs > 0 {
+		parts = append(parts, fmt.Sprintf(i18n.TuiMoreSubs, r.subs))
+	}
+	if r.ambiguous {
+		parts = append(parts, i18n.TuiReleasePickKey)
+	}
+	line := strings.Join(parts, metaSep)
+	if m.w > 0 {
+		line = truncate(line, m.w-2)
+	}
+	return line
 }
 
 func metaTail(parts []string) string {

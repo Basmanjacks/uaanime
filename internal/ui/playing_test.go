@@ -162,16 +162,9 @@ func TestPlayingEscCancelsSession(t *testing.T) {
 	}
 }
 
-// Підказка «Грає» має дві версії: у 80 колонок влазить повна, у 40 — коротка.
+// Підказка «Грає» показується цілою за будь-якої ширини: дії, що не влазять, відкидаються.
 func TestPlayingHintFitsWindow(t *testing.T) {
-	for _, tt := range []struct {
-		w    int
-		want string
-	}{
-		{w: 120, want: i18n.TuiHintPlaying},
-		{w: 80, want: i18n.TuiHintPlaying},
-		{w: 40, want: i18n.TuiHintPlayingNarrow},
-	} {
+	for _, tt := range []struct{ w int }{{w: 120}, {w: 80}, {w: 40}} {
 		m := newTestModel(t)
 		m.screen = screenPlaying
 		m.status = "" // startPlayback лишає статус порожнім — унизу підказка

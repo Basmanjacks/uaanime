@@ -104,7 +104,7 @@ func TestEpisodesHintFitsMinimumWidth(t *testing.T) {
 	m.status, m.errText = "", ""
 	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	if !strings.Contains(i18n.TuiHintEpisodes, "X ") {
+	if !hasAction(m, "X") {
 		t.Fatal("підказка не згадує клавішу x")
 	}
 	if view := ansi.Strip(m.View().Content); !strings.Contains(view, m.hint()) {
@@ -138,14 +138,14 @@ func TestEpisodesHeaderEtaDropsFirst(t *testing.T) {
 	if !strings.Contains(header, remaining) {
 		t.Fatalf("wide header %q does not contain %q", header, remaining)
 	}
-	if !strings.Contains(header, pin) {
-		t.Fatalf("wide header %q does not contain %q", header, pin)
+	if sub := subtitleLine(m); !strings.Contains(sub, pin) {
+		t.Fatalf("wide subtitle %q does not contain %q", sub, pin)
 	}
 	assertViewFitsWidth(t, m)
 
 	// Хвіст відкидається за цінністю: оцінка часу — похідна від кількості,
-	// тому зникає першою; кількість серій і пін лишаються.
-	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 60, Height: 24})
+	// тому зникає першою; кількість серій лишається.
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 50, Height: 24})
 	header = strings.SplitN(ansi.Strip(m.View().Content), "\n", 2)[0]
 	if strings.Contains(header, "~4 год 24 хв") {
 		t.Fatalf("narrow header %q kept the eta", header)
@@ -153,19 +153,19 @@ func TestEpisodesHeaderEtaDropsFirst(t *testing.T) {
 	if !strings.Contains(header, i18n.RemainingEpisodes(11)) {
 		t.Fatalf("narrow header %q dropped the remaining count before the eta", header)
 	}
-	if !strings.Contains(header, pin) {
-		t.Fatalf("narrow header %q dropped the studio pin", header)
+	if sub := subtitleLine(m); !strings.Contains(sub, pin) {
+		t.Fatalf("narrow subtitle %q dropped the studio pin", sub)
 	}
 	assertViewFitsWidth(t, m)
 
-	// Ще вужче — зникає й кількість, але закріплена пара лишається останньою.
-	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 48, Height: 24})
+	// Ще вужче — зникає й кількість; пін живе окремим рядком і не страждає.
+	m, _ = updateTestModel(t, m, tea.WindowSizeMsg{Width: 38, Height: 24})
 	header = strings.SplitN(ansi.Strip(m.View().Content), "\n", 2)[0]
 	if strings.Contains(header, i18n.RemainingEpisodes(11)) {
 		t.Fatalf("very narrow header %q kept the remaining count", header)
 	}
-	if !strings.Contains(header, pin) {
-		t.Fatalf("very narrow header %q dropped the studio pin", header)
+	if sub := subtitleLine(m); !strings.Contains(sub, pin) {
+		t.Fatalf("very narrow subtitle %q dropped the studio pin", sub)
 	}
 	assertViewFitsWidth(t, m)
 }
@@ -244,12 +244,9 @@ func TestEpisodeRowsShowReleasePairs(t *testing.T) {
 			badgeWarn bool
 		}{
 			{num: 9, icon: m.ic.Done, badge: i18n.TuiEpDone},
-			{
-				num:  10,
-				icon: m.ic.Pending,
-				meta: i18n.KindShort(voice) + metaSep + studio + metaSep +
-					fmt.Sprintf(i18n.TuiMoreVoiced, 1) + metaSep + fmt.Sprintf(i18n.TuiMoreSubs, 1),
-			},
+			// Грає закріплений реліз — рядок про нього мовчить: його вже
+			// названо під заголовком.
+			{num: 10, icon: m.ic.Pending},
 			{
 				num:       11,
 				icon:      m.ic.Pending,
@@ -272,6 +269,13 @@ func TestEpisodeRowsShowReleasePairs(t *testing.T) {
 			}
 		}
 
+		// Під назвою — пін і що ще є на тайтлі, один раз замість кожного рядка.
+		wantSub := fmt.Sprintf(i18n.TuiStudioPinned, fmt.Sprintf(i18n.TuiRelPair, studio, i18n.KindShort(voice))) +
+			metaSep + fmt.Sprintf(i18n.TuiMoreVoiced, 1) + metaSep + fmt.Sprintf(i18n.TuiMoreSubs, 1)
+		if got := m.subtitle(); got != wantSub {
+			t.Errorf("підрядок = %q, want %q", got, wantSub)
+		}
+
 		// Номери вирівняні під найдовший: «Серія  9» стоїть під «Серія 10».
 		if want := fmt.Sprintf(i18n.TuiEpisodeNoPad, 2, 9); episodeRow(t, m, 9).title != want {
 			t.Errorf("назва серії 9 = %q, want %q", episodeRow(t, m, 9).title, want)
@@ -288,9 +292,15 @@ func TestEpisodeRowsShowReleasePairs(t *testing.T) {
 		})
 		m.showEpisodes()
 
+		// Рядок не обіцяє студію, яку Enter однаково спитає; про вибір каже
+		// підрядок під назвою — один раз, а не в кожній серії.
 		row := episodeRow(t, m, 1)
-		if row.badge != i18n.TuiPickWillChooseStudio || row.badgeWarn {
-			t.Fatalf("бейдж = (%q, %t), want (%q, false)", row.badge, row.badgeWarn, i18n.TuiPickWillChooseStudio)
+		if row.meta != "" || row.badge != "" {
+			t.Fatalf("рядок = (%q, %q), want порожній", row.meta, row.badge)
+		}
+		wantSub := i18n.TuiReleaseUnchosen + metaSep + fmt.Sprintf(i18n.TuiCountVoiced, 2) + metaSep + i18n.TuiReleasePickKey
+		if got := m.subtitle(); got != wantSub {
+			t.Fatalf("підрядок = %q, want %q", got, wantSub)
 		}
 	})
 
@@ -306,8 +316,9 @@ func TestEpisodeRowsShowReleasePairs(t *testing.T) {
 		if row.badge != "" || row.badgeWarn {
 			t.Fatalf("бейдж явного піна на саби = (%q, %t), want порожній", row.badge, row.badgeWarn)
 		}
-		if want := i18n.KindShort(sub) + metaSep + studio; row.meta != want {
-			t.Fatalf("meta = %q, want %q", row.meta, want)
+		// Грає саме закріплене — рядку нема від чого відхилятися.
+		if row.meta != "" {
+			t.Fatalf("meta = %q, want порожній", row.meta)
 		}
 	})
 
@@ -324,7 +335,8 @@ func TestEpisodeRowsShowReleasePairs(t *testing.T) {
 		m.showEpisodes()
 
 		row := episodeRow(t, m, 10)
-		want := i18n.KindShort(voice) + metaSep + studio + metaSep + fmt.Sprintf(i18n.TuiEpAt, 10, 0)
+		// Реліз той самий, що під назвою, — у рядку лише позиція.
+		want := fmt.Sprintf(i18n.TuiEpAt, 10, 0)
 		if row.meta != want {
 			t.Fatalf("meta початої серії = %q, want %q", row.meta, want)
 		}
@@ -334,7 +346,7 @@ func TestEpisodeRowsShowReleasePairs(t *testing.T) {
 	})
 }
 
-// TestEpisodesHeaderShowsPinPair — заголовок екрана серій називає закріплену
+// TestEpisodesHeaderShowsPinPair — рядок під назвою екрана серій називає закріплену
 // пару цілком: wildcard-пін лишається самою студією, бо тип у ньому не
 // зафіксовано.
 func TestEpisodesHeaderShowsPinPair(t *testing.T) {
@@ -368,13 +380,48 @@ func TestEpisodesHeaderShowsPinPair(t *testing.T) {
 			m.screen = screenEpisodes
 			m.w = 80
 
-			header := strings.SplitN(ansi.Strip(m.View().Content), "\n", 2)[0]
-			if !strings.Contains(header, tc.want) {
-				t.Fatalf("заголовок %q не містить %q", header, tc.want)
+			sub := subtitleLine(m)
+			if !strings.Contains(sub, tc.want) {
+				t.Fatalf("підрядок %q не містить %q", sub, tc.want)
 			}
-			if tc.absent != "" && strings.Contains(header, tc.absent) {
-				t.Fatalf("заголовок %q містить зайве %q", header, tc.absent)
+			if tc.absent != "" && strings.Contains(sub, tc.absent) {
+				t.Fatalf("підрядок %q містить зайве %q", sub, tc.absent)
 			}
 		})
+	}
+}
+
+// subtitleLine — другий рядок кадру: рядок під назвою на екрані серій.
+func subtitleLine(m Model) string {
+	lines := strings.SplitN(ansi.Strip(m.View().Content), "\n", 3)
+	if len(lines) < 2 {
+		return ""
+	}
+	return lines[1]
+}
+
+// Без піна, але вибір однозначний у кожній серії: під назвою — найчастіший
+// реліз з позначкою «авто», а рядок серії, де гратиме інший, каже, який саме.
+func TestEpisodeRowsShowOnlyDeviationFromAutoRelease(t *testing.T) {
+	dub := provider.KindDub
+	m := newTestModel(t)
+	ref := testRefs("auto-main", 1)[0]
+	seedPinnedTitle(t, &m, ref, library.Pin{}, []provider.Episode{
+		epWithReleases(1, provider.Release{Studio: "Alpha", Kind: dub}),
+		epWithReleases(2, provider.Release{Studio: "Alpha", Kind: dub}),
+		epWithReleases(3, provider.Release{Studio: "Beta", Kind: dub}),
+	})
+	m.showEpisodes()
+
+	want := fmt.Sprintf(i18n.TuiStudioPinned, i18n.TuiStudioAuto) + metaSep +
+		fmt.Sprintf(i18n.TuiRelPair, "Alpha", i18n.KindShort(dub)) + metaSep + fmt.Sprintf(i18n.TuiMoreVoiced, 1)
+	if got := m.subtitle(); got != want {
+		t.Fatalf("підрядок = %q, want %q", got, want)
+	}
+	if row := episodeRow(t, m, 1); row.meta != "" {
+		t.Errorf("серія 1 грає реліз із підрядка, а meta = %q", row.meta)
+	}
+	if row, want := episodeRow(t, m, 3), i18n.KindShort(dub)+metaSep+"Beta"; row.meta != want {
+		t.Errorf("серія 3: meta = %q, want %q", row.meta, want)
 	}
 }

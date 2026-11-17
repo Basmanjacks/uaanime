@@ -97,7 +97,10 @@ type view struct {
 	// цієї мітки список попереднього тайтлу зійшов би за поточний.
 	episodesRef provider.TitleRef
 	episodes    []provider.Episode
-	status      string
+	// epRelease — зведення релізів тайтла для рядка під назвою; будується
+	// разом із рядками серій (episodeRows), тож завжди про ті самі серії.
+	epRelease titleRelease
+	status    string
 
 	// стан екрана пошуку
 	query string

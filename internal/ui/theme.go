@@ -56,12 +56,16 @@ func qrModuleColor(dark bool) color.Color {
 }
 
 var (
-	styleTitle   = lipgloss.NewStyle().Bold(true).Foreground(colFgBright).Padding(0, 0, 1, 2)
-	styleBanner  = lipgloss.NewStyle().Foreground(colAccent).PaddingLeft(2)
-	styleTagline = lipgloss.NewStyle().Foreground(colDim).PaddingLeft(2)
-	styleHint    = lipgloss.NewStyle().Foreground(colDim).Padding(1, 0, 0, 2)
-	styleStatus  = lipgloss.NewStyle().Foreground(colDim).Padding(1, 0, 0, 2)
-	styleErr     = lipgloss.NewStyle().Foreground(colWarn).Padding(1, 0, 0, 2)
+	styleTitle = lipgloss.NewStyle().Bold(true).Foreground(colFgBright).Padding(0, 0, 1, 2)
+	// Заголовок із рядком під ним (екран серій): відступ знизу переходить до
+	// підрядка, щоб назва й підрядок читалися одним блоком.
+	styleTitleTight = styleTitle.PaddingBottom(0)
+	styleSubtitle   = lipgloss.NewStyle().Foreground(colDim).Padding(0, 0, 1, 2)
+	styleBanner     = lipgloss.NewStyle().Foreground(colAccent).PaddingLeft(2)
+	styleTagline    = lipgloss.NewStyle().Foreground(colDim).PaddingLeft(2)
+	styleHint       = lipgloss.NewStyle().Foreground(colDim).Padding(1, 0, 0, 2)
+	styleStatus     = lipgloss.NewStyle().Foreground(colDim).Padding(1, 0, 0, 2)
+	styleErr        = lipgloss.NewStyle().Foreground(colWarn).Padding(1, 0, 0, 2)
 
 	// Рядок списку. Вибране відрізняється яскравістю, а не фоном:
 	// інверсія фону в терміналі з власною темою виглядає як артефакт.

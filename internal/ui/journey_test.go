@@ -228,8 +228,10 @@ func TestJourneySearchToPlaybackAndBack(t *testing.T) {
 	if got := len(m.list.Items()); got != journeyEpisodes {
 		t.Fatalf("рядків серій = %d, want %d", got, journeyEpisodes)
 	}
-	if !strings.Contains(ansi.Strip(m.View().Content), fmt.Sprintf(i18n.TuiStudioPinned, i18n.TuiStudioAuto)) {
-		t.Error("до першого перегляду заголовок має показувати «озвучка: авто»")
+	// Дві рівноцінні студії без піна: під назвою чесно «не обрано», бо
+	// Enter однаково спитає.
+	if !strings.Contains(ansi.Strip(m.View().Content), i18n.TuiReleaseUnchosen) {
+		t.Error("до першого перегляду під назвою має бути «реліз ще не обрано»")
 	}
 
 	// Enter на серії 1 → дві студії дубляжу без піна → питання рівно один раз.

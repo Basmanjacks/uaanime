@@ -364,3 +364,14 @@ func seedBadgeModel(t *testing.T, m *Model, refs []provider.TitleRef, episodes, 
 	e.LastEpisode = lastEpisode
 	m.showHome()
 }
+
+// hasAction — чи є клавіша серед дій поточного екрана: саме з них будуються
+// рядок підказки й довідка, тобто те, що людина реально бачить.
+func hasAction(m Model, key string) bool {
+	for _, a := range m.actions() {
+		if a.key == key {
+			return true
+		}
+	}
+	return false
+}

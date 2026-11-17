@@ -148,9 +148,7 @@ func downloadBadgeRank(state download.State) int {
 // жодного третього екрана: тут лише підготовка, вибір якості робить Enter.
 func (m Model) requestDownload() (tea.Model, tea.Cmd) {
 	if m.dl == nil {
-		m.status = i18n.TuiDlUnavailable
-		m.statusKind = statusWarning
-		m.statusGen++
+		m.setStatus(statusWarning, i18n.TuiDlUnavailable)
 		return m, nil
 	}
 	it, ok := m.list.SelectedItem().(item)
@@ -166,15 +164,11 @@ func (m Model) requestDownload() (tea.Model, tea.Cmd) {
 	// завжди зі статусом: мовчазне «нічого не сталося» не відрізнити від
 	// клавіші, що не дійшла.
 	if m.pending != nil {
-		m.status = i18n.TuiDlBusyNav
-		m.statusKind = statusWarning
-		m.statusGen++
+		m.setStatus(statusWarning, i18n.TuiDlBusyNav)
 		return m, nil
 	}
 	if m.playCancel != nil {
-		m.status = i18n.TuiDlBusyPlaying
-		m.statusKind = statusWarning
-		m.statusGen++
+		m.setStatus(statusWarning, i18n.TuiDlBusyPlaying)
 		return m, nil
 	}
 	snap := m.snapshot()
@@ -183,9 +177,7 @@ func (m Model) requestDownload() (tea.Model, tea.Cmd) {
 	m.pendingReq = req
 	m.pendingEp = p.num
 	m.errText = ""
-	m.status = i18n.TuiDlPreparing
-	m.statusKind = statusLoading
-	m.statusGen++
+	m.setStatus(statusLoading, i18n.TuiDlPreparing)
 	return m, m.releaseChoicesCmd(m.ref, p.num, req, studioDownload)
 }
 
@@ -196,8 +188,7 @@ func (m Model) prepareDownloadRelease(src provider.Source) (tea.Model, tea.Cmd) 
 	m.dlRelease = provider.Release{Studio: src.Studio, Kind: src.Kind}
 	h := m.eng.ResolveHints(m.ref, m.pendingEp)
 	h.Release = m.dlRelease
-	m.status, m.statusKind = i18n.TuiDlPreparing, statusLoading
-	m.statusGen++
+	m.setStatus(statusLoading, i18n.TuiDlPreparing)
 	return m, m.downloadPlanCmd(m.ref, m.pendingEp, req, h)
 }
 
@@ -285,9 +276,7 @@ func qualitySize(bytes int64, exact bool) string {
 // до списку серій, а не назад у вибір якості, який уже зроблено.
 func (m Model) enqueueQuality(height int) (tea.Model, tea.Cmd) {
 	if m.dl == nil {
-		m.status = i18n.TuiDlUnavailable
-		m.statusKind = statusWarning
-		m.statusGen++
+		m.setStatus(statusWarning, i18n.TuiDlUnavailable)
 		return m, nil
 	}
 	ref, ep := m.ref, m.pendingEp
@@ -302,9 +291,7 @@ func (m Model) enqueueQuality(height int) (tea.Model, tea.Cmd) {
 		m.stack = m.stack[:len(m.stack)-1]
 	}
 	m.back()
-	m.status = fmt.Sprintf(i18n.TuiDlQueued, ep, i18n.Downloads(len(m.downloads)))
-	m.statusKind = statusSuccess
-	m.statusGen++
+	m.setStatus(statusSuccess, fmt.Sprintf(i18n.TuiDlQueued, ep, i18n.Downloads(len(m.downloads))))
 	return m, nil
 }
 
@@ -346,9 +333,7 @@ func (m *Model) showDownloads() {
 	m.resetSavedScratch()
 	rows := m.downloadRows()
 	_ = m.setItems(rows, firstRow(rows))
-	m.status = ""
-	m.statusKind = statusInfo
-	m.statusGen++
+	m.clearStatus()
 }
 
 // downloadsTitle — «Завантаження · 1 активне · 2 у черзі». Нулі не
@@ -562,9 +547,7 @@ func (m Model) retryDownload(p payloadDownload) (tea.Model, tea.Cmd) {
 	}
 	m.applyDownloadSnapshot()
 	cmd := m.setItems(m.downloadRows(), m.list.Index())
-	m.status = fmt.Sprintf(i18n.TuiDlQueued, p.ep, i18n.Downloads(len(m.downloads)))
-	m.statusKind = statusSuccess
-	m.statusGen++
+	m.setStatus(statusSuccess, fmt.Sprintf(i18n.TuiDlQueued, p.ep, i18n.Downloads(len(m.downloads))))
 	return m, cmd
 }
 
@@ -576,9 +559,7 @@ func (m Model) playSaved(p payloadSavedFile) (tea.Model, tea.Cmd) {
 	req := m.beginNav()
 	m.ref = p.ref
 	m.pendingEp = p.ep
-	m.status = i18n.TuiResolving
-	m.statusKind = statusLoading
-	m.statusGen++
+	m.setStatus(statusLoading, i18n.TuiResolving)
 	h := m.eng.ResolveHints(p.ref, p.ep)
 	h.LocalPath = p.path
 	return m, m.resolveCmd(p.ref, p.ep, req, h)
@@ -624,17 +605,11 @@ func (m *Model) applyDownloadSnapshot() bool {
 		case download.StateDone:
 			// Файл з'явився на диску — кеш папки більше не описує правду.
 			m.resetSavedScratch()
-			m.status = fmt.Sprintf(i18n.TuiDlSaved, p.Episode, i18n.QualityLabel(p.Height), i18n.Bytes(p.Bytes))
-			m.statusKind = statusSuccess
-			m.statusGen++
+			m.setStatus(statusSuccess, fmt.Sprintf(i18n.TuiDlSaved, p.Episode, i18n.QualityLabel(p.Height), i18n.Bytes(p.Bytes)))
 		case download.StateFailed:
-			m.status = fmt.Sprintf(i18n.TuiDlFailed, p.Episode, m.errorText(p.Err))
-			m.statusKind = statusWarning
-			m.statusGen++
+			m.setStatus(statusWarning, fmt.Sprintf(i18n.TuiDlFailed, p.Episode, m.errorText(p.Err)))
 		case download.StateCancelled:
-			m.status = fmt.Sprintf(i18n.TuiDlCancelled, p.Episode)
-			m.statusKind = statusInfo
-			m.statusGen++
+			m.setStatus(statusInfo, fmt.Sprintf(i18n.TuiDlCancelled, p.Episode))
 		}
 	}
 	m.downloads = next

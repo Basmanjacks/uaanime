@@ -184,7 +184,7 @@ func TestPlayingFrameShowsQR(t *testing.T) {
 				t.Errorf("кадр %d рядків, вікно %d", lines, tt.h)
 			}
 			// Підказка внизу — те, що QR не має права витіснити.
-			if plain := ansi.Strip(content); !strings.Contains(plain, m.hint()) && !strings.Contains(plain, i18n.TuiHintPlayingNarrow) {
+			if plain := ansi.Strip(content); !strings.Contains(plain, m.hint()) {
 				t.Errorf("підказку витіснено:\n%s", plain)
 			}
 		})

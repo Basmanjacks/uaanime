@@ -116,7 +116,7 @@ func TestUsabilityFilteredHistoryBackAndStaleResults(t *testing.T) {
 
 func TestUsabilitySuccessExpiryDoesNotClearLoading(t *testing.T) {
 	m := newTestModel(t)
-	_ = m.success("saved")
+	m.setStatus(statusSuccess, "saved")
 	gen := m.statusGen
 	updated, _ := m.openTitle(testRefs("load", 1)[0])
 	m = updated.(Model)
@@ -201,7 +201,7 @@ func TestUsabilityBackRebuildsHistoryAndUsesVisibleFallback(t *testing.T) {
 func TestUsabilitySuccessExpiresAndBackgroundRefreshKeepsGeneration(t *testing.T) {
 	m := newTestModel(t)
 	seedTestPlanned(&m, testRefs("feedback", 1))
-	_ = m.success("saved")
+	m.setStatus(statusSuccess, "saved")
 	gen := m.statusGen
 	m, _ = updateTestModel(t, m, libraryEpisodesMsg{})
 	if m.statusGen != gen || m.statusKind != statusSuccess {

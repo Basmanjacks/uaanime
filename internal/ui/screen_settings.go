@@ -331,7 +331,8 @@ func (m *Model) cycleSetting(dir int) {
 	next := ((idx+dir)%len(values) + len(values)) % len(values)
 	status, errText := m.applySetting(p.id, values[next].value)
 	m.showSettings(m.list.GlobalIndex())
-	m.status, m.errText = status, errText
+	m.setStatus(statusInfo, status)
+	m.errText = errText
 }
 
 // openSettings — вхід з домівки: кадр у стек, як openSearch.
@@ -343,7 +344,8 @@ func (m Model) openSettings() (Model, bool) {
 	}
 	m.stack = append(m.stack, m.snapshot())
 	m.showSettings(-1)
-	m.errText, m.status = "", ""
+	m.errText = ""
+	m.clearStatus()
 	return m, true
 }
 
@@ -358,7 +360,8 @@ func (m Model) pickSettingValue(p payloadSettingValue) Model {
 	}
 	status, errText := m.applySetting(p.id, p.value)
 	m.showSettings(cursor)
-	m.status, m.errText = status, errText
+	m.setStatus(statusInfo, status)
+	m.errText = errText
 	return m
 }
 
@@ -377,9 +380,8 @@ func (m Model) showDownloadDir() Model {
 		m.note(i18n.TuiDlPathNoteCreate),
 		m.note(i18n.TuiDlPathNoteSub),
 	}, 0)
-	m.errText, m.status = "", ""
-	m.statusKind = statusInfo
-	m.statusGen++
+	m.errText = ""
+	m.clearStatus()
 	return m
 }
 
@@ -388,9 +390,7 @@ func (m Model) showDownloadDir() Model {
 // серій, а завдання тримає знімок Dir і однаково писало б у стару.
 func (m Model) saveDownloadDir() (tea.Model, tea.Cmd) {
 	if m.downloadsActive() {
-		m.status = i18n.TuiDlPathBusy
-		m.statusKind = statusWarning
-		m.statusGen++
+		m.setStatus(statusWarning, i18n.TuiDlPathBusy)
 		return m, nil
 	}
 	path := store.ExpandHome(strings.TrimSpace(m.input.Value()))
@@ -411,8 +411,7 @@ func (m Model) saveDownloadDir() (tea.Model, tea.Cmd) {
 	}
 	status, errText := m.applySetting(settingDownloadDir, path)
 	m.showSettings(cursor)
-	m.status, m.errText = status, errText
-	m.statusKind = statusSuccess
-	m.statusGen++
+	m.setStatus(statusSuccess, status)
+	m.errText = errText
 	return m, nil
 }

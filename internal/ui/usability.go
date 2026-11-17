@@ -33,55 +33,6 @@ type statusExpiredMsg struct{ gen int }
 type localTickMsg struct{ gen int }
 type action struct{ key, label string }
 
-func (m Model) actions() []action {
-	if m.overlay == overlayBudget {
-		return []action{{"Enter", i18n.TuiActionPick}, {"Esc", i18n.TuiActionBack}}
-	}
-	if m.overlay == overlayHelp {
-		return []action{{"Esc", i18n.TuiHelpClose}, {"↑/↓", i18n.TuiActionMove}}
-	}
-	var a []action
-	switch m.screen {
-	case screenPlaying:
-		a = []action{{"Space", i18n.TuiActionPause}, {"Esc", i18n.TuiActionStop}, {"?", i18n.TuiActionHelp}, {"←/→", i18n.TuiActionSeek}, {"Shift+←/→", i18n.TuiActionSeekBig}, {"N", i18n.TuiActionNext}, {"+/−", i18n.TuiActionVolume}, {".", i18n.TuiActionStopAfter}, {"B", i18n.TuiActionBudget}}
-	case screenEpisodes:
-		a = []action{{"Enter", i18n.TuiActionPlay}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionFilter}, {"M", i18n.TuiActionBookmark}, {"S", i18n.TuiActionStudio}, {"D", i18n.TuiActionDownload}, {"X", i18n.TuiActionWatched}, {"W", i18n.TuiActionBulk}, {"R", i18n.TuiActionRefresh}}
-	case screenDownloadQuality:
-		a = []action{{"Enter", i18n.TuiActionSave}, {"Esc", i18n.TuiActionCancel}, {"?", i18n.TuiActionHelp}}
-	case screenDownloads:
-		a = []action{{"Enter", i18n.TuiActionPlay}, {"X", i18n.TuiActionRemove}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}}
-	case screenDownloadDir:
-		return []action{{"Enter", i18n.TuiActionSave}, {"Esc", i18n.TuiActionCancel}}
-	case screenSettings:
-		a = []action{{"Enter", i18n.TuiActionPick}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"←/→", i18n.TuiActionChange}}
-	case screenSettingValue, screenStudio:
-		a = []action{{"Enter", i18n.TuiActionPick}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}}
-	case screenSearch:
-		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionSearchInput}}
-		if len(m.cards) == 0 {
-			a = append(a, action{"X", i18n.TuiActionForgetQuery})
-		} else {
-			a = append(a, action{"M", i18n.TuiActionBookmark})
-		}
-	case screenHome:
-		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}, {"/", i18n.TuiActionSearch}, {"M", i18n.TuiActionBookmark}, {",", i18n.TuiActionSettings}, {"Q", i18n.TuiActionQuit}, {"R", i18n.TuiActionRefresh}, {"D", i18n.TuiActionDownloads}}
-	default:
-		a = []action{{"Enter", i18n.TuiActionOpen}, {"Esc", i18n.TuiActionBack}, {"?", i18n.TuiActionHelp}}
-		if m.list.FilteringEnabled() {
-			a = append(a, action{"/", i18n.TuiActionFilter})
-		}
-		if m.screen == screenBookmarks || m.screen == screenSearch {
-			a = append(a, action{"M", i18n.TuiActionBookmark})
-		}
-		if m.screen == screenBookmarks {
-			a = append(a, action{"R", i18n.TuiActionRefresh})
-		}
-	}
-	if m.eng.WatchedUndoAvailable(m.undo) {
-		a = append(a, action{"U", i18n.TuiActionUndo})
-	}
-	return a
-}
 func (m Model) actionHint() string {
 	var parts []string
 	for _, a := range m.actions() {
@@ -195,12 +146,18 @@ func (m *Model) showBookmarks() {
 	_ = m.setItems(m.bookmarkRows(), 0)
 	m.status = ""
 }
-func (m *Model) success(text string) tea.Cmd {
+
+// setStatus — єдиний спосіб показати статус. Нове покоління обов'язкове: таймер
+// statusExpiredMsg попереднього повідомлення інакше стер би це.
+func (m *Model) setStatus(kind statusKind, text string) {
 	m.status = text
-	m.statusKind = statusSuccess
+	m.statusKind = kind
 	m.statusGen++
-	return nil
 }
+
+// clearStatus — порожній рядок статусу, теж новим поколінням.
+func (m *Model) clearStatus() { m.setStatus(statusInfo, "") }
+
 func (m *Model) beginChain(ref provider.TitleRef) { m.eng.Live.BeginChain(ref); m.chainActive = true }
 func (m *Model) endChain()                        { m.eng.Live.EndChain(); m.chainActive = false }
 func (m *Model) freezeLive() {
@@ -242,11 +199,14 @@ func (m Model) watchedBefore() (tea.Model, tea.Cmd) {
 	}
 	m.errText = ""
 	if n == 0 {
-		return m, m.success(i18n.TuiBulkEmpty)
+		m.setStatus(statusSuccess, i18n.TuiBulkEmpty)
+		return m, nil
 	}
 	m.undo = token
 	m.publishPlaylist()
-	return m, tea.Batch(m.setItems(m.episodeRows(), -1), m.success(fmt.Sprintf(i18n.TuiBulkDone, n)))
+	cmd := m.setItems(m.episodeRows(), -1)
+	m.setStatus(statusSuccess, fmt.Sprintf(i18n.TuiBulkDone, n))
+	return m, cmd
 }
 func (m Model) undoWatched() (tea.Model, tea.Cmd) {
 	if !m.eng.WatchedUndoAvailable(m.undo) {
@@ -261,7 +221,8 @@ func (m Model) undoWatched() (tea.Model, tea.Cmd) {
 	f := m.snapshot()
 	cmd := m.restoreRows(f)
 	m.publishPlaylist()
-	return m, tea.Batch(cmd, m.success(i18n.TuiBulkUndo))
+	m.setStatus(statusSuccess, i18n.TuiBulkUndo)
+	return m, cmd
 }
 
 type filterResultMsg struct {

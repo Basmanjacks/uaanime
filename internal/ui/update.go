@@ -64,10 +64,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	case statusExpiredMsg:
 		if msg.gen == m.statusGen && m.statusKind == statusSuccess {
-			m.status = ""
-			m.statusKind = statusInfo
-			m.statusGen++
-			m.statusKind = statusInfo
+			m.clearStatus()
 		}
 		return m, nil
 	case filterResultMsg:
@@ -105,9 +102,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rejectStale(msg.req) {
 			return m, nil
 		}
-		m.status = ""
-		m.statusKind = statusInfo
-		m.statusGen++
+		m.clearStatus()
 		if msg.err != nil {
 			m.failNav(msg.err)
 			return m, nil
@@ -156,9 +151,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
-			m.status = ""
-			m.statusKind = statusInfo
-			m.statusGen++
+			m.clearStatus()
 			m.failNav(msg.err)
 			return m, nil
 		}
@@ -171,9 +164,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.publishPlaylist()
 		if msg.purpose == epsResume {
 			if msg.offline {
-				m.status = i18n.MsgOfflineCache
-				m.statusKind = statusWarning
-				m.statusGen++
+				m.setStatus(statusWarning, i18n.MsgOfflineCache)
 			}
 			if m.screen == screenEpisodes {
 				return m, m.setItems(m.episodeRows(), -1)
@@ -190,13 +181,9 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if msg.offline {
-			m.status = i18n.MsgOfflineCache
-			m.statusKind = statusWarning
-			m.statusGen++
+			m.setStatus(statusWarning, i18n.MsgOfflineCache)
 		} else {
-			m.status = ""
-			m.statusKind = statusInfo
-			m.statusGen++
+			m.clearStatus()
 		}
 		m.commitPending(msg.req)
 		return m, m.showEpisodes()
@@ -205,9 +192,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rejectStale(msg.req) {
 			return m, nil
 		}
-		m.status = ""
-		m.statusKind = statusInfo
-		m.statusGen++
+		m.clearStatus()
 		if msg.err != nil {
 			m.endChain()
 			m.failNav(msg.err)
@@ -245,9 +230,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rejectStale(msg.req) {
 			return m, nil
 		}
-		m.status = ""
-		m.statusKind = statusInfo
-		m.statusGen++
+		m.clearStatus()
 		if msg.err != nil {
 			m.failNav(msg.err)
 			return m, nil
@@ -302,9 +285,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if next, ok := playback.ContinueEpisode(result, err, m.quitting, m.ref, m.pendingEp, episodes, m.eng.Autoplay); ok {
 			req := m.nextReq()
 			m.pendingEp = next
-			m.status = i18n.TuiResolving
-			m.statusKind = statusLoading
-			m.statusGen++
+			m.setStatus(statusLoading, i18n.TuiResolving)
 			m.statusKind = statusLoading
 			return m, m.resolveCmd(m.ref, next, req, m.eng.ResolveHints(m.ref, next))
 		}
@@ -326,14 +307,10 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case err != nil:
 			m.errText = m.errorText(err)
 		case result.Completed:
-			m.status = fmt.Sprintf(i18n.MsgEpisodeDone, m.pendingEp)
-			m.statusKind = statusSuccess
-			m.statusGen++
+			m.setStatus(statusSuccess, fmt.Sprintf(i18n.MsgEpisodeDone, m.pendingEp))
 		case result.PositionSec > 0:
-			m.status = fmt.Sprintf(i18n.MsgProgressSaved,
-				int(result.PositionSec)/60, int(result.PositionSec)%60)
-			m.statusKind = statusSuccess
-			m.statusGen++
+			m.setStatus(statusSuccess, fmt.Sprintf(i18n.MsgProgressSaved,
+				int(result.PositionSec)/60, int(result.PositionSec)%60))
 		}
 		// Друга фаза виходу: журнал уже злитий, тепер можна завершувати.
 		if m.quitting {
@@ -358,9 +335,7 @@ func (m Model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.rejectStale(msg.req) {
 			return m, nil
 		}
-		m.status = ""
-		m.statusKind = statusInfo
-		m.statusGen++
+		m.clearStatus()
 		if msg.err != nil {
 			m.failNav(msg.err)
 			return m, nil
@@ -415,9 +390,7 @@ func (m Model) updateRemotePlay(msg remotePlayMsg) (tea.Model, tea.Cmd) {
 	req := m.beginNav()
 	m.pendingEp = msg.req.Episode
 	m.errText = ""
-	m.status = i18n.TuiResolving
-	m.statusKind = statusLoading
-	m.statusGen++
+	m.setStatus(statusLoading, i18n.TuiResolving)
 	return m, tea.Batch(rearm,
 		m.resolveCmd(m.ref, msg.req.Episode, req, m.eng.ResolveHints(m.ref, msg.req.Episode)))
 }
@@ -506,22 +479,16 @@ func (m Model) startPlayback(res *playback.Resolved) (tea.Model, tea.Cmd) {
 	m.setScreen(screenPlaying)
 	// Статус лишається порожнім навмисно: екран «Грає» тепер керований, і
 	// внизу корисніша підказка з клавішами, ніж «плеєр запущено».
-	m.status = ""
-	m.statusKind = statusInfo
-	m.statusGen++
+	m.clearStatus()
 	// Файл із диска — це те, заради чого його зберігали: сказати про це варто,
 	// бо саме звідси видно, що мережі зараз не треба.
 	if res.Local {
-		m.status = i18n.TuiDlPlayingLocal
-		m.statusKind = statusSuccess
-		m.statusGen++
+		m.setStatus(statusSuccess, i18n.TuiDlPlayingLocal)
 	}
 	// Попередження — лише з res: після Begin бібліотека вже має неявний пін
 	// і не відрізняє «піна не було» від явного вибору.
 	if text, ok := res.Warning(); ok {
-		m.status = text
-		m.statusKind = statusWarning
-		m.statusGen++
+		m.setStatus(statusWarning, text)
 	}
 	cmd, cancel := m.playCmd(res, titleID)
 	m.playCancel = cancel
@@ -545,9 +512,7 @@ func (m Model) requestQuit(interactive bool) (tea.Model, tea.Cmd) {
 	if m.dl != nil {
 		if m.downloadsActive() && interactive && !m.quitArmed {
 			m.quitArmed = true
-			m.status = i18n.TuiDlQuitWarn
-			m.statusKind = statusWarning
-			m.statusGen++
+			m.setStatus(statusWarning, i18n.TuiDlQuitWarn)
 			return m, nil
 		}
 		// Закриття синхронне: .part і плейсхолдер мають зникнути ДО того, як
@@ -613,9 +578,7 @@ func (m Model) updateRefreshedEpisodes(msg episodesDoneMsg) (tea.Model, tea.Cmd)
 	}
 	if msg.err != nil {
 		if msg.purpose == epsManual {
-			m.status = ""
-			m.statusKind = statusInfo
-			m.statusGen++
+			m.clearStatus()
 			m.errText = m.errorText(msg.err)
 		}
 		return m, nil
@@ -642,13 +605,9 @@ func (m Model) updateRefreshedEpisodes(msg episodesDoneMsg) (tea.Model, tea.Cmd)
 	}
 	switch {
 	case len(appeared) > 0:
-		m.status = i18n.EpisodesAppeared(appeared)
-		m.statusKind = statusSuccess
-		m.statusGen++
+		m.setStatus(statusSuccess, i18n.EpisodesAppeared(appeared))
 	case msg.purpose == epsManual:
-		m.status = i18n.TuiRefreshedNone
-		m.statusKind = statusSuccess
-		m.statusGen++
+		m.setStatus(statusSuccess, i18n.TuiRefreshedNone)
 	}
 	return m, cmd
 }
@@ -688,22 +647,14 @@ func (m Model) updateRefreshDone(msg refreshDoneMsg) (tea.Model, tea.Cmd) {
 		delta := m.libraryFreshTotal() - m.freshBefore
 		switch {
 		case msg.err != nil:
-			m.status = ""
-			m.statusKind = statusInfo
-			m.statusGen++
+			m.clearStatus()
 			m.errText = m.errorText(msg.err)
 		case delta > 0:
-			m.status = fmt.Sprintf(i18n.TuiRefreshedNews, i18n.NewEpisodes(delta))
-			m.statusKind = statusSuccess
-			m.statusGen++
+			m.setStatus(statusSuccess, fmt.Sprintf(i18n.TuiRefreshedNews, i18n.NewEpisodes(delta)))
 		case len(m.visibleRefs()) == 0:
-			m.status = i18n.TuiRefreshed
-			m.statusKind = statusSuccess
-			m.statusGen++
+			m.setStatus(statusSuccess, i18n.TuiRefreshed)
 		default:
-			m.status = i18n.TuiRefreshedNone
-			m.statusKind = statusSuccess
-			m.statusGen++
+			m.setStatus(statusSuccess, i18n.TuiRefreshedNone)
 		}
 	}
 	m.refreshLibraryLists()

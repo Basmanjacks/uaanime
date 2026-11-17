@@ -90,15 +90,13 @@ const (
 	TuiBookmarkRemoved  = "прибрано із закладок"
 	TuiEpMarked         = "серія %d — переглянуто"
 	TuiEpUnmarked       = "серія %d — позначку знято"
-	TuiHintHome         = "↑↓ Вибір · Enter Відкрити · M Закладка · / Пошук · , Налаштування · Q Вихід"
-	TuiHintSearch       = "Enter Шукати/відкрити · ↓ Нещодавнє · X Прибрати · M Закладка · Esc"
-	// Підказка мусить влазити в 80 колонок цілою: обрізане «Esc Назад» гірше
-	// за незгадану клавішу фільтра, яку список підказує сам.
-	TuiHintEpisodes = "↑↓ Вибір · Enter Грати · X Переглянуто · S Озвучка · M Закладка · Esc Назад"
-	TuiHintStudio   = "↑↓ Вибір · Enter Закріпити й грати · Esc Назад"
 	// TuiStudioPinned — закріплений реліз у заголовку серій: пара може бути й
 	// субтитрами, тому слово нейтральне.
 	TuiStudioPinned = "реліз: %s"
+	// Рядок під назвою на екрані серій, коли без піна кілька студій рівноцінні:
+	// Enter спитає один раз, тож обіцяти конкретну студію не можна.
+	TuiReleaseUnchosen = "реліз ще не обрано"
+	TuiReleasePickKey  = "S обрати"
 	// TuiRemainingFmt — залишок серій і оцінка часу в заголовку екрана серій.
 	// «~» перед часом обов'язкове: це середнє, а не точна тривалість.
 	TuiRemainingFmt = "%s · ~%s"
@@ -108,29 +106,28 @@ const (
 	TuiStudioFallback = "озвучка %s недоступна — грає %s"
 	// Відхилення типу. Формулювання «ще не вийшло» — навмисне: саби на
 	// сайті зазвичай випереджають озвучення тієї ж студії на кілька днів.
-	TuiStudioFallbackSub    = "озвучка %s недоступна — грає %s у субтитрах"
-	TuiSubsMissingStudio    = "субтитрів від %s немає — грає озвучення %s"
-	TuiSubsFallbackStudio   = "субтитрів від %s немає — грає %s у субтитрах"
-	TuiKindNotOutYet        = "озвучення ще не вийшло"
-	TuiKindNotOutYetLong    = "озвучення від %s ще не вийшло — грає в субтитрах"
-	TuiOnlySubsStatus       = "озвучення ще не вийшло — грає в субтитрах"
-	TuiSubsMissing          = "субтитрів від %s немає — грає озвучення"
-	TuiPickNotInEpisode     = "немає в цій серії"
-	TuiPickUnplayable       = "хост не підтримується"
-	TuiPickFailed           = "хост не відповів"
-	TuiPickWillPlay         = "гратиме"
-	TuiPickWillChooseStudio = "обереш студію"
-	// Рядок серії: токен типу, обрана студія і що ще є. Скорочення лише тут,
-	// де рядки однакові й читаються як колонка; в унікальних рядках — слова.
+	TuiStudioFallbackSub  = "озвучка %s недоступна — грає %s у субтитрах"
+	TuiSubsMissingStudio  = "субтитрів від %s немає — грає озвучення %s"
+	TuiSubsFallbackStudio = "субтитрів від %s немає — грає %s у субтитрах"
+	TuiKindNotOutYet      = "озвучення ще не вийшло"
+	TuiKindNotOutYetLong  = "озвучення від %s ще не вийшло — грає в субтитрах"
+	TuiOnlySubsStatus     = "озвучення ще не вийшло — грає в субтитрах"
+	TuiSubsMissing        = "субтитрів від %s немає — грає озвучення"
+	TuiPickNotInEpisode   = "немає в цій серії"
+	TuiPickUnplayable     = "хост не підтримується"
+	TuiPickFailed         = "хост не відповів"
+	TuiPickWillPlay       = "гратиме"
+	// Реліз і лічильники релізів. Скорочення лише тут, де вони стоять поруч і
+	// читаються як перелік; в унікальних рядках — слова.
 	TuiEpisodeNoPad  = "Серія %*d"
-	TuiRelPair       = "%s · %s"
+	TuiRelPair       = "%s (%s)"
 	TuiMoreVoiced    = "ще %d озв"
+	TuiCountVoiced   = "%d озв"
 	TuiMoreSubs      = "%d саб"
 	TuiFreshOnlySubs = "+%d лише в субтитрах"
 	TuiFreshMixed    = "%s · +%d лише в субтитрах"
 	TuiEmptyLibrary  = "Закладок ще немає — почни з пошуку"
 	TuiNothingFound  = "Нічого не знайдено"
-	TuiMoreStudios   = "+%d"
 	TuiToday         = "сьогодні"
 	TuiYesterday     = "вчора"
 	TuiBlockContinue = "Продовжити"
@@ -152,7 +149,6 @@ const (
 	TuiMulti  = "Мікс"
 
 	TuiHistoryItem = "Історія"
-	TuiHintList    = "↑↓ Вибір · Enter Грати · Esc Назад"
 
 	// Екран «Грає»: коли серія добіжить кінця при поточній позиції. Час
 	// абсолютний, а не «лишилось 14 хв»: домовлятися легше про «о 21:35».
@@ -161,10 +157,6 @@ const (
 	TuiFinishAt       = "закінчиться о %s"
 	TuiFinishAtPaused = "закінчиться о %s · на паузі"
 	TuiVolume         = "гучність %d%%"
-	// Дві версії підказки «Грає»: широка не влазить у 80 колонок разом із
-	// відступами, а обрізана підказка гірша за коротшу.
-	TuiHintPlaying       = "Space Пауза · ←→ 10 с · ⇧←→ 30 с · N Далі · +− Гучність · Esc Назад"
-	TuiHintPlayingNarrow = "Space Пауза · ←→ Перемотка · Esc Назад"
 	// TuiNotPlaying — клавіша керування, коли сесії вже немає (плеєр закрили
 	// самі): це не помилка застосунку, тому й текст короткий.
 	TuiNotPlaying = "Уже нічого не грає"
@@ -179,8 +171,6 @@ const (
 	// екран налаштувань
 	TuiSettingsItem     = "Налаштування"
 	TuiSettingsTitle    = "Налаштування"
-	TuiHintSettings     = "↑↓ Вибір · Enter Змінити · ←→ Значення · Esc Назад"
-	TuiHintSettingsPick = "↑↓ Вибір · Enter Обрати · Esc Назад"
 	TuiBlockPlayback    = "Перегляд"
 	TuiBlockRemote      = "Пульт на телефоні"
 	TuiBlockAbout       = "Про"

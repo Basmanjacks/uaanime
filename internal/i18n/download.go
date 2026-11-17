@@ -63,7 +63,6 @@ const (
 	TuiBlockDownloads   = "Завантаження"
 	TuiActionDownload   = "зберегти"
 	TuiActionRemove     = "прибрати"
-	TuiActionRetry      = "повторити"
 	TuiActionSave       = "зберегти"
 	TuiActionCancel     = "скасувати"
 	TuiActionDownloads  = "завантаження"
