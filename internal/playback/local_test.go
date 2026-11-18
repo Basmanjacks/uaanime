@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/extractor"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/providertest"
-	"github.com/Basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/extractor"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/providertest"
+	"github.com/basmanjacks/uaanime/internal/store"
 )
 
 // localRef — тайтл БЕЗ Name: саме так його бачить headless `play` (refFromID),

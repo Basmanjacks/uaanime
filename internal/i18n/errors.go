@@ -4,8 +4,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // ErrorText — єдине відображення класу помилки в текст для людини.

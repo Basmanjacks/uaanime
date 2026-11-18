@@ -3,9 +3,9 @@ package playback
 import (
 	"context"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/extractor"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/extractor"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // ListedRelease — реліз серії для headless `episodes`. Playable каже, чи є

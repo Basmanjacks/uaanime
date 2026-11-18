@@ -1,6 +1,6 @@
 package library
 
-import "github.com/Basmanjacks/uaanime/internal/provider"
+import "github.com/basmanjacks/uaanime/internal/provider"
 
 // StatusKind — стан тайтла з погляду людини. Не зберігається на диску:
 // збережений стан завжди розходився з журналом (запис лишався «у планах»

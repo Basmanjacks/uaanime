@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/extractor"
-	"github.com/Basmanjacks/uaanime/internal/extractortest"
-	"github.com/Basmanjacks/uaanime/internal/httpx"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/extractor"
+	"github.com/basmanjacks/uaanime/internal/extractortest"
+	"github.com/basmanjacks/uaanime/internal/httpx"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

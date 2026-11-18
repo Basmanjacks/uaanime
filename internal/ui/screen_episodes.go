@@ -7,9 +7,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 func (m *Model) showEpisodes() tea.Cmd {

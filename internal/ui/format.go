@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // maxCardStudios — скільки студій вміщує другий рядок картки. Більше — і

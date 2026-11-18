@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/downloadtest"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/downloadtest"
+	"github.com/basmanjacks/uaanime/internal/i18n"
 )
 
 // Наскрізні сценарії `download --layout plex` на фікстурах: два тайтли-сезони

@@ -7,10 +7,10 @@ import (
 	"sort"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/store"
 )
 
 // ReleaseSeed is detached episode metadata fetched before the sync commit.

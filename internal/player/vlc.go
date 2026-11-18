@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"runtime"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // VLC — бекенд зовнішнього плеєра VLC.

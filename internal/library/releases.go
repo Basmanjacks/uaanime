@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // ReleaseBaseline distinguishes an unknown baseline (nil) from a known empty

@@ -12,11 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/httpx"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/httpx"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/store"
 )
 
 // downloadResult — єдиний об'єкт, який команда друкує під --json: що

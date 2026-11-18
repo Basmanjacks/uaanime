@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // MaxFileBytes — стеля розміру одного файла (8 ГіБ). Серія в 1080p важить

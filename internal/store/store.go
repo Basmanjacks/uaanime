@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // DataDir — каталог даних застосунку. UAANIME_DATA_DIR — службовий override

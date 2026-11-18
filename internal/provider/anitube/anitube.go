@@ -39,9 +39,9 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/httpx"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/httpx"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 const (

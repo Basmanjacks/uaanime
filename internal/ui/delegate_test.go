@@ -9,7 +9,7 @@ import (
 	"charm.land/bubbles/v2/list"
 	"charm.land/lipgloss/v2"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/i18n"
 	"github.com/charmbracelet/x/ansi"
 )
 

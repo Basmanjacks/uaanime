@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

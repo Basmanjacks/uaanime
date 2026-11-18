@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // process — спільний життєвий цикл дочірнього плеєра (mpv і VLC).

@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/playback"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // «Королівство (2 сезон)» — записана фікстура, де сайт не називає студії

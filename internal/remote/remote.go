@@ -38,7 +38,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/i18n"
 )
 
 //go:embed page.html

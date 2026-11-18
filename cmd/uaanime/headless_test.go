@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/downloadtest"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/downloadtest"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/playback"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Контракт headless-команд для скриптів: чесний `episodes`, коди помилок під

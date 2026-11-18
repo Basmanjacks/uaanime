@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/Basmanjacks/uaanime/internal/qr"
+	"github.com/basmanjacks/uaanime/internal/qr"
 )
 
 // Зона тиші навколо символу. Стандарт вимагає чотири модулі; два — свідомий

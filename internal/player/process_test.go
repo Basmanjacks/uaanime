@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // classifyChild — мінімальний exit-контракт: власне закриття → EndQuit,

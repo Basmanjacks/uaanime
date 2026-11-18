@@ -10,8 +10,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Layout — як серії розкладаються по папках. Типова — одна папка на тайтл

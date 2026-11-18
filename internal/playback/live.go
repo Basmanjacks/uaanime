@@ -6,8 +6,8 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/player"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Intent — чого попросив веб-пульт замість природного завершення серії.

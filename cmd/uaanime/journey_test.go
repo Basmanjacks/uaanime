@@ -16,16 +16,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/extractor"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/playertest"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/provider/anitube"
-	"github.com/Basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/extractor"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/playback"
+	"github.com/basmanjacks/uaanime/internal/player"
+	"github.com/basmanjacks/uaanime/internal/playertest"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider/anitube"
+	"github.com/basmanjacks/uaanime/internal/store"
 )
 
 // Наскрізні сценарії: справжні провайдер, екстрактори, сховище, бібліотека,

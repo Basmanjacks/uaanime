@@ -8,7 +8,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/i18n"
 )
 
 // brandOrnamentMark — місце під сезонну руну в шаблоні банера. Орнамент живе

@@ -13,9 +13,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/extractor"
-	"github.com/Basmanjacks/uaanime/internal/httpx"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/extractor"
+	"github.com/basmanjacks/uaanime/internal/httpx"
 )
 
 // referer — умовний сайт-каталог: фікстурному транспорту він байдужий, а

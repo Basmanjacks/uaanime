@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/downloadtest"
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/downloadtest"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // streamHeaders — те, що екстрактор віддає разом із потоком; moonanime без них

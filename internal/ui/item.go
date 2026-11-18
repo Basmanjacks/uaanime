@@ -3,8 +3,8 @@ package ui
 import (
 	"strconv"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // item — універсальний елемент для всіх екранів; payload каже, що робить Enter.

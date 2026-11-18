@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/downloadtest"
+	"github.com/basmanjacks/uaanime/internal/downloadtest"
 )
 
 // Стенд тестує сам себе: ним користуються тести кількох пакетів, і мовчки

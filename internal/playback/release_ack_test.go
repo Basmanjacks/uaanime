@@ -3,8 +3,8 @@ package playback
 import (
 	"context"
 	"errors"
-	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/player"
+	"github.com/basmanjacks/uaanime/internal/provider"
 	"os"
 	"path/filepath"
 	"reflect"

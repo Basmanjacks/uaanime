@@ -3,7 +3,7 @@ package library
 import (
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 func src(studio string, kind provider.Kind) provider.Source {

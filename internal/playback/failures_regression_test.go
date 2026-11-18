@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 func TestAggregateFailuresHasOneClass(t *testing.T) {

@@ -12,14 +12,14 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/Basmanjacks/uaanime/internal/extractor"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/playertest"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/providertest"
-	"github.com/Basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/extractor"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/playback"
+	"github.com/basmanjacks/uaanime/internal/player"
+	"github.com/basmanjacks/uaanime/internal/playertest"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/providertest"
+	"github.com/basmanjacks/uaanime/internal/store"
 )
 
 // Наскрізний TUI-сценарій: одна клавіатурна сесія від домівки до перегляду

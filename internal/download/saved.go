@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/store"
 )
 
 // Ідентичність збереженого на диску тримається на двох прихованих файлах поруч

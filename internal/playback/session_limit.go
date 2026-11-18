@@ -1,9 +1,9 @@
 package playback
 
 import (
-	"github.com/Basmanjacks/uaanime/internal/errs"
-	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/player"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // SessionLimit distinguishes a finished allowance from ordinary autoplay.

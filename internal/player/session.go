@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // EndReason — чому закінчилося відтворення. Це різні сценарії для UI:

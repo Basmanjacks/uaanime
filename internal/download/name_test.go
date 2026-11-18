@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Таблиця санітизації: вхід — те, що реально приходить зі сторінки сайту

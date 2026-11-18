@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/provider"
-	"github.com/Basmanjacks/uaanime/internal/remote"
-	"github.com/Basmanjacks/uaanime/internal/store"
-	"github.com/Basmanjacks/uaanime/internal/ui"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/playback"
+	"github.com/basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/remote"
+	"github.com/basmanjacks/uaanime/internal/store"
+	"github.com/basmanjacks/uaanime/internal/ui"
 )
 
 // remoteControl — перехідник між пультом і рушієм: playback не знає про HTTP,

@@ -1,8 +1,8 @@
 package playback
 
 import (
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // BuildEpisodeInfo snapshots progress on the library owner's goroutine; the

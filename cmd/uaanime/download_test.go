@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/downloadtest"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/downloadtest"
+	"github.com/basmanjacks/uaanime/internal/i18n"
 )
 
 // Наскрізні сценарії команди download: справжні провайдер, екстрактори, план,

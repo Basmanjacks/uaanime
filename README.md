@@ -20,8 +20,8 @@ uaanime → Продовжити → Enter → грає
 **macOS і Linux (Homebrew):**
 
 ```bash
-brew tap Basmanjacks/uaanime
-brew install --cask Basmanjacks/uaanime/uaanime
+brew tap basmanjacks/uaanime
+brew install --cask basmanjacks/uaanime/uaanime
 ```
 
 Одна команда на обидві системи: Homebrew 6 підтримує casks і на Linux. Сторонні
@@ -31,7 +31,7 @@ tap воно автоматично не додає, тому перший ря�
 (`brew install …` без `--cask`), перейди на cask:
 
 ```bash
-brew uninstall uaanime && brew install --cask Basmanjacks/uaanime/uaanime
+brew uninstall uaanime && brew install --cask basmanjacks/uaanime/uaanime
 ```
 
 Для відтворення потрібен VLC або mpv. Якщо плеєра ще немає, на macOS:
@@ -48,7 +48,7 @@ VLC, встановлений вручну з сайту VideoLAN у `/Applicati
 **Без Homebrew** — через Go або tarball з Releases:
 
 ```bash
-go install github.com/Basmanjacks/uaanime/cmd/uaanime@latest
+go install github.com/basmanjacks/uaanime/cmd/uaanime@latest
 # або візьми готовий бінарник із GitHub Releases
 ```
 

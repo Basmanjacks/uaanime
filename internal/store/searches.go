@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // maxSearches — стеля історії пошуку: список показується на екрані пошуку

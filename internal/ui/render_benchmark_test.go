@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/list"
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/playback"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/playback"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 func benchmarkRenderModel(n int) Model {

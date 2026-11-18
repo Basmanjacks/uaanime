@@ -2,7 +2,7 @@
 // англійська додається пізніше без рефакторингу викликів.
 package i18n
 
-import "github.com/Basmanjacks/uaanime/internal/provider"
+import "github.com/basmanjacks/uaanime/internal/provider"
 
 const (
 	MsgUsage = `використання:

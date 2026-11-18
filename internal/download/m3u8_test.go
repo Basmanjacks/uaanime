@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // Фікстури змодельовані на живих формах трьох хостів (див. doc.go), але з

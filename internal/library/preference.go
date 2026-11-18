@@ -3,7 +3,7 @@ package library
 import (
 	"sort"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Prefs — глобальні переваги користувача (з config.json).

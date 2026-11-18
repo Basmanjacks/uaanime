@@ -6,7 +6,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 var (

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/player"
-	"github.com/Basmanjacks/uaanime/internal/playertest"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/player"
+	"github.com/basmanjacks/uaanime/internal/playertest"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 func TestSessionLimitSurvivesSeriesAndStopsExactly(t *testing.T) {

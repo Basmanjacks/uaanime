@@ -8,8 +8,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Backup — формат export/import: увесь стан користувача одним файлом.

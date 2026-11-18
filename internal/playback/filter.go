@@ -1,8 +1,8 @@
 package playback
 
 import (
-	"github.com/Basmanjacks/uaanime/internal/library"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/library"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // KindFilter — тип із `--kind`: один із provider.Kind, крім multi, або

@@ -1,4 +1,4 @@
-module github.com/Basmanjacks/uaanime
+module github.com/basmanjacks/uaanime
 
 go 1.25.0
 

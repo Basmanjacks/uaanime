@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // cacheKey робить із недовірених частин (id провайдера, слаг, вид каталогу)

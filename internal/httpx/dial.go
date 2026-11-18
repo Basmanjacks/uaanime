@@ -7,7 +7,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/errs"
+	"github.com/basmanjacks/uaanime/internal/errs"
 )
 
 // denyPrefixes — явна таблиця special-use префіксів, куди завантажувач не ходить.

@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/download"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/download"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // downloadsTitle — один тайтл у виводі `downloads --json`. Поля завжди

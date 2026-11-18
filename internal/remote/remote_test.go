@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/i18n"
 )
 
 const testToken = "0123456789abcdef0123456789abcdef"

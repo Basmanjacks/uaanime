@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // eps — список серій 1..n для ResumeIn і StatusOf.

@@ -11,11 +11,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/extractor/ashdi"
-	"github.com/Basmanjacks/uaanime/internal/extractor/moonanime"
-	"github.com/Basmanjacks/uaanime/internal/extractor/tortuga"
-	"github.com/Basmanjacks/uaanime/internal/httpx"
-	"github.com/Basmanjacks/uaanime/internal/provider/anitube"
+	"github.com/basmanjacks/uaanime/internal/extractor/ashdi"
+	"github.com/basmanjacks/uaanime/internal/extractor/moonanime"
+	"github.com/basmanjacks/uaanime/internal/extractor/tortuga"
+	"github.com/basmanjacks/uaanime/internal/httpx"
+	"github.com/basmanjacks/uaanime/internal/provider/anitube"
 )
 
 func main() { os.Exit(run()) }

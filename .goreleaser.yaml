@@ -24,7 +24,7 @@ checksum:
 changelog:
   use: github-native
 
-# Homebrew tap: потребує репозиторію Basmanjacks/homebrew-uaanime
+# Homebrew tap: потребує репозиторію basmanjacks/homebrew-uaanime
 # і токен HOMEBREW_TAP_GITHUB_TOKEN у секретах релізного workflow.
 #
 # Один cask на всі платформи: Homebrew 6.0 (2026-06-11) вміє casks на Linux, а
@@ -35,11 +35,11 @@ changelog:
 # конфліктує з VLC.app, установленим вручну й тому невідомим Homebrew.
 homebrew_casks:
   - repository:
-      owner: Basmanjacks
+      owner: basmanjacks
       name: homebrew-uaanime
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    homepage: https://github.com/Basmanjacks/uaanime
+    homepage: https://github.com/basmanjacks/uaanime
     description: "Дивись аніме українською з термінала"
     caveats: |
       Для відтворення потрібен VLC або mpv.

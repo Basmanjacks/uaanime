@@ -5,7 +5,7 @@ package library
 import (
 	"time"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // LocalTitle — наш тайтл. Прогрес прив'язується до його ID, ніколи до слага

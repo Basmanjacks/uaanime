@@ -9,7 +9,7 @@ import (
 	"testing"
 	"unicode"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 // Cases — канонічні входи провайдера, вже підключеного до фікстур.

@@ -5,8 +5,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"context"
 	"fmt"
-	"github.com/Basmanjacks/uaanime/internal/i18n"
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/i18n"
+	"github.com/basmanjacks/uaanime/internal/provider"
 	"strings"
 	"testing"
 )

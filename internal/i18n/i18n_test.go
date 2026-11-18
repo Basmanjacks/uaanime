@@ -3,7 +3,7 @@ package i18n
 import (
 	"testing"
 
-	"github.com/Basmanjacks/uaanime/internal/provider"
+	"github.com/basmanjacks/uaanime/internal/provider"
 )
 
 func TestKindLabel(t *testing.T) {
